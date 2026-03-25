@@ -42,4 +42,24 @@ class Orchestrator:
             "text": user_text
         }, source="orchestrator")
 
-    
+    async def handle_failure(self, event):
+        """Handle errors by triggering the self-healing system or asking user."""
+        task_id = event.data.get("task_id")
+        error = event.data.get("error")
+        
+        print(f"❌ Orchestrator: Task [{task_id}] failed: {error}")
+        
+        # Trigger the Auto-Fix system (Debugging module)
+        await bus.emit("request_auto_fix", {
+            "task_id": task_id,
+            "error": error
+        }, source="orchestrator")
+
+    async def finalize_task(self, event):
+        task_id = event.data.get("task_id")
+        print(f"✅ Orchestrator: Task [{task_id}] successfully completed.")
+        if task_id in self.active_tasks:
+            del self.active_tasks[task_id]
+
+# Global instance
+orchestrator = Orchestrator()
