@@ -35,4 +35,11 @@ class WindowDetector:
         except Exception as e:
             await bus.emit("task_failed", {"task_id": task_id, "error": str(e)}, source="window_detector")
 
+    def _get_windows_window(self):
+        import win32gui, win32process
+        hwnd = win32gui.GetForegroundWindow()
+        title = win32gui.GetWindowText(hwnd)
+        rect = win32gui.GetWindowRect(hwnd) # (left, top, right, bottom)
+        return {"window_title": title, "bounds": {"x": rect[0], "y": rect[1]}}
+
     
