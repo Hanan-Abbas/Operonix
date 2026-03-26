@@ -42,4 +42,13 @@ class WindowDetector:
         rect = win32gui.GetWindowRect(hwnd) # (left, top, right, bottom)
         return {"window_title": title, "bounds": {"x": rect[0], "y": rect[1]}}
 
+    def _get_macos_window(self):
+        from AppKit import NSWorkspace
+        from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        
+        active_app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        title = active_app.localizedName()
+        # macOS returns app name easily; getting specific window title requires Quartz
+        return {"window_title": title, "bounds": {"x": 0, "y": 0}} # Bounds need CGWindowList query
+
     
