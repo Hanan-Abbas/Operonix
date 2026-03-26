@@ -45,4 +45,27 @@ class Planner:
             "metadata": {"intent": intent, "params": params}
         }, source="planner")
 
-    
+    def _generate_steps(self, intent, params):
+        """
+        Hardcoded logic for basic intents; complex ones will use LLM.
+        Each step defines: tool, action, and arguments.
+        """
+        if intent == "file_create":
+            filename = params.get("name", "untitled.txt")
+            content = params.get("content", "")
+            return [
+                {"tool": "file_tool", "action": "check_exists", "args": {"path": filename}},
+                {"tool": "file_tool", "action": "write", "args": {"path": filename, "data": content}},
+                {"tool": "ui_tool", "action": "notify", "args": {"message": f"Created {filename}"}}
+            ]
+
+        if intent == "shell_command":
+            return [
+                {"tool": "shell_tool", "action": "execute", "args": {"command": params.get("command")}}
+            ]
+
+        # Fallback for unknown sequences
+        return []
+
+# Global instance
+planner = Planner()
