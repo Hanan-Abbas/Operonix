@@ -51,4 +51,13 @@ class WindowDetector:
         # macOS returns app name easily; getting specific window title requires Quartz
         return {"window_title": title, "bounds": {"x": 0, "y": 0}} # Bounds need CGWindowList query
 
+    def _get_linux_window(self):
+        from ewmh import EWMH
+        ewmh = EWMH()
+        win = ewmh.getActiveWindow()
+        if win:
+            title = win.get_wm_name()
+            return {"window_title": title, "bounds": {"x": 0, "y": 0}}
+        return None
+
     
