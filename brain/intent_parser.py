@@ -52,4 +52,12 @@ class IntentParser:
                 "parameters": params
             }, source="intent_parser")
 
-    
+    def _check_risk(self, intent, params):
+        """Simple risk logic (will be expanded in safety/risk_rules.py)."""
+        risky_intents = ["file_delete", "shell_command"]
+        if intent in risky_intents:
+            return True
+        return False
+
+# Global instance
+intent_parser = IntentParser()
