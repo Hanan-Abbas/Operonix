@@ -60,4 +60,16 @@ class WindowDetector:
             return {"window_title": title, "bounds": {"x": 0, "y": 0}}
         return None
 
-    
+    def _classify_app(self, title):
+        title = title.lower()
+        mapping = {
+            "code": "editor", "vsc": "editor", "studio": "editor",
+            "chrome": "browser", "firefox": "browser", "safari": "browser",
+            "terminal": "terminal", "iterm": "terminal", "bash": "terminal"
+        }
+        for key, category in mapping.items():
+            if key in title: return category
+        return "generic_ui"
+
+# Global instance
+window_detector = WindowDetector()
