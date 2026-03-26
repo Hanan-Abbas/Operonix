@@ -41,4 +41,33 @@ class LLMClient:
                 "error": f"LLM Parsing Error: {str(e)}"
             }, source="llm_client")
 
-    
+    async def _call_ollama(self, prompt):
+        """Standard async POST request to Ollama's local API."""
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json"  # Instructs Ollama to strictly return JSON
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.base_url, json=payload) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    return result.get("response", "{}")
+                else:
+                    raise Exception(f"Ollama error: {resp.status}")
+
+    def _build_parsing_prompt(self, text):
+        return f"""
+        Analyze the following user command for an OS Agent: "{text}"
+        Return ONLY a JSON object with this structure:
+        {{
+            "intent": "string_action_name",
+            "parameters": {{ "key": "value" }}
+        }}
+        Example: "Create a folder named backups" -> {{"intent": "file_create", "parameters": {{"type": "directory", "name": "backups"}}}}
+        """
+
+# Global instance
+llm_client = LLMClient()
