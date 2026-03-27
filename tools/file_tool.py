@@ -1,5 +1,6 @@
 import os
 import shutil
+import asyncio
 from pathlib import Path
 from core.event_bus import bus
 
@@ -8,43 +9,44 @@ class FileTool:
         self.name = "file_tool"
 
     async def run(self, action, args):
-        """
-        Main entry point called by the Executor.
-        Actions: write, read, delete, list, exists, move
-        """
-        path = args.get("path")
-        if not path:
-            return False, "No path provided for file operation."
+        path_str = args.get("path")
+        if not path_str:
+            return False, "No path provided."
 
         # Cross-platform path normalization
-        safe_path = Path(path).resolve()
+        safe_path = Path(path_str).resolve()
+
+        # Emit event for the Web Dashboard to show "File Activity"
+        await bus.emit("file_op_started", {"action": action, "path": str(safe_path)}, source="file_tool")
 
         try:
             if action == "write":
-                return self._write_file(safe_path, args.get("data", ""))
+                # Run blocking I/O in a separate thread to keep the Bus fast
+                return await asyncio.to_thread(self._write_file, safe_path, args.get("data", ""))
             
             elif action == "read":
-                return self._read_file(safe_path)
+                return await asyncio.to_thread(self._read_file, safe_path)
             
             elif action == "delete":
-                return self._delete_item(safe_path)
+                return await asyncio.to_thread(self._delete_item, safe_path)
             
             elif action == "list":
-                return self._list_directory(safe_path)
+                return await asyncio.to_thread(self._list_directory, safe_path)
             
             elif action == "exists":
-                return self._check_exists(safe_path)
+                return await asyncio.to_thread(self._check_exists, safe_path)
             
             elif action == "move":
-                return self._move_item(safe_path, args.get("destination"))
+                return await asyncio.to_thread(self._move_item, safe_path, args.get("destination"))
 
             return False, f"Unknown action: {action}"
 
         except Exception as e:
             return False, f"File Error: {str(e)}"
 
+    # --- Synchronous worker methods (Wrapped by asyncio.to_thread above) ---
+
     def _write_file(self, path, data):
-        # Ensure directory exists before writing
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(data)
@@ -52,7 +54,7 @@ class FileTool:
 
     def _read_file(self, path):
         if not path.exists():
-            return False, "File does not exist."
+            return False, f"File {path} does not exist."
         with open(path, "r", encoding="utf-8") as f:
             return True, f.read()
 
@@ -68,8 +70,7 @@ class FileTool:
     def _list_directory(self, path):
         if not path.is_dir():
             return False, "Path is not a directory."
-        items = os.listdir(path)
-        return True, items
+        return True, os.listdir(path)
 
     def _check_exists(self, path):
         return True, path.exists()
@@ -80,7 +81,7 @@ class FileTool:
         dest_path = Path(destination).resolve()
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(path), str(dest_path))
-        return True, f"Moved {path} to {dest_path}"
+        return True, f"Moved to {dest_path}"
 
 # Global instance
 file_tool = FileTool()
