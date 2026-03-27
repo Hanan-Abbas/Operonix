@@ -1,0 +1,26 @@
+# --- CORE & NETWORKING ---
+asyncio          # Asynchronous I/O for the Event Bus and Orchestrator
+aiohttp          # Async HTTP client for Ollama/LLM communication
+fastapi          # Backend for the Dashboard
+uvicorn          # High-performance ASGI server to run the API
+pydantic         # Data validation for the API and Settings
+
+# --- OS & WINDOW DETECTION ---
+psutil           # System process and memory monitoring
+# Windows specific (Conditional)
+pywin32; sys_platform == 'win32'
+# Linux specific (Conditional)
+ewmh; sys_platform == 'linux'
+# macOS specific (Conditional)
+pyobjc-framework-AppKit; sys_platform == 'darwin'
+pyobjc-framework-Quartz; sys_platform == 'darwin'
+
+# --- TOOLS & AUTOMATION (The "Hands") ---
+pyautogui        # Cross-platform UI automation (Click/Type)
+mouse            # Fine-grained mouse control fallback
+keyboard         # Global hotkey listening and simulation
+pillow           # Image processing for screenshots and vision fallback
+
+# --- UTILITIES ---
+python-dotenv    # For managing API keys and local configs in core/config.py
+logging          # Advanced logging for the /logs/ directory
