@@ -56,4 +56,36 @@ class Executor:
         # If all steps pass
         await bus.emit("task_completed", {"task_id": task_id}, source="executor")
 
+    async def _run_step(self, step):
+        """
+        Dispatches the step to the actual tool logic.
+        """
+        tool_name = step.get("tool")
+        action = step.get("action")
+        args = step.get("args", {})
+
+        # Path Normalization for Cross-OS Compatibility
+        if "path" in args:
+            args["path"] = self._normalize_path(args["path"])
+
+        try:
+            # Note: In the next phase, we will populate self.tools with 
+            # file_tool, shell_tool, etc. For now, we simulate the dispatch.
+            
+            if tool_name == "shell_tool":
+                return await self._execute_shell(args.get("command"))
+            
+            # Placeholder for other tools (file_tool, ui_tool)
+            # return await self.tools[tool_name].run(action, args)
+            
+            return True, f"Simulated {action} on {tool_name}"
+
+        except Exception as e:
+            return False, str(e)
+
+    def _normalize_path(self, path):
+        """Converts paths to the correct format for the current OS."""
+        # Fixes slashes ( / vs \ ) automatically
+        return os.path.normpath(path)
+
     
