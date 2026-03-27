@@ -1,72 +1,78 @@
 import json
 import aiohttp
+import logging
 from core.event_bus import bus
 
 class LLMClient:
     def __init__(self, model_name="llama3", base_url="http://localhost:11434/api/generate"):
         self.model_name = model_name
         self.base_url = base_url
+        self.logger = logging.getLogger("LLMClient")
 
     async def start(self):
-        """Subscribe to parsing requests from the orchestrator."""
+        """Listen for any brain-related requests."""
         bus.subscribe("request_intent_parsing", self.process_intent)
-        print(f"🧠 LLM Client: Online (Using model: {self.model_name})")
+        # We also listen for general 'reasoning' requests from the Planner
+        bus.subscribe("request_reasoning", self.process_reasoning)
+        print(f"🧠 LLM Client: Online (Model: {self.model_name})")
+
+    async def ask(self, prompt, use_json=True):
+        """
+        Generic method to ask the LLM anything. 
+        Used by Planner for coding steps, or Validator for safety checks.
+        """
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False
+        }
+        if use_json:
+            payload["format"] = "json"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.base_url, json=payload) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        response_text = result.get("response", "{}")
+                        return json.loads(response_text) if use_json else response_text
+                    else:
+                        self.logger.error(f"Ollama API Error: {resp.status}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"LLM Connection Error: {e}")
+            return None
 
     async def process_intent(self, event):
-        """
-        Receives raw text and asks the LLM to return structured JSON.
-        """
+        """Parses raw user text into an Intent + Parameters."""
         task_id = event.data.get("task_id")
         user_text = event.data.get("text")
         
-        # We wrap the text in a 'system prompt' to force JSON output
         prompt = self._build_parsing_prompt(user_text)
+        intent_data = await self.ask(prompt, use_json=True)
         
-        try:
-            response_text = await self._call_ollama(prompt)
-            # Try to parse the LLM's string response into a Python dictionary
-            intent_data = json.loads(response_text)
-            
-            # Emit the structured intent back to the bus
+        if intent_data:
             await bus.emit("intent_parsed", {
                 "task_id": task_id,
                 "intent": intent_data.get("intent"),
                 "parameters": intent_data.get("parameters", {}),
-                "raw_response": response_text
             }, source="llm_client")
-            
-        except Exception as e:
-            await bus.emit("task_failed", {
-                "task_id": task_id, 
-                "error": f"LLM Parsing Error: {str(e)}"
-            }, source="llm_client")
+        else:
+            await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
 
-    async def _call_ollama(self, prompt):
-        """Standard async POST request to Ollama's local API."""
-        payload = {
-            "model": self.model_name,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json"  # Instructs Ollama to strictly return JSON
-        }
+    async def process_reasoning(self, event):
+        """Used by the Planner to break down complex tasks like Coding."""
+        task_id = event.data.get("task_id")
+        prompt = event.data.get("prompt")
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.base_url, json=payload) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("response", "{}")
-                else:
-                    raise Exception(f"Ollama error: {resp.status}")
+        result = await self.ask(prompt, use_json=True)
+        await bus.emit("reasoning_completed", {"task_id": task_id, "response": result}, source="llm_client")
 
     def _build_parsing_prompt(self, text):
         return f"""
-        Analyze the following user command for an OS Agent: "{text}"
-        Return ONLY a JSON object with this structure:
-        {{
-            "intent": "string_action_name",
-            "parameters": {{ "key": "value" }}
-        }}
-        Example: "Create a folder named backups" -> {{"intent": "file_create", "parameters": {{"type": "directory", "name": "backups"}}}}
+        Analyze the user command: "{text}"
+        Return a JSON object: {{ "intent": "name", "parameters": {{}} }}
+        Intents: file_create, shell_command, write_code, search_web, ui_interact.
         """
 
 # Global instance
