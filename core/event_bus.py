@@ -26,9 +26,15 @@ class EventBus:
         self.listeners[event_name].append(callback)
         self.logger.info(f"Subscribed to {event_name}")
 
-    async def emit(self, event_name: str, data: Any = None, source: str = "unknown"):
-        event = Event(event_name, data, source)
-        await self._queue.put(event)
+    async def emit(self, event_type, data, source=None):
+        event = Event(event_type, data, source)
+        listeners = self.listeners.get(event_type, []) + self.listeners.get("*", [])
+        
+        for listener in listeners:
+            if asyncio.iscoroutinefunction(listener):
+                await listener(event) # This handles the 'async def' in the server
+            else:
+                listener(event)
 
     async def run(self):
         """The main loop that processes events and notifies listeners."""
