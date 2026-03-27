@@ -65,4 +65,22 @@ class FileTool:
             path.unlink()
         return True, f"Deleted {path}"
 
-    
+    def _list_directory(self, path):
+        if not path.is_dir():
+            return False, "Path is not a directory."
+        items = os.listdir(path)
+        return True, items
+
+    def _check_exists(self, path):
+        return True, path.exists()
+
+    def _move_item(self, path, destination):
+        if not destination:
+            return False, "No destination provided."
+        dest_path = Path(destination).resolve()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(dest_path))
+        return True, f"Moved {path} to {dest_path}"
+
+# Global instance
+file_tool = FileTool()
