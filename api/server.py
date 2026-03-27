@@ -43,7 +43,7 @@ def setup_event_bridge():
     async def forward_to_dashboard(event):
         payload = {
             "source": event.source,
-            "event_type": event.event_type,
+            "event_type": event.name,
             "data": event.data
         }
         await manager.broadcast(payload)
