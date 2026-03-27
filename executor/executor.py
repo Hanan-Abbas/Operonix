@@ -88,4 +88,26 @@ class Executor:
         # Fixes slashes ( / vs \ ) automatically
         return os.path.normpath(path)
 
-    
+    async def _execute_shell(self, command):
+        """Runs a command in the native OS shell."""
+        # Adjust shell based on OS
+        shell_executable = "cmd.exe" if self.os_name == "Windows" else "/bin/bash"
+        
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                executable=shell_executable if self.os_name == "Windows" else None
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                return True, stdout.decode().strip()
+            else:
+                return False, stderr.decode().strip()
+        except Exception as e:
+            return False, str(e)
+
+# Global instance
+executor = Executor()
