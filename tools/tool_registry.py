@@ -1,6 +1,7 @@
 import logging
 from tools.file_tool import file_tool
 from tools.shell_tool import shell_tool
+from tools.ui_tool import ui_tool
 
 class ToolRegistry:
     def __init__(self):
@@ -9,7 +10,7 @@ class ToolRegistry:
         self._tools = {
             "file_tool": file_tool,
             "shell_tool": shell_tool,
-            # ui_tool will be added here later
+            "ui_tool": ui_tool
         }
 
     def get_tool(self, tool_name: str):
