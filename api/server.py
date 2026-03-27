@@ -1,20 +1,21 @@
 import asyncio
+import json
+import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from core.event_bus import bus
-import json
 
-app = FastAPI(title="AI OS Agent Dashboard API")
+app = FastAPI(title="i_os Agent Dashboard API")
 
-# Allow the frontend to talk to the backend
+# Enable CORS for the Frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Keep track of active dashboard connections
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -26,55 +27,68 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
-    async def broadcast(self, message: str):
+    async def broadcast(self, message: dict):
         for connection in self.active_connections:
             try:
-                await connection.send_text(message)
+                await connection.send_json(message)
             except Exception:
                 pass
 
 manager = ConnectionManager()
 
 # --- THE EVENT BRIDGE ---
-# This function listens to the EventBus and sends EVERYTHING to the Web UI
-async def event_bridge_task():
-    """
-    Subscribes to all major events and broadcasts them via WebSocket.
-    """
-    async def forward_to_web(event):
+# This connects the internal system logic to the external Web UI
+def setup_event_bridge():
+    @bus.subscribe_async("*") 
+    async def forward_to_dashboard(event):
         payload = {
-            "event": event.name,
             "source": event.source,
-            "data": event.data,
-            "timestamp": event.timestamp
+            "event_type": event.event_type,
+            "data": event.data
         }
-        await manager.broadcast(json.dumps(payload))
-
-    # Subscribe to every lifecycle event we've created
-    event_types = [
-        "user_input_received", "intent_parsed", "plan_ready", 
-        "execution_step_started", "execution_step_success", 
-        "task_completed", "task_failed", "file_op_started", "shell_op_started"
-    ]
-    
-    for etype in event_types:
-        bus.subscribe(etype, forward_to_web)
+        await manager.broadcast(payload)
 
 @app.on_event("startup")
 async def startup_event():
-    # Start the bridge as a background task
-    asyncio.create_task(event_bridge_task())
+    setup_event_bridge()
+    print("🌐 API Server: Bridge to Event Bus is LIVE.")
+
+# --- ROUTES (Aligned with your api/routes/ structure) ---
+
+@app.get("/api/system/status")
+async def get_status():
+    """Matches api/routes/system.py logic"""
+    import platform
+    return {
+        "status": "online",
+        "os": platform.system(),
+        "version": "1.0.0",
+        "engine": "i_os_core"
+    }
+
+@app.get("/api/logs/recent")
+async def get_recent_logs():
+    """Matches api/routes/logs.py logic"""
+    # This would eventually read from your /logs/ directory
+    return {"logs": ["System started...", "Event bus initialized..."]}
 
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive
-            await websocket.receive_text()
+            # Receive commands from the Dashboard (e.g., "STOP", "RETRY")
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            # Emit back to the system so Orchestrator/Executor can react
+            await bus.emit("dashboard_command", message, source="api_server")
+            
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-@app.get("/system/status")
-async def get_status():
-    return {"status": "online", "os": "detected"}
+def start_server():
+    """Main entry point called by main.py"""
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", loop="asyncio")
+    server = uvicorn.Server(config)
+    return server.serve()
