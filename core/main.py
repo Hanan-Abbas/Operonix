@@ -48,19 +48,13 @@ class IOSAgent:
         the API server handles the dashboard.
         """
         try:
-            # Task 1: Initialize and run internal logic
             await self.initialize_modules()
 
-            # Task 2: Launch the FastAPI Web Server (Dashboard Backend)
-            # We run this in a thread or as a co-routine
             print("🌐 Dashboard API: Launching on http://localhost:8000")
             
-            # This is a blocking call in standard uvicorn, 
-            # so we run it as a task to keep the event bus moving.
-            server_task = asyncio.to_thread(start_server)
-            
-            # Keep the main thread alive
-            await server_task
+            # Start the server in a separate thread so it doesn't block the Event Bus
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, start_server)
 
         except asyncio.CancelledError:
             print("🛑 System shutdown initiated...")
