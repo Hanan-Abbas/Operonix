@@ -21,14 +21,12 @@ class EventBus:
         self._queue = asyncio.Queue()
 
     def subscribe(self, event_name: str, callback: Callable):
-        """Register a function to run when a specific event occurs."""
         if event_name not in self.listeners:
             self.listeners[event_name] = []
         self.listeners[event_name].append(callback)
         self.logger.info(f"Subscribed to {event_name}")
 
     async def emit(self, event_name: str, data: Any = None, source: str = "unknown"):
-        """Fire an event into the system."""
         event = Event(event_name, data, source)
         await self._queue.put(event)
 
@@ -38,15 +36,12 @@ class EventBus:
         while True:
             event = await self._queue.get()
             
-            # Log every event for the dashboard/logs/decisions.log
+            # Print for immediate debugging; this will later feed the Web Dashboard
             print(event) 
             
             if event.name in self.listeners:
-                tasks = [
-                    self._execute_callback(callback, event) 
-                    for callback in self.listeners[event.name]
-                ]
-                await asyncio.gather(*tasks)
+                for callback in self.listeners[event.name]:
+                    asyncio.create_task(self._execute_callback(callback, event))
             
             self._queue.task_done()
 
