@@ -5,7 +5,7 @@ from core.event_bus import bus
 
 # Import your tools at the top level
 from tools.file_tool import file_tool
-# from tools.shell_tool import shell_tool  # Uncomment when you create this file
+from tools.shell_tool import shell_tool
 # from tools.ui_tool import ui_tool        # Uncomment when you create this file
 
 class Executor:
@@ -17,7 +17,7 @@ class Executor:
         # Whenever you add a new tool, simply add it to this dictionary.
         self.tools = {
             "file_tool": file_tool,
-            # "shell_tool": shell_tool,
+            "shell_tool": shell_tool
             # "ui_tool": ui_tool
         }
 
