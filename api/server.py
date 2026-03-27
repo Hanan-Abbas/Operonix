@@ -39,7 +39,7 @@ manager = ConnectionManager()
 # --- THE EVENT BRIDGE ---
 # This connects the internal system logic to the external Web UI
 def setup_event_bridge():
-    @bus.subscribe_async("*") 
+
     async def forward_to_dashboard(event):
         payload = {
             "source": event.source,
@@ -47,6 +47,9 @@ def setup_event_bridge():
             "data": event.data
         }
         await manager.broadcast(payload)
+
+    bus.subscribe("*", forward_to_dashboard)
+    print("🛰️ Event Bridge: Successfully linked to Event Bus.")
 
 @app.on_event("startup")
 async def startup_event():
@@ -91,4 +94,4 @@ def start_server():
     """Main entry point called by main.py"""
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", loop="asyncio")
     server = uvicorn.Server(config)
-    return server.serve()
+    return server.run()
