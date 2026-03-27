@@ -46,4 +46,13 @@ class ToolSelector:
         self.logger.warning("⚠️ Priority 3: No direct tool found. Falling back to UI Automation.")
         return "ui_tool", tool_registry.get_tool("ui_tool")
 
-    
+    def _is_file_operation(self, intent):
+        file_intents = ["create_file", "read_file", "delete_file", "move_file", "list_dir"]
+        return intent in file_intents
+
+    def _is_system_command(self, intent):
+        cmd_intents = ["run_command", "install_package", "check_status", "git_op"]
+        return intent in cmd_intents
+
+# Global instance for the Orchestrator/Executor to call
+tool_selector = ToolSelector()
