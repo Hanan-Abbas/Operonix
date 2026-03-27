@@ -1,62 +1,84 @@
 import asyncio
-import logging
-from typing import Any, Callable, Dict, List, Optional
-from datetime import datetime
+import signal
+import sys
+from core.orchestrator import orchestrator
+from core.event_bus import bus
+from brain.llm_client import llm_client
+from brain.planner import planner
+from brain.capability_mapper import capability_mapper
+from context.window_detector import window_detector
+from context.app_classifier import app_classifier
+from context.state_extractor import state_extractor
+from executor.executor import executor
+from tools.tool_registry import tool_registry
+from api.server import start_server
 
-class Event:
-    """Standardized event structure for the entire OS."""
-    def __init__(self, name: str, data: Any = None, source: str = "system"):
-        self.name = name
-        self.data = data
-        self.source = source
-        self.timestamp = datetime.now().isoformat()
-
-    def __str__(self):
-        return f"[{self.timestamp}] {self.source} -> {self.name}: {self.data}"
-
-class EventBus:
+class IOSAgent:
     def __init__(self):
-        self.listeners: Dict[str, List[Callable]] = {}
-        self.logger = logging.getLogger("EventBus")
-        self._queue = asyncio.Queue()
+        self.is_running = True
 
-    def subscribe(self, event_name: str, callback: Callable):
-        """Register a function to run when a specific event occurs."""
-        if event_name not in self.listeners:
-            self.listeners[event_name] = []
-        self.listeners[event_name].append(callback)
-        self.logger.info(f"Subscribed to {event_name}")
+    async def initialize_modules(self):
+        """
+        Wakes up every module in the 17-folder structure.
+        The order of 'start()' calls matters for event subscriptions.
+        """
+        print("🚀 i_os Agent: Starting engine...")
 
-    async def emit(self, event_name: str, data: Any = None, source: str = "unknown"):
-        """Fire an event into the system."""
-        event = Event(event_name, data, source)
-        await self._queue.put(event)
+        # 1. Start the Brain & Logic
+        await llm_client.start()
+        await capability_mapper.start()
+        await planner.start()
 
-    async def run(self):
-        """The main loop that processes events and notifies listeners."""
-        self.logger.info("Event Bus is running...")
-        while True:
-            event = await self._queue.get()
-            
-            # Log every event for the dashboard/logs/decisions.log
-            print(event) 
-            
-            if event.name in self.listeners:
-                tasks = [
-                    self._execute_callback(callback, event) 
-                    for callback in self.listeners[event.name]
-                ]
-                await asyncio.gather(*tasks)
-            
-            self._queue.task_done()
+        # 2. Start the Context Awareness
+        await window_detector.start()
+        await app_classifier.start()
+        await state_extractor.start()
 
-    async def _execute_callback(self, callback: Callable, event: Event):
+        # 3. Start the Execution Layer
+        await executor.start()
+
+        # 4. Start the Heart (Orchestrator)
+        await orchestrator.start()
+
+        print("✨ All modules are synchronized and listening to the Event Bus.")
+
+    async def run_forever(self):
+        """
+        Main loop to keep the background processes alive while 
+        the API server handles the dashboard.
+        """
         try:
-            if asyncio.iscoroutinefunction(callback):
-                await callback(event)
-            else:
-                callback(event)
-        except Exception as e:
-            self.logger.error(f"Error in listener for {event.name}: {e}")
+            # Task 1: Initialize and run internal logic
+            await self.initialize_modules()
 
-bus = EventBus()
+            # Task 2: Launch the FastAPI Web Server (Dashboard Backend)
+            # We run this in a thread or as a co-routine
+            print("🌐 Dashboard API: Launching on http://localhost:8000")
+            
+            # This is a blocking call in standard uvicorn, 
+            # so we run it as a task to keep the event bus moving.
+            server_task = asyncio.to_thread(start_server)
+            
+            # Keep the main thread alive
+            await server_task
+
+        except asyncio.CancelledError:
+            print("🛑 System shutdown initiated...")
+        except Exception as e:
+            print(f"💥 Critical System Failure: {e}")
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Graceful shutdown logic."""
+        print("🔌 Powering down modules safely.")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    # The entry point of your entire OS Agent
+    agent = IOSAgent()
+    
+    try:
+        asyncio.run(agent.run_forever())
+    except KeyboardInterrupt:
+        print("\n👋 i_os Agent: Offline. Goodbye.")
