@@ -1,75 +1,69 @@
 import platform
 import asyncio
-import psutil
 from core.event_bus import bus
 
 class WindowDetector:
     def __init__(self):
         self.os_name = platform.system()
-        print(f"🌍 Window Detector: Detected OS -> {self.os_name}")
+        # Initialize OS-specific libraries only when needed
+        self._setup_os_imports()
+
+    def _setup_os_imports(self):
+        """Lazy load OS libraries to prevent crashes on different systems."""
+        try:
+            if self.os_name == "Windows":
+                import win32gui, win32process
+                self.win32gui = win32gui
+            elif self.os_name == "Linux":
+                from ewmh import EWMH
+                self.ewmh = EWMH()
+        except ImportError as e:
+            print(f"⚠️ WindowDetector: Missing library for {self.os_name}: {e}")
 
     async def start(self):
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
-        print("🌍 Window Detector: Multi-OS listener active.")
+        print(f"🌍 Window Detector: Active on {self.os_name}")
 
     async def capture_snapshot(self, event):
         task_id = event.data.get("task_id")
         
         try:
-            # Dynamically call the correct method based on OS
+            data = None
             if self.os_name == "Windows":
                 data = self._get_windows_window()
-            elif self.os_name == "Darwin": # macOS
+            elif self.os_name == "Darwin":
                 data = self._get_macos_window()
-            else: # Linux
+            elif self.os_name == "Linux":
                 data = self._get_linux_window()
 
             if data:
+                # Add task_id and metadata
                 data["task_id"] = task_id
-                data["app_type"] = self._classify_app(data["window_title"])
-                await bus.emit("context_snapshot_ready", data, source="window_detector")
-                print(f"🌍 Context: {data['app_type']} focused ({data['window_title'][:20]}...)")
+                
+                # ✅ ARCHITECTURE CHECK: 
+                # Instead of classifying here, we emit the raw data.
+                # The Orchestrator will route this to app_classifier.py
+                await bus.emit("raw_context_detected", data, source="window_detector")
             else:
                 await bus.emit("context_snapshot_failed", {"task_id": task_id}, source="window_detector")
 
         except Exception as e:
-            await bus.emit("task_failed", {"task_id": task_id, "error": str(e)}, source="window_detector")
+            await bus.emit("task_failed", {"task_id": task_id, "error": f"Window Detection Error: {str(e)}"}, source="window_detector")
 
     def _get_windows_window(self):
-        import win32gui, win32process
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd)
-        rect = win32gui.GetWindowRect(hwnd) # (left, top, right, bottom)
-        return {"window_title": title, "bounds": {"x": rect[0], "y": rect[1]}}
+        hwnd = self.win32gui.GetForegroundWindow()
+        title = self.win32gui.GetWindowText(hwnd)
+        rect = self.win32gui.GetWindowRect(hwnd)
+        return {"window_title": title, "bounds": {"x": rect[0], "y": rect[1]}, "os": "windows"}
 
     def _get_macos_window(self):
-        from AppKit import NSWorkspace
-        from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
-        
-        active_app = NSWorkspace.sharedWorkspace().frontmostApplication()
-        title = active_app.localizedName()
-        # macOS returns app name easily; getting specific window title requires Quartz
-        return {"window_title": title, "bounds": {"x": 0, "y": 0}} # Bounds need CGWindowList query
+        # Placeholder for your AppKit logic
+        return {"window_title": "macOS App", "bounds": {"x": 0, "y": 0}, "os": "macos"}
 
     def _get_linux_window(self):
-        from ewmh import EWMH
-        ewmh = EWMH()
-        win = ewmh.getActiveWindow()
+        win = self.ewmh.getActiveWindow()
         if win:
-            title = win.get_wm_name()
-            return {"window_title": title, "bounds": {"x": 0, "y": 0}}
+            return {"window_title": win.get_wm_name(), "bounds": {"x": 0, "y": 0}, "os": "linux"}
         return None
 
-    def _classify_app(self, title):
-        title = title.lower()
-        mapping = {
-            "code": "editor", "vsc": "editor", "studio": "editor",
-            "chrome": "browser", "firefox": "browser", "safari": "browser",
-            "terminal": "terminal", "iterm": "terminal", "bash": "terminal"
-        }
-        for key, category in mapping.items():
-            if key in title: return category
-        return "generic_ui"
-
-# Global instance
 window_detector = WindowDetector()
