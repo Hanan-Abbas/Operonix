@@ -43,4 +43,26 @@ class FileTool:
         except Exception as e:
             return False, f"File Error: {str(e)}"
 
+    def _write_file(self, path, data):
+        # Ensure directory exists before writing
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+        return True, f"Successfully wrote to {path}"
+
+    def _read_file(self, path):
+        if not path.exists():
+            return False, "File does not exist."
+        with open(path, "r", encoding="utf-8") as f:
+            return True, f.read()
+
+    def _delete_item(self, path):
+        if not path.exists():
+            return False, "Target does not exist."
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        return True, f"Deleted {path}"
+
     
