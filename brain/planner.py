@@ -1,62 +1,92 @@
 import asyncio
+import json
 from core.event_bus import bus
-# from brain.llm_client import llm  # You will build this next
+from brain.llm_client import llm_client
 
 class Planner:
     def __init__(self):
+        self.name = "planner"
         self.plan_storage = {}
 
     async def start(self):
+        """
+        Subscribe to 'capability_mapped' from the CapabilityMapper.
+        The flow is: Intent -> Capability -> Planner.
+        """
         bus.subscribe("capability_mapped", self.create_plan)
-        print("🧠 Planner: Ready to strategize complex tasks.")
+        print("🧠 Planner: Strategist active. Ready to build complex execution paths.")
 
     async def create_plan(self, event):
+        """
+        Converts a mapped capability into a concrete list of steps.
+        """
         task_id = event.data.get("task_id")
         intent = event.data.get("intent")
         capability = event.data.get("capability")
-        args = event.data.get("args")
+        args = event.data.get("args", {})
+        
+        print(f"📝 Planner: Generating strategy for {intent}...")
 
-        print(f"📝 Planner: Strategizing for {intent} using {capability}...")
-
-        # ✅ DYNAMIC STEP GENERATION
-        # If it's a complex task (like coding), we ask the LLM to generate steps
-        if self._is_complex_task(intent):
-            steps = await self._ask_llm_for_steps(intent, capability, args)
+        # DECISION: Is this a simple template or does it need LLM reasoning?
+        if self._needs_llm_reasoning(intent, args):
+            steps = await self._generate_llm_steps(intent, args)
         else:
             steps = self._generate_static_steps(intent, args)
 
         if not steps:
-            await bus.emit("task_failed", {"task_id": task_id, "error": "No steps generated."})
+            await bus.emit("task_failed", {
+                "task_id": task_id,
+                "error": f"Planner failed to generate steps for {intent}"
+            }, source="planner")
             return
 
-        # Emit the plan to the Executor
+        # Store for the Execution Tracker
+        self.plan_storage[task_id] = steps
+
+        # Emit the plan for the Executor to pick up
         await bus.emit("plan_ready", {
             "task_id": task_id,
             "steps": steps,
-            "context": {"active_app": args.get("active_app")}
+            "metadata": {"intent": intent, "capability": capability}
         }, source="planner")
 
-    def _is_complex_task(self, intent):
-        # Intents that require "Thinking" rather than "Templates"
-        complex_intents = ["write_code", "debug_error", "refactor_project", "research_topic"]
-        return intent in complex_intents
+    def _needs_llm_reasoning(self, intent, args):
+        """Logic to decide if we need to burn GPU cycles on Ollama."""
+        complex_intents = ["write_code", "debug_error", "summarize_and_save", "complex_workflow"]
+        # Also trigger LLM if the prompt is very long or vague
+        return intent in complex_intents or len(args.get("raw_text", "")) > 100
 
-    async def _ask_llm_for_steps(self, intent, capability, args):
+    async def _generate_llm_steps(self, intent, args):
         """
-        This is where the 'Coding' magic happens. 
-        It asks the LLM: 'Give me a JSON list of steps to achieve [intent]'.
+        Calls the LLM Client to brainstorm the steps.
         """
-        # prompt = f"Break down the following task into steps for an OS Agent: {intent} with {args}"
-        # response = await llm.generate_json(prompt)
-        # return response['steps']
-        return [{"tool": "shell_tool", "action": "execute", "args": {"command": "echo Thinking..."}}]
+        prompt = f"""
+        Break down this OS task into a sequence of tool calls.
+        Task: {intent}
+        Details: {args}
+        
+        Available Tools: file_tool, shell_tool, ui_tool.
+        Return ONLY a JSON list of steps. 
+        Example: [ {{"tool": "shell_tool", "action": "execute", "args": {{"command": "ls"}}}} ]
+        """
+        
+        response = await llm_client.ask(prompt, use_json=True)
+        
+        return response.get("steps", []) if isinstance(response, dict) else []
 
     def _generate_static_steps(self, intent, args):
-        """Your existing hardcoded logic for simple stuff like 'shut down' or 'create file'."""
+        """Hardcoded templates for common, simple actions."""
         if intent == "file_create":
             return [
-                {"tool": "file_tool", "action": "write", "args": {"path": args.get("path"), "data": args.get("data")}}
+                {"tool": "file_tool", "action": "write", "args": {"path": args.get("name"), "data": args.get("content", "")}}
             ]
+        
+        if intent == "shell_command":
+            return [
+                {"tool": "shell_tool", "action": "execute", "args": {"command": args.get("command")}}
+            ]
+        
         return []
 
+# Global instance
 planner = Planner()
