@@ -1,71 +1,62 @@
 import asyncio
 from core.event_bus import bus
+# from brain.llm_client import llm  # You will build this next
 
 class Planner:
     def __init__(self):
         self.plan_storage = {}
 
     async def start(self):
-        """Subscribe to validated intents to begin step-by-step planning."""
-        bus.subscribe("intent_validated", self.create_plan)
-        print("🧠 Planner: Strategist active. Ready to break down tasks.")
+        bus.subscribe("capability_mapped", self.create_plan)
+        print("🧠 Planner: Ready to strategize complex tasks.")
 
     async def create_plan(self, event):
-        """
-        Converts a high-level intent into a list of executable steps.
-        """
         task_id = event.data.get("task_id")
         intent = event.data.get("intent")
-        params = event.data.get("parameters")
+        capability = event.data.get("capability")
+        args = event.data.get("args")
 
-        print(f"📝 Planner: Generating sequence for {intent}...")
+        print(f"📝 Planner: Strategizing for {intent} using {capability}...")
 
-        # 1. Logic for step generation
-        # In a full version, this might call the LLM again to 'think' through steps
-        steps = self._generate_steps(intent, params)
+        # ✅ DYNAMIC STEP GENERATION
+        # If it's a complex task (like coding), we ask the LLM to generate steps
+        if self._is_complex_task(intent):
+            steps = await self._ask_llm_for_steps(intent, capability, args)
+        else:
+            steps = self._generate_static_steps(intent, args)
 
         if not steps:
-            await bus.emit("task_failed", {
-                "task_id": task_id,
-                "error": f"Planner could not generate steps for {intent}"
-            }, source="planner")
+            await bus.emit("task_failed", {"task_id": task_id, "error": "No steps generated."})
             return
 
-        # 2. Store the plan
-        self.plan_storage[task_id] = {
-            "current_step": 0,
-            "total_steps": len(steps),
-            "steps": steps
-        }
-
-        # 3. Emit the plan so the Executor can take over
+        # Emit the plan to the Executor
         await bus.emit("plan_ready", {
             "task_id": task_id,
             "steps": steps,
-            "metadata": {"intent": intent, "params": params}
+            "context": {"active_app": args.get("active_app")}
         }, source="planner")
 
-    def _generate_steps(self, intent, params):
+    def _is_complex_task(self, intent):
+        # Intents that require "Thinking" rather than "Templates"
+        complex_intents = ["write_code", "debug_error", "refactor_project", "research_topic"]
+        return intent in complex_intents
+
+    async def _ask_llm_for_steps(self, intent, capability, args):
         """
-        Hardcoded logic for basic intents; complex ones will use LLM.
-        Each step defines: tool, action, and arguments.
+        This is where the 'Coding' magic happens. 
+        It asks the LLM: 'Give me a JSON list of steps to achieve [intent]'.
         """
+        # prompt = f"Break down the following task into steps for an OS Agent: {intent} with {args}"
+        # response = await llm.generate_json(prompt)
+        # return response['steps']
+        return [{"tool": "shell_tool", "action": "execute", "args": {"command": "echo Thinking..."}}]
+
+    def _generate_static_steps(self, intent, args):
+        """Your existing hardcoded logic for simple stuff like 'shut down' or 'create file'."""
         if intent == "file_create":
-            filename = params.get("name", "untitled.txt")
-            content = params.get("content", "")
             return [
-                {"tool": "file_tool", "action": "check_exists", "args": {"path": filename}},
-                {"tool": "file_tool", "action": "write", "args": {"path": filename, "data": content}},
-                {"tool": "ui_tool", "action": "notify", "args": {"message": f"Created {filename}"}}
+                {"tool": "file_tool", "action": "write", "args": {"path": args.get("path"), "data": args.get("data")}}
             ]
-
-        if intent == "shell_command":
-            return [
-                {"tool": "shell_tool", "action": "execute", "args": {"command": params.get("command")}}
-            ]
-
-        # Fallback for unknown sequences
         return []
 
-# Global instance
 planner = Planner()
