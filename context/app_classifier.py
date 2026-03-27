@@ -31,3 +31,5 @@ class AppClassifier:
         
         # Pass it to the next stage: State Extraction
         await bus.emit("app_classified", event.data, source="app_classifier")
+
+app_classifier = AppClassifier()
