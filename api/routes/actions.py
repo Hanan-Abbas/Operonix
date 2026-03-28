@@ -33,3 +33,12 @@ async def get_action_history(limit: int = 50):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
 
+@router.delete("/actions/clear")
+async def clear_action_history():
+    """Clears the history file."""
+    try:
+        if os.path.exists(LOG_FILE):
+            os.remove(LOG_FILE)
+        return {"status": "success", "message": "History cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear logs: {str(e)}")
