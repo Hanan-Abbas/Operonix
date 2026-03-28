@@ -25,11 +25,18 @@ focus_manager = FocusManager()
 
 
 class Executor:
+    """
+    ⚙️ Central Execution Layer
+    - Executes plans step by step
+    - Validates context
+    - Chooses best tool
+    - Handles retries and fallback
+    - Emits events to bus
+    """
+
     def __init__(self):
         self.os_name = platform.system()
         self.is_running = False
-
-        # Safety restrictions
         self.restricted_actions = {"delete_file", "run_shell"}
 
     # -------------------------
@@ -60,12 +67,7 @@ class Executor:
                 "action": action
             })
 
-            # -------------------------
-            # Execute step safely
-            # -------------------------
-            success, result = await self._execute_step_safe(
-                task_id, step_index, step, context
-            )
+            success, result = await self._execute_step_safe(task_id, step_index, step, context)
 
             if not success:
                 await bus.emit("task_failed", {
@@ -74,9 +76,10 @@ class Executor:
                     "error": result
                 })
                 retry_manager.clear_task(task_id)
+                logger.error(f"❌ Task [{task_id}] failed at step {step_index}: {result}")
                 return
 
-            # Update context for next step
+            # Update context dynamically
             context["last_result"] = result
             context["last_action"] = action
 
@@ -85,51 +88,59 @@ class Executor:
                 "step_index": step_index,
                 "result": result
             })
+            logger.info(f"✅ Step {step_index} completed: {action}")
 
         await bus.emit("task_completed", {"task_id": task_id})
         retry_manager.clear_task(task_id)
+        logger.info(f"🏁 Task [{task_id}] completed successfully")
 
     # -------------------------
-    # Step Execution with Resilience
+    # Execute step with validation + resilience
     # -------------------------
     async def _execute_step_safe(self, task_id, step_index, step, context):
         action = step.get("action")
         args = step.get("args", {})
 
-        # Normalize paths
         if "path" in args:
             args["path"] = os.path.normpath(args["path"])
 
+        # -------------------------
         # Restricted actions
+        # -------------------------
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}"
 
+        # -------------------------
         # Context validation
+        # -------------------------
         valid, reason = await context_validator.validate_action_context(action, context)
         if not valid:
+            logger.warning(f"Context validation failed for action '{action}': {reason}")
             return False, f"Context validation failed: {reason}"
 
-        # Focus handling
-        if context.get("window_title"):
-            focused = await focus_manager.ensure_focus(context["window_title"])
+        # -------------------------
+        # Window focus (if needed)
+        # -------------------------
+        window_title = context.get("window_title")
+        if window_title:
+            focused = await focus_manager.ensure_focus(window_title)
             if not focused:
-                return False, "Failed to focus target window"
+                return False, f"Failed to focus target window: {window_title}"
 
+        # -------------------------
+        # Tool selection & execution
+        # -------------------------
         tried_tools = []
         fallback_attempts = 0
         max_fallbacks = 5
 
         while fallback_attempts < max_fallbacks:
-            # -------------------------
-            # Select best tool/plugin
-            # -------------------------
             tool_type, tool_instance = await tool_selector.select_best_tool(
-                {"intent": action},
-                context,
-                exclude=tried_tools
+                {"intent": action}, context, exclude=tried_tools
             )
 
             if not tool_instance:
+                logger.error(f"No tool/plugin available for action: {action}")
                 return False, f"No tool/plugin available for action: {action}"
 
             tried_tools.append(getattr(tool_instance, "name", tool_type))
@@ -142,9 +153,7 @@ class Executor:
             })
 
             try:
-                # -------------------------
-                # Execute capability
-                # -------------------------
+                # Execute capability via registry
                 success, result = await capability_registry.execute(action, context, args)
 
                 await bus.emit("execution_strategy_used", {
@@ -155,6 +164,7 @@ class Executor:
                 })
 
                 if success:
+                    logger.debug(f"Action '{action}' executed successfully by {tool_type}")
                     return True, result
 
                 error_type = self._classify_error(result)
@@ -162,25 +172,23 @@ class Executor:
             except asyncio.TimeoutError:
                 error_type = "timeout"
                 result = "Execution timed out"
-
             except Exception as e:
                 error_type = "exception"
                 result = str(e)
 
             # -------------------------
-            # Retry
+            # Retry logic
             # -------------------------
-            should_retry = await retry_manager.should_retry(
-                task_id, step_index, error_type=error_type
-            )
-            if should_retry:
+            if await retry_manager.should_retry(task_id, step_index, error_type=error_type):
+                logger.info(f"Retrying step {step_index} due to {error_type}")
                 continue
 
             # -------------------------
-            # Fallback
+            # Fallback logic
             # -------------------------
             next_tool_type = fallback_manager.get_fallback(tool_type)
             if next_tool_type:
+                logger.info(f"Fallback: {tool_type} → {next_tool_type}")
                 await bus.emit("fallback_triggered", {
                     "from": tool_type,
                     "to": next_tool_type,
