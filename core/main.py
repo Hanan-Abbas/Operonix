@@ -19,7 +19,7 @@ class IOSAgent:
 
     async def initialize_modules(self):
         print("🚀 Operonix Agent: Starting engine...")
-)
+
         # Start this FIRST so it can record the startup success/failure of everything else.
         await logger.start()
 
