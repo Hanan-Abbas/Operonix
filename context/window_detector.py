@@ -9,8 +9,7 @@ class WindowDetector:
         self.os_name = platform.system()
         self.ewmh = None
         self.win32gui = None
-        self.AppKit = None # For Mac
-        self.Quartz = None # For Mac
+        self.last_title = None  # 👈 Added to track state and prevent spam
         self._setup_os_imports()
 
     def _setup_os_imports(self):
@@ -39,12 +38,14 @@ class WindowDetector:
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
         print(f"🌍 Window Detector: Active on {self.os_name}")
         await asyncio.sleep(1)
+        # Force the first snapshot regardless of title change
         await self.capture_snapshot(type('Event', (object,), {'data': {'task_id': 'initial_boot'}})())
         asyncio.create_task(self._poll_loop())
 
     async def _poll_loop(self):
         while True:
-            await self.capture_snapshot(type('Event', (object,), {'data': {}})())
+            # We pass a background_poll task_id so the snapshot logic knows it's the auto-poller
+            await self.capture_snapshot(type('Event', (object,), {'data': {'task_id': 'background_poll'}})())
             await asyncio.sleep(2)
 
     def _get_linux_title(self):
@@ -62,12 +63,11 @@ class WindowDetector:
         return "Unknown Linux Window"
 
     def _get_macos_title(self):
-        """🍎 Fetches the active window title on macOS."""
         try:
             curr_app = self.NSWorkspace.sharedWorkspace().frontmostApplication()
             curr_pid = curr_app.processIdentifier()
-            options = 1 << 0 # kCGWindowListOptionOnScreenOnly
-            window_list = self.CGWindowListCopyWindowInfo(options, 0) # kCGNullWindowID
+            options = 1 << 0 
+            window_list = self.CGWindowListCopyWindowInfo(options, 0)
             
             for window in window_list:
                 if window['kCGWindowOwnerPID'] == curr_pid:
@@ -79,18 +79,32 @@ class WindowDetector:
     async def capture_snapshot(self, event):
         data_payload = getattr(event, 'data', {})
         task_id = data_payload.get("task_id", "background_poll")
-        snapshot = {"window_title": "Unknown", "app_type": "unknown", "task_id": task_id}
+        
+        current_title = "Unknown"
         
         try:
+            # 1. Fetch the actual title based on OS
             if self.os_name == "Linux":
-                snapshot["window_title"] = self._get_linux_title()
+                current_title = self._get_linux_title()
             elif self.os_name == "Windows" and self.win32gui:
                 hwnd = self.win32gui.GetForegroundWindow()
-                snapshot["window_title"] = self.win32gui.GetWindowText(hwnd)
-            elif self.os_name == "Darwin": # 🍎 Mac logic
-                snapshot["window_title"] = self._get_macos_title()
+                current_title = self.win32gui.GetWindowText(hwnd)
+            elif self.os_name == "Darwin":
+                current_title = self._get_macos_title()
 
-            snapshot["app_type"] = classifier.classify(snapshot["window_title"])
+            # 2. STATE CHECK: Only proceed if title changed OR if it's an explicit boot/request
+            if current_title == self.last_title and task_id == "background_poll":
+                return # 👈 SILENTLY EXIT. No change detected, no need to spam the bus.
+
+            # 3. Update memory and process the new context
+            self.last_title = current_title
+            
+            snapshot = {
+                "window_title": current_title, 
+                "app_type": classifier.classify(current_title), 
+                "task_id": task_id
+            }
+            
             await bus.emit("context_snapshot_ready", snapshot, source="window_detector")
             
         except Exception as e:
