@@ -1,58 +1,83 @@
 import logging
 from tools.tool_registry import tool_registry
-from plugins.plugin_registry import plugin_registry # Reference to your plugin system
+from plugins.plugin_registry import plugin_registry
 
 class ToolSelector:
     def __init__(self):
         self.logger = logging.getLogger("ToolSelector")
-        
-        # Scoring System: Higher is better (API/Plugin > CLI > UI)
-        self.STRATEGY_PRIORITY = {
-            "PLUGIN": 100,      # Native app integration (Fastest/Safest)
-            "FILE_TOOL": 90,    # Direct OS filesystem access
-            "SHELL_TOOL": 80,   # Terminal execution
-            "UI_TOOL": 60       # Visual automation (PyAutoGUI - Last resort)
+
+        self.PRIORITY_MAP = {
+            "plugin": 100,
+            "api_tool": 90,
+            "file_tool": 80,
+            "shell_tool": 70,
+            "ui_tool": 50
         }
 
-    async def select_best_tool(self, intent_data, active_context):
-        """
-        Analyzes the intent and context to pick the optimal 'Hand'.
-        Logic: Try Plugin -> If not available -> Use Tool -> If not possible -> Use UI
-        """
+    async def select_best_tool(self, intent_data, active_context, exclude=None, forced_type=None):
+        exclude = exclude or []
         intent = intent_data.get("intent")
         target_app = active_context.get("active_window")
-        
-        self.logger.info(f"🔍 Selecting tool for intent: {intent} in {target_app}")
 
-        # --- STEP 1: PLUGIN CHECK (API LEVEL) ---
-        # Checks if we have a dedicated plugin for the active app (e.g., VS Code, Chrome)
-        plugin = plugin_registry.get_plugin_for_app(target_app)
-        if plugin and plugin.supports_action(intent):
-            self.logger.info(f"✅ Priority 1: Using Plugin for {target_app}")
-            return "plugin", plugin
+        candidates = []
 
-        # --- STEP 2: SPECIALIZED TOOL CHECK (CLI/OS LEVEL) ---
-        # If no plugin, check if we have a direct tool for the task
-        if self._is_file_operation(intent):
-            self.logger.info("✅ Priority 2: Using File Tool (Direct OS access)")
-            return "file_tool", tool_registry.get_tool("file_tool")
-        
-        if self._is_system_command(intent):
-            self.logger.info("✅ Priority 2: Using Shell Tool (CLI)")
-            return "shell_tool", tool_registry.get_tool("shell_tool")
+        # --- 1. Plugins ---
+        plugins = plugin_registry.get_all_plugins_for_app(target_app)
 
-        # --- STEP 3: UI AUTOMATION FALLBACK (UI LEVEL) ---
-        # If all else fails, move the mouse and type
-        self.logger.warning("⚠️ Priority 3: No direct tool found. Falling back to UI Automation.")
-        return "ui_tool", tool_registry.get_tool("ui_tool")
+        for plugin in plugins:
+            if plugin.name in exclude:
+                continue
+            if forced_type and forced_type != "plugin":
+                continue
+            if plugin.supports_action(intent):
+                candidates.append((self.PRIORITY_MAP["plugin"], "plugin", plugin))
 
-    def _is_file_operation(self, intent):
-        file_intents = ["create_file", "read_file", "delete_file", "move_file", "list_dir"]
-        return intent in file_intents
+        # --- 2. Tools ---
+        for tool_name in tool_registry.list_tools():
+            if tool_name in exclude:
+                continue
 
-    def _is_system_command(self, intent):
-        cmd_intents = ["run_command", "install_package", "check_status", "git_op"]
-        return intent in cmd_intents
+            tool = tool_registry.get_tool(tool_name)
 
-# Global instance for the Orchestrator/Executor to call
+            if forced_type and tool_name != forced_type:
+                continue
+
+            if hasattr(tool, "can_handle"):
+                if not tool.can_handle(intent_data):
+                    continue
+            else:
+                if not self._tool_matches_intent(tool_name, intent):
+                    continue
+
+            score = self.PRIORITY_MAP.get(tool.type, 0)
+
+            # Context boost
+            if target_app in getattr(tool, "supported_apps", []):
+                score += 20
+
+            candidates.append((score, tool_name, tool))
+
+        if not candidates:
+            return None, None
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        score, tool_type, tool_instance = candidates[0]
+
+        self.logger.info(f"✅ Selected {tool_type} ({tool_instance.name}) | Score: {score}")
+
+        return tool_type, tool_instance
+
+    def _tool_matches_intent(self, tool_name, intent):
+        file_intents = ["create_file", "read_file", "delete_file", "move_file", "list_dir", "write"]
+        shell_intents = ["run_command", "install_package", "check_status", "git_op", "execute"]
+
+        if tool_name == "file_tool" and intent in file_intents:
+            return True
+        if tool_name == "shell_tool" and intent in shell_intents:
+            return True
+
+        return False
+
+
 tool_selector = ToolSelector()
