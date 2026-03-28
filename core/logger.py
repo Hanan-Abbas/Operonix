@@ -47,4 +47,13 @@ class SystemLogger:
         elif "decision" in event.name.lower() or "intent" in event.name.lower():
             self._write_to_file(self.decision_log, log_entry)
 
-    
+    def _write_to_file(self, file_path, entry):
+        """Appends a JSON entry to the specified log file."""
+        try:
+            with open(file_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            print(f"❌ Logger failed to write to {file_path}: {e}")
+
+# Global instance
+logger = SystemLogger()
