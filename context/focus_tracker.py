@@ -35,4 +35,18 @@ class FocusTracker:
                 "actual_window": current_title
             }, source="focus_tracker")
 
-    
+    async def _get_current_foreground_title(self):
+        """OS-specific foreground window detection."""
+        try:
+            if self.os_name == "Windows":
+                import win32gui
+                return win32gui.GetWindowText(win32gui.GetForegroundWindow())
+            elif self.os_name == "Linux":
+                import subprocess
+                return subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"]).decode().strip()
+            # MacOS logic would go here
+            return "Unknown"
+        except Exception:
+            return "Error detection"
+
+focus_tracker = FocusTracker()
