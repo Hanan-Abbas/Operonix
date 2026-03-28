@@ -3,39 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Operonix | Control Center</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); }
-        .terminal { font-family: 'Courier New', Courier, monospace; }
-    </style>
+    <title>Operonix | OS Agent Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen p-6">
-    <div class="max-w-6xl mx-auto space-y-6">
-        <div class="flex justify-between items-center border-b border-zinc-800 pb-4">
-            <h1 class="text-2xl font-bold tracking-tighter text-blue-500">OPERONIX <span class="text-zinc-500 text-sm font-normal">v1.0.0</span></h1>
-            <div id="status-badge" class="px-3 py-1 rounded-full text-xs bg-red-900/30 text-red-400 border border-red-800">DISCONNECTED</div>
-        </div>
+<body>
+    <div class="container">
+        <header>
+            <h1>OPERONIX <span>OS AGENT</span></h1>
+            <div id="connection-status" class="status-offline">DISCONNECTED</div>
+        </header>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div class="glass p-4 rounded-xl border border-zinc-800 space-y-4">
-                <h2 class="text-xs font-semibold text-zinc-500 uppercase">Current Context</h2>
-                <div class="space-y-2">
-                    <p class="text-sm">Active App: <span id="current-app" class="text-blue-400">Detecting...</span></p>
-                    <p class="text-sm">Window: <span id="window-title" class="text-zinc-400 italic text-xs truncate block">N/A</span></p>
-                </div>
-            </div>
+        <main class="grid">
+            <section class="panel" id="live-stream">
+                <h2>🛰️ Live Activity</h2>
+                <div id="event-log" class="scroll-box"></div>
+            </section>
 
-            <div class="md:col-span-2 glass rounded-xl border border-zinc-800 flex flex-col h-[500px]">
-                <div class="p-3 border-b border-zinc-800 flex justify-between">
-                    <span class="text-xs font-semibold text-zinc-500 uppercase">Live Event Bus</span>
-                    <button onclick="clearLogs()" class="text-[10px] text-zinc-500 hover:text-white">CLEAR</button>
-                </div>
-                <div id="logs" class="p-4 overflow-y-auto space-y-2 terminal text-sm flex-grow">
-                    <div class="text-zinc-600">> System standby. Waiting for WebSocket...</div>
-                </div>
-            </div>
-        </div>
+            <section class="panel" id="history">
+                <h2>📜 Action History</h2>
+                <div id="history-list" class="scroll-box"></div>
+                <button onclick="fetchHistory()" class="refresh-btn">🔄 Refresh History</button>
+            </section>
+        </main>
     </div>
     <script src="app.js"></script>
 </body>
