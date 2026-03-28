@@ -6,9 +6,9 @@ from core.event_bus import bus
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
 
-from core.retry_manager import retry_manager
-from core.fallback_manager import fallback_manager
-from core.focus_manager import focus_manager
+from executor.retry_manager import RetryManager
+from executor.fallback_manager import FallbackManager
+from executor.focus_manager import FocusManager
 
 
 class Executor:
@@ -75,27 +75,42 @@ class Executor:
     # RESILIENT STEP EXECUTION
     # ===============================
     async def _execute_step_with_resilience(self, task_id, step_index, step, context):
+        """
+        Full end-to-end step execution:
+        - Handles any capability (file, text, command, UI, web)
+        - Validates input/output
+        - Retries on failure
+        - Falls back automatically if a tool fails
+        - Integrates with ToolSelector + CapabilityRegistry
+        - Emits dashboard events
+        """
         action = step.get("action")
         args = step.get("args", {})
 
+        # Normalize file paths for cross-OS safety
         if "path" in args:
-            args["path"] = self._normalize_path(args["path"])
+            args["path"] = os.path.normpath(args["path"])
 
-        # Safety Check
-        if action in self.restricted_actions:
-            return False, f"Restricted action blocked: {action}"
+        # Safety restriction
+        restricted_actions = getattr(self, "restricted_actions", set())
+        if action in restricted_actions:
+            return False, f"Action '{action}' is restricted!"
 
-        # Focus Handling
+        # Focus handling (if window_title given in context)
         if context.get("window_title"):
             focused = await focus_manager.ensure_focus(context["window_title"])
             if not focused:
-                return False, "Failed to focus target window"
+                return False, "Failed to focus the target window"
 
+        # Initialize fallback loop
         tried_tools = []
-        error_type = None
+        fallback_attempts = 0
+        max_fallbacks = 5
 
-        while True:
-            # Select best tool
+        while fallback_attempts < max_fallbacks:
+            # --------------------------
+            # 1️⃣ Select best tool for the intent
+            # --------------------------
             tool_type, tool_instance = await tool_selector.select_best_tool(
                 {"intent": action},
                 context,
@@ -103,26 +118,28 @@ class Executor:
             )
 
             if not tool_instance:
-                return False, f"No tool available for action: {action}"
+                return False, f"No tool or plugin available for action '{action}'"
 
-            tried_tools.append(tool_instance.name)
+            tried_tools.append(getattr(tool_instance, "name", tool_type))
 
             await bus.emit("tool_selected", {
                 "task_id": task_id,
                 "step_index": step_index,
                 "tool_type": tool_type,
-                "tool_name": tool_instance.name
+                "tool_name": getattr(tool_instance, "name", tool_type)
             })
 
             try:
-                success, result = await asyncio.wait_for(
-                    tool_instance.run(action, args),
-                    timeout=10
-                )
+                # --------------------------
+                # 2️⃣ Execute capability via CapabilityRegistry
+                # --------------------------
+                success, result = await capability_registry.execute(action, context, args)
 
                 await bus.emit("execution_strategy_used", {
-                    "type": tool_type,
-                    "tool": tool_instance.name
+                    "task_id": task_id,
+                    "step_index": step_index,
+                    "tool_type": tool_type,
+                    "tool_name": getattr(tool_instance, "name", tool_type)
                 })
 
                 if success:
@@ -138,9 +155,9 @@ class Executor:
                 error_type = "exception"
                 result = str(e)
 
-            # ===============================
-            # RETRY LOGIC
-            # ===============================
+            # --------------------------
+            # 3️⃣ Retry logic
+            # --------------------------
             should_retry = await retry_manager.should_retry(
                 task_id,
                 step_index,
@@ -150,24 +167,30 @@ class Executor:
             if should_retry:
                 continue
 
-            # ===============================
-            # FALLBACK LOGIC
-            # ===============================
+            # --------------------------
+            # 4️⃣ Fallback logic
+            # --------------------------
             next_tool_type = fallback_manager.get_fallback(tool_type)
-
             if next_tool_type:
                 await bus.emit("fallback_triggered", {
                     "from": tool_type,
-                    "to": next_tool_type
+                    "to": next_tool_type,
+                    "task_id": task_id,
+                    "step_index": step_index
                 })
+                fallback_attempts += 1
                 continue
 
+            # --------------------------
+            # 5️⃣ Max retries/fallbacks reached: fail step
+            # --------------------------
             return False, {
                 "type": error_type,
                 "message": result,
                 "tried_tools": tried_tools
             }
 
+        return False, f"Max fallback attempts reached for action '{action}'"
     # ===============================
     # HELPERS
     # ===============================
