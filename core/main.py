@@ -22,7 +22,7 @@ class IOSAgent:
         Wakes up every module in the 17-folder structure.
         The order of 'start()' calls matters for event subscriptions.
         """
-        print("🚀 i_os Agent: Starting engine...")
+        print("🚀 Operonix Agent: Starting engine...")
 
         # 1. Start the Brain & Logic
         await llm_client.start()
