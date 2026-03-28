@@ -27,4 +27,12 @@ class APITool:
         except Exception as e:
             return False, f"API Error: {str(e)}"
 
-    
+    async def _handle_response(self, response):
+        if response.status < 300:
+            data = await response.json()
+            return True, data
+        else:
+            text = await response.text()
+            return False, f"HTTP {response.status}: {text}"
+
+api_tool = APITool()
