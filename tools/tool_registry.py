@@ -2,6 +2,7 @@ import logging
 from tools.file_tool import file_tool
 from tools.shell_tool import shell_tool
 from tools.ui_tool import ui_tool
+from tools.api_tool import api_tool
 
 class ToolRegistry:
     def __init__(self):
