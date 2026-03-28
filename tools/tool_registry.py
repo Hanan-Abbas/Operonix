@@ -10,7 +10,8 @@ class ToolRegistry:
         self._tools = {
             "file_tool": file_tool,
             "shell_tool": shell_tool,
-            "ui_tool": ui_tool
+            "ui_tool": ui_tool,
+            "api_tool": api_tool
         }
 
     def get_tool(self, tool_name: str):
