@@ -1,14 +1,27 @@
+# executor/executor.py
 import asyncio
 import platform
 import os
+import logging
 
 from core.event_bus import bus
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
+from capabilities.registry import capability_registry
+from context.context_validator import context_validator
 
 from executor.retry_manager import RetryManager
 from executor.fallback_manager import FallbackManager
 from executor.focus_manager import FocusManager
+
+logger = logging.getLogger("Executor")
+
+# -------------------------
+# Global Managers
+# -------------------------
+retry_manager = RetryManager()
+fallback_manager = FallbackManager()
+focus_manager = FocusManager()
 
 
 class Executor:
@@ -16,25 +29,27 @@ class Executor:
         self.os_name = platform.system()
         self.is_running = False
 
-        # Safety rules (expand later)
+        # Safety restrictions
         self.restricted_actions = {"delete_file", "run_shell"}
 
+    # -------------------------
+    # Start Executor
+    # -------------------------
     async def start(self):
         bus.subscribe("plan_ready", self.execute_plan)
         self.is_running = True
+        logger.info(f"⚙️ Executor Online | OS: {self.os_name}")
+        logger.info(f"⚙️ Tools Loaded: {len(tool_registry.list_tools())}")
 
-        print(f"⚙️ Executor: Online | OS: {self.os_name}")
-        print(f"⚙️ Tools Loaded: {len(tool_registry.list_tools())}")
-
-    # ===============================
-    # MAIN EXECUTION LOOP
-    # ===============================
+    # -------------------------
+    # Main Execution Loop
+    # -------------------------
     async def execute_plan(self, event):
         task_id = event.data.get("task_id")
         steps = event.data.get("steps", [])
         context = event.data.get("context", {})
 
-        print(f"\n🚀 Starting Task [{task_id}] with {len(steps)} steps")
+        logger.info(f"🚀 Starting Task [{task_id}] with {len(steps)} steps")
 
         for step_index, step in enumerate(steps):
             action = step.get("action")
@@ -45,7 +60,10 @@ class Executor:
                 "action": action
             })
 
-            success, result = await self._execute_step_with_resilience(
+            # -------------------------
+            # Execute step safely
+            # -------------------------
+            success, result = await self._execute_step_safe(
                 task_id, step_index, step, context
             )
 
@@ -58,7 +76,7 @@ class Executor:
                 retry_manager.clear_task(task_id)
                 return
 
-            # Update context dynamically
+            # Update context for next step
             context["last_result"] = result
             context["last_action"] = action
 
@@ -71,46 +89,40 @@ class Executor:
         await bus.emit("task_completed", {"task_id": task_id})
         retry_manager.clear_task(task_id)
 
-    # ===============================
-    # RESILIENT STEP EXECUTION
-    # ===============================
-    async def _execute_step_with_resilience(self, task_id, step_index, step, context):
-        """
-        Full end-to-end step execution:
-        - Handles any capability (file, text, command, UI, web)
-        - Validates input/output
-        - Retries on failure
-        - Falls back automatically if a tool fails
-        - Integrates with ToolSelector + CapabilityRegistry
-        - Emits dashboard events
-        """
+    # -------------------------
+    # Step Execution with Resilience
+    # -------------------------
+    async def _execute_step_safe(self, task_id, step_index, step, context):
         action = step.get("action")
         args = step.get("args", {})
 
-        # Normalize file paths for cross-OS safety
+        # Normalize paths
         if "path" in args:
             args["path"] = os.path.normpath(args["path"])
 
-        # Safety restriction
-        restricted_actions = getattr(self, "restricted_actions", set())
-        if action in restricted_actions:
-            return False, f"Action '{action}' is restricted!"
+        # Restricted actions
+        if action in self.restricted_actions:
+            return False, f"Restricted action blocked: {action}"
 
-        # Focus handling (if window_title given in context)
+        # Context validation
+        valid, reason = await context_validator.validate_action_context(action, context)
+        if not valid:
+            return False, f"Context validation failed: {reason}"
+
+        # Focus handling
         if context.get("window_title"):
             focused = await focus_manager.ensure_focus(context["window_title"])
             if not focused:
-                return False, "Failed to focus the target window"
+                return False, "Failed to focus target window"
 
-        # Initialize fallback loop
         tried_tools = []
         fallback_attempts = 0
         max_fallbacks = 5
 
         while fallback_attempts < max_fallbacks:
-            # --------------------------
-            # 1️⃣ Select best tool for the intent
-            # --------------------------
+            # -------------------------
+            # Select best tool/plugin
+            # -------------------------
             tool_type, tool_instance = await tool_selector.select_best_tool(
                 {"intent": action},
                 context,
@@ -118,7 +130,7 @@ class Executor:
             )
 
             if not tool_instance:
-                return False, f"No tool or plugin available for action '{action}'"
+                return False, f"No tool/plugin available for action: {action}"
 
             tried_tools.append(getattr(tool_instance, "name", tool_type))
 
@@ -130,9 +142,9 @@ class Executor:
             })
 
             try:
-                # --------------------------
-                # 2️⃣ Execute capability via CapabilityRegistry
-                # --------------------------
+                # -------------------------
+                # Execute capability
+                # -------------------------
                 success, result = await capability_registry.execute(action, context, args)
 
                 await bus.emit("execution_strategy_used", {
@@ -155,21 +167,18 @@ class Executor:
                 error_type = "exception"
                 result = str(e)
 
-            # --------------------------
-            # 3️⃣ Retry logic
-            # --------------------------
+            # -------------------------
+            # Retry
+            # -------------------------
             should_retry = await retry_manager.should_retry(
-                task_id,
-                step_index,
-                error_type=error_type
+                task_id, step_index, error_type=error_type
             )
-
             if should_retry:
                 continue
 
-            # --------------------------
-            # 4️⃣ Fallback logic
-            # --------------------------
+            # -------------------------
+            # Fallback
+            # -------------------------
             next_tool_type = fallback_manager.get_fallback(tool_type)
             if next_tool_type:
                 await bus.emit("fallback_triggered", {
@@ -181,9 +190,6 @@ class Executor:
                 fallback_attempts += 1
                 continue
 
-            # --------------------------
-            # 5️⃣ Max retries/fallbacks reached: fail step
-            # --------------------------
             return False, {
                 "type": error_type,
                 "message": result,
@@ -191,24 +197,22 @@ class Executor:
             }
 
         return False, f"Max fallback attempts reached for action '{action}'"
-    # ===============================
-    # HELPERS
-    # ===============================
-    def _normalize_path(self, path):
-        return os.path.normpath(path)
 
+    # -------------------------
+    # Helpers
+    # -------------------------
     def _classify_error(self, result):
         text = str(result).lower()
-
         if "permission" in text:
             return "permission_denied"
         if "not found" in text:
             return "not_found"
         if "timeout" in text:
             return "timeout"
-
         return "unknown_error"
 
 
-# Global instance
+# -------------------------
+# Global Executor instance
+# -------------------------
 executor = Executor()
