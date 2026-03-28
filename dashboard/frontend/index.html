@@ -2,29 +2,43 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Operonix | OS Agent Dashboard</title>
+    <title>Operonix | Control Center</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>OPERONIX <span>OS AGENT</span></h1>
-            <div id="connection-status" class="status-offline">DISCONNECTED</div>
+            <h1>OPERONIX <span class="version">v1.0.0</span></h1>
+            <div id="connection-status" class="status-offline">OFFLINE</div>
         </header>
 
-        <main class="grid">
-            <section class="panel" id="live-stream">
-                <h2>🛰️ Live Activity</h2>
-                <div id="event-log" class="scroll-box"></div>
-            </section>
+        <div class="grid">
+            <aside class="panel side-panel">
+                <div class="section">
+                    <h3>CURRENT CONTEXT</h3>
+                    <p class="label">Active App:</p>
+                    <div id="active-app" class="value">DETECTING...</div>
+                    <p class="label">Window Title:</p>
+                    <div id="active-window" class="value-sub">Waiting for interaction...</div>
+                </div>
 
-            <section class="panel" id="history">
-                <h2>📜 Action History</h2>
-                <div id="history-list" class="scroll-box"></div>
-                <button onclick="fetchHistory()" class="refresh-btn">🔄 Refresh History</button>
-            </section>
-        </main>
+                <div class="section history-section">
+                    <h3>ACTION HISTORY</h3>
+                    <div id="history-list" class="mini-scroll"></div>
+                    <button onclick="fetchHistory()" class="btn-refresh">REFRESH</button>
+                </div>
+            </aside>
+
+            <main class="panel main-panel">
+                <div class="panel-header">
+                    <h3>LIVE EVENT BUS</h3>
+                    <span class="clear-btn" onclick="document.getElementById('event-log').innerHTML=''">CLEAR</span>
+                </div>
+                <div id="event-log" class="scroll-box">
+                    <div class="sys-msg">> System Standby. Awaiting logic initialization...</div>
+                </div>
+            </main>
+        </div>
     </div>
     <script src="app.js"></script>
 </body>
