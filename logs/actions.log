@@ -984,3 +984,5 @@
 {"timestamp": "2026-03-28 19:03:29", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "\u25cf api_tool.py - Operonix - Visual Studio Code", "app_type": "Code Editor", "task_id": "background_poll"}}
 {"timestamp": "2026-03-28 19:03:31", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "api_tool.py - Operonix - Visual Studio Code", "app_type": "Code Editor", "task_id": "background_poll"}}
 {"timestamp": "2026-03-28 19:03:39", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "GitHub Desktop", "app_type": "General App", "task_id": "background_poll"}}
+{"timestamp": "2026-03-28 19:03:55", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "\u25cf api_tool.py - Operonix - Visual Studio Code", "app_type": "Code Editor", "task_id": "background_poll"}}
+{"timestamp": "2026-03-28 19:03:57", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "GitHub Desktop", "app_type": "General App", "task_id": "background_poll"}}
