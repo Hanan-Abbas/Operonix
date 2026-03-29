@@ -65,9 +65,13 @@ async def execute_script(context, args):
 # -------------------------
 async def validate_command(args):
     """
-    Example helper: basic check if command exists.
+    Basic check: shell command, script path, git operation, or status target.
     """
     command = args.get("command") or args.get("script_path")
-    if not command or not isinstance(command, str):
-        return False, "Command or script path must be provided"
-    return True, None
+    if command and isinstance(command, str):
+        return True, None
+    if args.get("operation") and isinstance(args.get("operation"), str):
+        return True, None
+    if args.get("service") or args.get("process"):
+        return True, None
+    return False, "Command, script path, git operation, or status target must be provided"
