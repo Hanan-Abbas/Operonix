@@ -13,7 +13,7 @@ class PermissionChecker:
     def __init__(self):
         self.os_name = platform.system()
         self.restricted_paths = ["/etc", "/bin", "/usr/bin"]  # UNIX system paths
-        self.restricted_actions = {"delete_file", "format_disk", "run_shell"}
+        self.restricted_actions = {"format_disk", "run_shell"}
 
     # -------------------------
     # Action Permission Check
