@@ -69,12 +69,36 @@ class ToolSelector:
         return tool_type, tool_instance
 
     def _tool_matches_intent(self, tool_name, intent):
-        file_intents = ["create_file", "read_file", "delete_file", "move_file", "list_dir", "write"]
-        shell_intents = ["run_command", "install_package", "check_status", "git_op", "execute"]
+        file_intents = {
+            "write_file",
+            "append_file",
+            "read_file",
+            "delete_file",
+            "move_file",
+            "list_dir",
+            "create_dir",
+            "delete_dir",
+        }
+        shell_intents = {
+            "run_command",
+            "install_package",
+            "check_status",
+            "git_op",
+            "execute_script",
+            "open_url",
+            "search_web",
+            "navigate",
+        }
+        ui_intents = {"type_text", "click", "double_click", "move_cursor", "scroll"}
+        api_intents = {"extract_text", "fill_form", "submit_form", "click_link"}
 
         if tool_name == "file_tool" and intent in file_intents:
             return True
         if tool_name == "shell_tool" and intent in shell_intents:
+            return True
+        if tool_name == "ui_tool" and intent in ui_intents:
+            return True
+        if tool_name == "api_tool" and intent in api_intents:
             return True
 
         return False
