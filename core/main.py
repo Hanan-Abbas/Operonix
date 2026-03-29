@@ -1,17 +1,18 @@
 import asyncio
-import signal
 import sys
-from core.logger import logger
-from core.event_bus import bus
-from core.orchestrator import orchestrator
+
+from api.server import start_server
+from brain.capability_mapper import capability_mapper
 from brain.llm_client import llm_client
 from brain.planner import planner
-from brain.capability_mapper import capability_mapper
-from context.window_detector import window_detector
-from context.app_classifier import classifier
+from capabilities.bootstrap import init_capabilities
 from context.state_extractor import state_extractor
+from context.window_detector import window_detector
+from core.event_bus import bus
+from core.logger import logger
+from core.orchestrator import orchestrator
 from executor.executor import executor
-from api.server import start_server
+from learning.evolution_engine import evolution_engine
 
 class IOSAgent:
     def __init__(self):
@@ -19,9 +20,12 @@ class IOSAgent:
 
     async def initialize_modules(self):
         print("🚀 Operonix Agent: Starting engine...")
-        
+
+        init_capabilities()
+
         # Order matters! Logger first to catch errors.
         await logger.start()
+        await evolution_engine.start()
         await capability_mapper.start()
         await executor.start()
         await window_detector.start()
