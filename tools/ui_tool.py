@@ -33,6 +33,9 @@ class UITool:
             
             elif action == "move":
                 return await self._move(args.get("x"), args.get("y"))
+
+            elif action == "scroll":
+                return await self._scroll(args.get("direction", "down"), int(args.get("amount", 3)))
             
             elif action == "screenshot":
                 return await self._screenshot(args.get("path", "screenshot.png"))
@@ -60,6 +63,13 @@ class UITool:
     async def _move(self, x, y):
         await asyncio.to_thread(pyautogui.moveTo, x, y, duration=0.2)
         return True, f"Moved mouse to ({x}, {y})"
+
+    async def _scroll(self, direction, amount):
+        clicks = amount if direction == "down" else -amount
+        if direction in ("left", "right"):
+            return False, "Horizontal scroll not configured; use up/down."
+        await asyncio.to_thread(pyautogui.scroll, clicks)
+        return True, f"Scrolled {direction} by {amount}"
 
     async def _screenshot(self, path):
         # Useful for the Vision Model/Dashboard preview
