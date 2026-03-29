@@ -13,6 +13,7 @@ from context.context_validator import context_validator
 from executor.retry_manager import RetryManager
 from executor.fallback_manager import FallbackManager
 from executor.focus_manager import FocusManager
+from executor.capability_dispatch import resolve_tool_call
 
 logger = logging.getLogger("Executor")
 
@@ -37,7 +38,7 @@ class Executor:
     def __init__(self):
         self.os_name = platform.system()
         self.is_running = False
-        self.restricted_actions = {"delete_file", "run_shell"}
+        self.restricted_actions = set()
 
     # -------------------------
     # Start Executor
@@ -153,7 +154,6 @@ class Executor:
             })
 
             try:
-                # Execute capability via registry
                 success, result = await capability_registry.execute(action, context, args)
 
                 await bus.emit("execution_strategy_used", {
@@ -163,11 +163,27 @@ class Executor:
                     "tool_name": getattr(tool_instance, "name", tool_type)
                 })
 
-                if success:
-                    logger.debug(f"Action '{action}' executed successfully by {tool_type}")
-                    return True, result
+                if not success:
+                    error_type = self._classify_error(result)
+                else:
+                    action_data = result if isinstance(result, dict) else {}
+                    cap_intent = action_data.get("intent") or action
+                    cap_args = action_data.get("args") or args
+                    resolved = resolve_tool_call(cap_intent, cap_args)
+                    if not resolved:
+                        return False, f"No tool mapping for capability: {cap_intent}"
 
-                error_type = self._classify_error(result)
+                    tool_name, tool_action, tool_args = resolved
+                    tool = tool_registry.get_tool(tool_name)
+                    if not tool:
+                        return False, f"Tool not registered: {tool_name}"
+
+                    ok, tool_result = await tool.run(tool_action, tool_args)
+                    if ok:
+                        logger.debug(f"Action '{action}' -> {tool_name}.{tool_action} OK")
+                        return True, tool_result
+                    result = tool_result
+                    error_type = self._classify_error(result)
 
             except asyncio.TimeoutError:
                 error_type = "timeout"
