@@ -23,6 +23,12 @@ class FileTool:
             if action == "write":
                 # Run blocking I/O in a separate thread to keep the Bus fast
                 return await asyncio.to_thread(self._write_file, safe_path, args.get("data", ""))
+
+            elif action == "append":
+                return await asyncio.to_thread(self._append_file, safe_path, args.get("data", ""))
+
+            elif action == "mkdir":
+                return await asyncio.to_thread(self._mkdir, safe_path, args.get("exist_ok", True))
             
             elif action == "read":
                 return await asyncio.to_thread(self._read_file, safe_path)
@@ -51,6 +57,16 @@ class FileTool:
         with open(path, "w", encoding="utf-8") as f:
             f.write(data)
         return True, f"Successfully wrote to {path}"
+
+    def _append_file(self, path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(data)
+        return True, f"Successfully appended to {path}"
+
+    def _mkdir(self, path, exist_ok):
+        path.mkdir(parents=True, exist_ok=exist_ok)
+        return True, f"Directory ready: {path}"
 
     def _read_file(self, path):
         if not path.exists():
