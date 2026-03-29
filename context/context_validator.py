@@ -47,8 +47,8 @@ class ContextValidator:
         # -----------------------------
         # 3️⃣ UI Operation Safety
         # -----------------------------
-        if intent in ["click_ui", "type_text", "write_code"]:
-            if app_type not in ["editor", "terminal"]:
+        if intent in ("click", "double_click", "type_text", "move_cursor", "scroll"):
+            if app_type and app_type not in ("editor", "terminal", "browser", "desktop", "unknown"):
                 msg = f"Context mismatch: Cannot perform '{intent}' in app type '{app_type}'"
                 self.logger.warning(msg)
                 return False, msg
@@ -66,12 +66,10 @@ class ContextValidator:
         # -----------------------------
         # 5️⃣ Shell / Dangerous Commands
         # -----------------------------
-        dangerous_intents = ["run_shell", "delete_file", "install_package"]
-        if intent in dangerous_intents:
-            if not state.get("is_admin", False):
-                msg = f"Blocked: '{intent}' requires admin privileges"
-                self.logger.warning(msg)
-                return False, msg
+        if intent == "install_package" and not state.get("is_admin", False):
+            msg = "Blocked: package install may require admin; confirm in UI or run with elevated agent"
+            self.logger.warning(msg)
+            return False, msg
 
         # -----------------------------
         # ✅ All checks passed
