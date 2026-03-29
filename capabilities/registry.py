@@ -17,7 +17,8 @@ class CapabilityRegistry:
 
     def __init__(self):
         self.registry = {}  # intent_name -> async function
-        self.validation_rules = []  # list of async or sync validation functions
+        self.validation_rules = []  # legacy global rules (avoid heavy use)
+        self.intent_validation_rules = {}  # intent_name -> list of rule funcs
 
     # -------------------------
     # Registration Methods
@@ -37,14 +38,28 @@ class CapabilityRegistry:
     # Validation Methods
     # -------------------------
     def add_validation_rule(self, rule_func):
-        """Add a validation function (async or sync)."""
+        """Add a global validation function (async or sync)."""
         self.validation_rules.append(rule_func)
         logger.info(f"✅ Added validation rule: {rule_func.__name__}")
 
-    async def validate(self, action_data, args=None):
-        """Run all validations, returns (is_valid, error_message)"""
+    def add_intent_validation(self, intent_name: str, rule_func):
+        """Attach a rule that runs only for a specific capability/intent name."""
+        self.intent_validation_rules.setdefault(intent_name, []).append(rule_func)
+        logger.info(f"✅ Validation for '{intent_name}': {rule_func.__name__}")
+
+    def list_registered(self):
+        return sorted(self.registry.keys())
+
+    async def validate(self, intent_name, action_data, args=None):
+        """Run intent-scoped rules, then global rules. Returns (is_valid, error_message)."""
+        merged = {**(args or {}), **(action_data.get("args") or {})}
+        for rule in self.intent_validation_rules.get(intent_name, []):
+            result, msg = await self._maybe_async(rule, action_data, merged)
+            if not result:
+                logger.warning(f"❌ Validation failed: {rule.__name__} - {msg}")
+                return False, msg
         for rule in self.validation_rules:
-            result, msg = await self._maybe_async(rule, action_data, args or {})
+            result, msg = await self._maybe_async(rule, action_data, merged)
             if not result:
                 logger.warning(f"❌ Validation failed: {rule.__name__} - {msg}")
                 return False, msg
@@ -81,8 +96,8 @@ class CapabilityRegistry:
             logger.error(f"❌ {msg}")
             return False, msg
 
-        # Run validations
-        valid, error_msg = await self.validate(action_data, args)
+        # Run validations (intent-scoped + global)
+        valid, error_msg = await self.validate(intent_name, action_data, args)
         if not valid:
             msg = f"Validation failed for {intent_name}: {error_msg}"
             logger.error(f"❌ {msg}")
@@ -107,7 +122,9 @@ class CapabilityRegistry:
 
                 # Register all async public functions in the module
                 for attr_name in dir(module):
-                    if attr_name.startswith("_"):  # skip private/internal
+                    if attr_name.startswith("_"):
+                        continue
+                    if attr_name.startswith("validate_") or attr_name.endswith("_check"):
                         continue
                     attr = getattr(module, attr_name)
                     if asyncio.iscoroutinefunction(attr):
