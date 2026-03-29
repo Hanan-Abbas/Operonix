@@ -1,84 +1,83 @@
-# capabilities/validation_rules.py
-import asyncio
-import os
 from capabilities.file_ops import safe_path_check
 from capabilities.text_ops import validate_text
 from capabilities.web_ops import validate_url
 from capabilities.ui_ops import validate_coordinates
 from capabilities.command_ops import validate_command
 
-# -------------------------
-# Centralized Validation Rules
-# -------------------------
 
-# Each validation is an async function that returns (bool, error_message)
-# True = valid, False = invalid
+# Rules receive (action_data, merged_args) where merged_args combines step args + action_data["args"].
 
-async def validate_file_exists(args):
-    """
-    Validates that the specified file exists.
-    args: {"path": str}
-    """
-    path = args.get("path")
-    if not path:
-        return False, "Missing path"
-    if not os.path.isfile(path):
-        return False, f"File not found: {path}"
-    return True, None
 
-async def validate_dir_exists(args):
-    """
-    Validates that the specified directory exists.
-    args: {"path": str}
-    """
-    path = args.get("path")
-    if not path:
-        return False, "Missing path"
-    if not os.path.isdir(path):
-        return False, f"Directory not found: {path}"
-    return True, None
+async def rule_safe_path(action_data, merged):
+    return await safe_path_check({}, merged)
 
-async def validate_safe_path(args):
-    """
-    Ensures paths are safe (no '..' or suspicious characters).
-    Reuses helper from file_ops
-    """
-    return await safe_path_check({}, args)
 
-async def validate_text_nonempty(args):
-    """
-    Ensures text/code/prompt exists and is non-empty.
-    """
-    return await validate_text(args)
+async def rule_validate_text(action_data, merged):
+    return await validate_text(merged)
 
-async def validate_url_format(args):
-    """
-    Ensures a valid URL.
-    """
-    return await validate_url(args)
 
-async def validate_ui_coordinates(args):
-    """
-    Ensures x,y coordinates are present and numeric.
-    """
-    return await validate_coordinates(args)
+async def rule_validate_url(action_data, merged):
+    return await validate_url(merged)
 
-async def validate_command_safe(args):
-    """
-    Ensures command/script is present and safe.
-    """
-    return await validate_command(args)
 
-# -------------------------
-# Register All Validation Rules
-# -------------------------
-# When registry imports this module, it can loop through and add all
-all_validation_rules = [
-    validate_file_exists,
-    validate_dir_exists,
-    validate_safe_path,
-    validate_text_nonempty,
-    validate_url_format,
-    validate_ui_coordinates,
-    validate_command_safe
+async def rule_validate_coordinates(action_data, merged):
+    return await validate_coordinates(merged)
+
+
+async def rule_validate_command(action_data, merged):
+    return await validate_command(merged)
+
+
+async def rule_screenshot(action_data, merged):
+    if merged.get("path"):
+        return True, None
+    if merged.get("url"):
+        return await validate_url(merged)
+    return False, "screenshot requires path or url"
+
+
+_PATH_INTENTS = [
+    "write_file",
+    "append_file",
+    "read_file",
+    "delete_file",
+    "move_file",
+    "list_dir",
+    "create_dir",
+    "delete_dir",
 ]
+
+INTENT_VALIDATION = {}
+
+for _intent in _PATH_INTENTS:
+    INTENT_VALIDATION[_intent] = [rule_safe_path]
+
+INTENT_VALIDATION.update(
+    {
+        "run_command": [rule_validate_command],
+        "execute_script": [rule_validate_command],
+        "git_op": [rule_validate_command],
+        "install_package": [rule_validate_command],
+        "check_status": [rule_validate_command],
+        "open_url": [rule_validate_url],
+        "click_link": [rule_validate_url],
+        "fill_form": [rule_validate_url],
+        "submit_form": [rule_validate_url],
+        "extract_text": [rule_validate_url],
+        "screenshot": [rule_screenshot],
+        "click": [rule_validate_coordinates],
+        "double_click": [rule_validate_coordinates],
+        "move_cursor": [rule_validate_coordinates],
+        "generate_text": [rule_validate_text],
+        "summarize_text": [rule_validate_text],
+        "translate_text": [rule_validate_text],
+        "correct_grammar": [rule_validate_text],
+        "code_generate": [rule_validate_text],
+        "code_format": [rule_validate_text],
+        "code_analyze": [rule_validate_text],
+        "type_text": [rule_validate_text],
+    }
+)
+
+# Backwards-compatible export
+all_validation_rules = []
