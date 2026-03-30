@@ -90,4 +90,28 @@ class LifecycleManager:
         logger.info("🔌 System shut down completed. Goodbye.")
         sys.exit(0)
 
-    
+    async def recover_component(self, component_name: str):
+        """If a background module crashes (like the executor or voice listener),
+
+        this attempts to reboot just that slice without taking down the whole
+
+        OS.
+        """
+        logger.warning(
+            f"🛠️ Attempting self-healing recovery for: {component_name}"
+        )
+        bus.publish(
+            "component_recovering",
+            {"component": component_name},
+            source="lifecycle",
+        )
+
+        # Add your logic here to re-instantiate or restart specific workers
+        # e.g., if component_name == 'executor': await executor.start()
+
+        await asyncio.sleep(0.5)
+        logger.info(f"✅ Component {component_name} recovery sequence executed.")
+
+
+# Global instance
+lifecycle_manager = LifecycleManager()
