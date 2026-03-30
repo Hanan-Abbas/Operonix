@@ -1,6 +1,7 @@
 import asyncio
+import logging
+import signal
 import sys
-
 from api.server import start_server
 from brain.capability_mapper import capability_mapper
 from brain.llm_client import llm_client
@@ -8,52 +9,78 @@ from brain.planner import planner
 from capabilities.bootstrap import init_capabilities
 from context.state_extractor import state_extractor
 from context.window_detector import window_detector
+from core.config import settings
+from core.error_handler import ErrorHandler
 from core.event_bus import bus
 from core.logger import logger
-# --- IMPORT ERROR HANDLER ---
-from core.error_handler import ErrorHandler
 from core.orchestrator import orchestrator
+from debugging.error_listener import error_listener
 from executor.executor import executor
 from learning.evolution_engine import evolution_engine
-from debugging.error_listener import error_listener
 
-class IOSAgent:
+
+class LifecycleManager:
+    """Manages the startup, execution hooks, dashboard API, and graceful
+
+    shutdown of the AI OS.
+    """
+
     def __init__(self):
-        self.is_running = True
-        # Initialize the error handler with your global bus and logger
+        self.is_running = False
+        self._background_tasks = set()
+        # Initialize the global error handler here
         self.error_handler = ErrorHandler(event_bus=bus, logger=logger)
 
     def setup_global_exception_hooks(self, loop):
         """Binds the error handler to the OS and Async event loop."""
+
         # 1. Catch standard synchronous crashes
         def handle_sync_exception(exctype, value, traceback):
             if exctype is KeyboardInterrupt:
                 sys.__excepthook__(exctype, value, traceback)
                 return
             self.error_handler.handle_error(value, component="sys_level")
-        
+
         sys.excepthook = handle_sync_exception
 
         # 2. Catch silent background async crashes
         def handle_async_exception(loop, context):
-            exception = context.get('exception')
+            exception = context.get("exception")
             if exception:
-                self.error_handler.handle_error(exception, component="async_loop")
+                self.error_handler.handle_error(
+                    exception, component="async_loop"
+                )
             else:
-                logger.warning(f"Unhandled task error: {context['message']}")
+                logger.warning(
+                    f"Unhandled task error: {context.get('message')}"
+                )
 
         loop.set_exception_handler(handle_async_exception)
 
-    async def initialize_modules(self):
-        print("🚀 Operonix Agent: Starting engine...")
+    async def startup(self):
+        """Initializes and boots all core system components in the correct
 
+        order.
+        """
+        logger.info("🚀 Operonix Agent: Starting engine...")
+        self.is_running = True
+
+        # Attach the hooks to the running loop
+        loop = asyncio.get_running_loop()
+        self.setup_global_exception_hooks(loop)
+
+        # Initialize capabilities first
         init_capabilities()
+
         # 1. Fire up the Event Bus in the background!
-        asyncio.create_task(bus.run())
+        bus_task = asyncio.create_task(bus.run())
+        self._background_tasks.add(bus_task)
+        bus_task.add_done_callback(self._background_tasks.discard)
 
         # 2. Fire up the Error Listener!
         await error_listener.start()
-        # Order matters! Logger first to catch errors.
+
+        # 3. Boot remaining modules in correct chain of command
         await logger.start()
         await evolution_engine.start()
         await capability_mapper.start()
@@ -64,20 +91,40 @@ class IOSAgent:
         await planner.start()
         await orchestrator.start()
 
-        print("✨ All modules are synchronized and listening to the Event Bus.")
+        logger.info(
+            "✨ All modules are synchronized and listening to the Event Bus."
+        )
+
+        # 4. Register OS Signal Handlers for safe cancellation (CTRL+C)
+        self._register_signal_handlers(loop)
+
+        # 5. Broadcast bootup
+        bus.publish(
+            "system_booting",
+            {"timestamp": settings.BASE_DIR.name},
+            source="lifecycle",
+        )
+
+    def _register_signal_handlers(self, loop):
+        """Captures OS-level termination signals to trigger a clean exit."""
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(
+                    sig, lambda: asyncio.create_task(self.shutdown())
+                )
+            except NotImplementedError:
+                # Windows doesn't support add_signal_handler in asyncio
+                pass
 
     async def run_forever(self):
-        """Keep the agent alive and start the dashboard server."""
+        """Keeps the main thread alive and runs the FastAPI server."""
         try:
-            # Get the current loop and attach our error handlers
-            loop = asyncio.get_event_loop()
-            self.setup_global_exception_hooks(loop)
+            await self.startup()
 
-            await self.initialize_modules()
+            logger.info("🌐 Dashboard API: Launching on http://localhost:8000")
 
-            print("🌐 Dashboard API: Launching on http://localhost:8000")
-            
             # This launches the FastAPI server without blocking the event loop
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, start_server)
 
             # Keep the main thread alive so background tasks continue
@@ -85,19 +132,43 @@ class IOSAgent:
                 await asyncio.sleep(1)
 
         except Exception as e:
-            # This catches anything that escapes during startup
             self.error_handler.handle_error(e, component="main_core")
-            print(f"💥 Critical System Failure: {e}")
+            logger.critical(f"💥 Critical System Failure: {e}")
         finally:
-            self.cleanup()
+            await self.shutdown()
 
-    def cleanup(self):
-        print("🔌 Powering down modules safely.")
+    async def shutdown(self):
+        """Performs an orderly cleanup of memory, active plugins, and background
+
+        tasks.
+        """
+        if not self.is_running:
+            return
+
+        logger.info("🛑 Shutdown signal received. Powering down safely...")
+        self.is_running = False
+
+        bus.publish(
+            "system_shutting_down",
+            {"status": "saving_memory"},
+            source="lifecycle",
+        )
+
+        await asyncio.sleep(1)
+
+        # Cancel all running tasks except current
+        tasks = [
+            t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+        ]
+        logger.info(f"Cancelling {len(tasks)} remaining active tasks...")
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.info("🔌 System shut down completed. Goodbye.")
         sys.exit(0)
 
-if __name__ == "__main__":
-    agent = IOSAgent()
-    try:
-        asyncio.run(agent.run_forever())
-    except KeyboardInterrupt:
-        print("\n👋 Operonix Agent: Offline. Goodbye.")
+
+# Global instance
+lifecycle_manager = LifecycleManager()
