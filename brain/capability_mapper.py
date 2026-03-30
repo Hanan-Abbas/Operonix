@@ -1,16 +1,18 @@
 import json
 import logging
 import os
-from core.event_bus import bus
 from capabilities.registry import capability_registry
+from core.event_bus import bus
 
+# Path where the evolution engine saves its discovered synonyms
 _LEARNED_PATH = os.path.join("learning", "learned_intent_aliases.json")
 
 
 class CapabilityMapper:
-    """
-    Maps LLM / user intents to registered capability names (registry keys).
-    Learned aliases are merged from learning/learned_intent_aliases.json (written by evolution_engine).
+    """Maps LLM / user intents to registered capability names (registry keys).
+
+    Learned aliases are merged from learning/learned_intent_aliases.json
+    (written by evolution_engine).
     """
 
     SYNONYMS = {
@@ -46,7 +48,9 @@ class CapabilityMapper:
             with open(_LEARNED_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                self.learned_aliases = {str(k): str(v) for k, v in data.items()}
+                self.learned_aliases = {
+                    str(k): str(v) for k, v in data.items()
+                }
         except (json.JSONDecodeError, OSError) as e:
             self.logger.warning("Could not load learned aliases: %s", e)
 
@@ -74,7 +78,11 @@ class CapabilityMapper:
 
     async def start(self):
         self._load_learned_aliases()
-        bus.subscribe("intent_parsed", self.map_intent_to_capability)
+
+        # 🔄 CHANGE 1: Listen to the IntentParser after it finishes validating
+        bus.subscribe("intent_validated", self.map_intent_to_capability)
+
+        # Listen for when the evolution engine dumps new knowledge
         bus.subscribe("evolution_aliases_updated", self._on_aliases_updated)
         print("🧠 Capability Mapper: Online (registry-backed).")
 
@@ -84,16 +92,30 @@ class CapabilityMapper:
     async def map_intent_to_capability(self, event):
         task_id = event.data.get("task_id")
         raw_intent = event.data.get("intent")
-        extracted = event.data.get("parameters") or event.data.get("data") or {}
+        extracted = (
+            event.data.get("parameters") or event.data.get("data") or {}
+        )
 
         normalized = self.normalize_intent(raw_intent)
         args = self.normalize_args(normalized, extracted)
 
+        # Quick validation check against registry
         if not normalized or capability_registry.get(normalized) is None:
-            self.logger.warning("Unknown or unregistered intent: %s (normalized: %s)", raw_intent, normalized)
-            await bus.emit(
+            self.logger.warning(
+                "Unknown or unregistered intent: %s (normalized: %s)",
+                raw_intent,
+                normalized,
+            )
+
+            # Using publish instead of emit for background safety
+            bus.publish(
                 "mapping_failed",
-                {"task_id": task_id, "raw_intent": raw_intent, "normalized": normalized, "args": args},
+                {
+                    "task_id": task_id,
+                    "raw_intent": raw_intent,
+                    "normalized": normalized,
+                    "args": args,
+                },
                 source="capability_mapper",
             )
             return
@@ -103,11 +125,17 @@ class CapabilityMapper:
             "intent": normalized,
             "capability": normalized,
             "suggested_tool": None,
-            "args": args,
+            # We pass the cleaned/normalized arguments forward!
+            "parameters": args,
         }
 
         self.logger.info("Mapped '%s' -> '%s'", raw_intent, normalized)
-        await bus.emit("capability_mapped", mapping_result, source="capability_mapper")
+
+        # 🔄 CHANGE 2: Fire the exact event that the Decision Engine is waiting for!
+        bus.publish(
+            "capability_mapped", mapping_result, source="capability_mapper"
+        )
 
 
+# Global instance
 capability_mapper = CapabilityMapper()
