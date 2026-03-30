@@ -94,4 +94,43 @@ class ErrorHandler:
             # If the logger itself fails, print to terminal as last resort
             print(f"CRITICAL: Error handler could not write to log file: {e}")
 
-    
+    def _is_recoverable(self, error: Exception) -> bool:
+        """Determines if the system should try to push forward or completely stop."""
+        # Add your hard stop exceptions here
+        unrecoverable_errors = [
+            SystemExit,
+            KeyboardInterrupt,
+            MemoryError,
+        ]
+        return not any(isinstance(error, e) for e in unrecoverable_errors)
+
+
+# Decorator for clean use across your app
+def catch_and_handle(component_name: str):
+    """Decorator to automatically wrap functions in the error handler.
+
+    Usage:
+        @catch_and_handle("brain")
+        def think(): ...
+    """
+
+    def decorator(func: Callable):
+        async def async_wrapper(*args, **kwargs):
+            try:
+                if inspect.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+            except Exception as e:
+                # Assuming the class instance has access to a global error handler or passed in
+                print(f"Async Error in {component_name}: {e}")
+                raise e
+
+        def sync_wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                print(f"Sync Error in {component_name}: {e}")
+                raise e
+
+        return async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
+
+    return decorator
