@@ -78,4 +78,55 @@ class SessionMemory:
                 }
             )
 
-    
+    async def _archive_task(self, event):
+        """Marks a full task as completed and moves it to a cold storage state
+
+        or dumps to a log if needed.
+        """
+        task_id = event.data.get("task_id")
+        if task_id in self.active_tasks:
+            self.active_tasks[task_id]["status"] = "completed"
+            self.active_tasks[task_id]["end_time"] = time.time()
+            self.logger.debug(f"Archived memory for completed task: {task_id}")
+
+            # Here is the bridge to your learning system!
+            # Once a task is successfully completed, we can broadcast it for the learner.
+            bus.publish(
+                "task_memory_archived",
+                self.active_tasks[task_id],
+                source="session_memory",
+            )
+
+    async def _mark_task_failed(self, event):
+        """Keeps records of what went wrong to feed the debugging and learning
+
+        system.
+        """
+        data = event.data
+        task_id = data.get("task_id")
+
+        if task_id in self.active_tasks:
+            self.active_tasks[task_id]["status"] = "failed"
+            self.active_tasks[task_id]["error"] = data.get("error")
+            self.logger.warning(
+                f"Memory flagged task {task_id} as failed: {data.get('error')}"
+            )
+
+    def _add_to_history(self, action_dict):
+        """Adds a successful action to the rolling window list."""
+        self.action_history.append(action_dict)
+        # Prevent memory overflow
+        if len(self.action_history) > self.max_history_items:
+            self.action_history.pop(0)
+
+    def get_task_history(self, task_id):
+        """Returns the steps executed for a specific task."""
+        return self.active_tasks.get(task_id, {})
+
+    def get_recent_actions(self, count=5):
+        """Returns the last N actions performed across the entire system."""
+        return self.action_history[-count:]
+
+
+# Global instance
+session_memory = SessionMemory()
