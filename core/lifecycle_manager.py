@@ -12,6 +12,7 @@ from context.window_detector import window_detector
 from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
+from memory.session_memory import session_memory
 from core.logger import logger
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
@@ -90,6 +91,7 @@ class LifecycleManager:
         await llm_client.start()
         await planner.start()
         await orchestrator.start()
+        await session_memory.start()
 
         logger.info(
             "✨ All modules are synchronized and listening to the Event Bus."
