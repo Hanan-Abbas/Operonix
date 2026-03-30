@@ -21,7 +21,7 @@ class ErrorHandler:
     """Global error handler designed for a self-evolving AI system.
 
     Maintains uptime by catching failures, logging deep tracebacks for AI
-    self-healing, and firing recovery events.
+    self-healing, and firing recovery events to the EventBus.
     """
 
     def __init__(self, event_bus=None, logger=None):
@@ -69,10 +69,15 @@ class ErrorHandler:
         )
         self._write_to_error_log(error_data)
 
-        # 3. Notify the system (Event Bus & Self-Healing modules)
+        # 3. Notify the system via the updated Event Bus
         if self.event_bus:
-            # This triggers debugging/error_listener.py to wake up auto_fix.py
-            self.event_bus.publish("system_error", error_data)
+            # Using the synchronous 'publish' method we added to the EventBus
+            # to safely inject the event into the queue from anywhere.
+            self.event_bus.publish(
+                event_type="system_error",
+                data=error_data,
+                source=f"error_handler/{component}",
+            )
 
         # 4. Return an execution receipt the orchestrator/executor can understand
         return {
@@ -96,7 +101,6 @@ class ErrorHandler:
 
     def _is_recoverable(self, error: Exception) -> bool:
         """Determines if the system should try to push forward or completely stop."""
-        # Add your hard stop exceptions here
         unrecoverable_errors = [
             SystemExit,
             KeyboardInterrupt,
@@ -105,14 +109,8 @@ class ErrorHandler:
         return not any(isinstance(error, e) for e in unrecoverable_errors)
 
 
-# Decorator for clean use across your app
 def catch_and_handle(component_name: str):
-    """Decorator to automatically wrap functions in the error handler.
-
-    Usage:
-        @catch_and_handle("brain")
-        def think(): ...
-    """
+    """Decorator to automatically wrap functions in the error handler."""
 
     def decorator(func: Callable):
         async def async_wrapper(*args, **kwargs):
@@ -120,7 +118,6 @@ def catch_and_handle(component_name: str):
                 if inspect.iscoroutinefunction(func):
                     return await func(*args, **kwargs)
             except Exception as e:
-                # Assuming the class instance has access to a global error handler or passed in
                 print(f"Async Error in {component_name}: {e}")
                 raise e
 
