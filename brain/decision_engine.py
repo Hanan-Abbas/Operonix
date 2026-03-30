@@ -71,4 +71,39 @@ class DecisionEngine:
         # (This links beautifully with your monitoring/performance_monitor.py later!)
         return score
 
-    
+    async def _process_queue(self):
+        """Continuously pulls the highest priority task and hands it to the
+
+        planner.
+        """
+        while True:
+            try:
+                # This will pause and wait if the queue is empty
+                priority, task_data = await self.task_queue.get()
+                task_id = task_data.get("task_id")
+                intent = task_data.get("intent")
+
+                self.logger.info(
+                    f"🧠 Decision Engine: Routing high-priority task [{task_id}] ({intent}) to Planner."
+                )
+
+                # Hand the task off to the planner!
+                bus.publish(
+                    "capability_mapped",  # The planner is listening for this to generate steps
+                    data=task_data,
+                    source="decision_engine",
+                )
+
+                self.task_queue.task_done()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(
+                    f"Error in Decision Engine queue processor: {e}"
+                )
+                await asyncio.sleep(1)
+
+
+# Global instance
+decision_engine = DecisionEngine()
