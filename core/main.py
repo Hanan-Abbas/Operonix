@@ -10,6 +10,8 @@ from context.state_extractor import state_extractor
 from context.window_detector import window_detector
 from core.event_bus import bus
 from core.logger import logger
+# --- IMPORT ERROR HANDLER ---
+from core.error_handler import ErrorHandler
 from core.orchestrator import orchestrator
 from executor.executor import executor
 from learning.evolution_engine import evolution_engine
@@ -17,6 +19,29 @@ from learning.evolution_engine import evolution_engine
 class IOSAgent:
     def __init__(self):
         self.is_running = True
+        # Initialize the error handler with your global bus and logger
+        self.error_handler = ErrorHandler(event_bus=bus, logger=logger)
+
+    def setup_global_exception_hooks(self, loop):
+        """Binds the error handler to the OS and Async event loop."""
+        # 1. Catch standard synchronous crashes
+        def handle_sync_exception(exctype, value, traceback):
+            if exctype is KeyboardInterrupt:
+                sys.__excepthook__(exctype, value, traceback)
+                return
+            self.error_handler.handle_error(value, component="sys_level")
+        
+        sys.excepthook = handle_sync_exception
+
+        # 2. Catch silent background async crashes
+        def handle_async_exception(loop, context):
+            exception = context.get('exception')
+            if exception:
+                self.error_handler.handle_error(exception, component="async_loop")
+            else:
+                logger.warning(f"Unhandled task error: {context['message']}")
+
+        loop.set_exception_handler(handle_async_exception)
 
     async def initialize_modules(self):
         print("🚀 Operonix Agent: Starting engine...")
@@ -39,22 +64,24 @@ class IOSAgent:
     async def run_forever(self):
         """Keep the agent alive and start the dashboard server."""
         try:
+            # Get the current loop and attach our error handlers
+            loop = asyncio.get_event_loop()
+            self.setup_global_exception_hooks(loop)
+
             await self.initialize_modules()
 
             print("🌐 Dashboard API: Launching on http://localhost:8000")
             
-            # Start the server. Since start_server is likely blocking, 
-            # we run it in a way that doesn't stop our Event Bus.
-            loop = asyncio.get_event_loop()
-            
-            # This launches the FastAPI server
+            # This launches the FastAPI server without blocking the event loop
             await loop.run_in_executor(None, start_server)
 
-            # Keep the main thread alive so background tasks (Window Detector) continue
+            # Keep the main thread alive so background tasks continue
             while self.is_running:
                 await asyncio.sleep(1)
 
         except Exception as e:
+            # This catches anything that escapes during startup
+            self.error_handler.handle_error(e, component="main_core")
             print(f"💥 Critical System Failure: {e}")
         finally:
             self.cleanup()
@@ -63,11 +90,9 @@ class IOSAgent:
         print("🔌 Powering down modules safely.")
         sys.exit(0)
 
-# --- THIS IS THE PART YOU WERE MISSING ---
 if __name__ == "__main__":
     agent = IOSAgent()
     try:
-        # This tells Python to actually start the async loop
         asyncio.run(agent.run_forever())
     except KeyboardInterrupt:
         print("\n👋 Operonix Agent: Offline. Goodbye.")
