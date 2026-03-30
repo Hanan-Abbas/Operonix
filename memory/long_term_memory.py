@@ -77,4 +77,34 @@ class LongTermMemory:
                 f"Failed to write task {task_id} to long-term storage: {e}"
             )
 
-    
+    def search_past_tasks(self, intent: str, limit: int = 5):
+        """Searches the local JSONL file for past tasks that match a specific
+
+        intent.
+
+        (Used by the planner to see if we already know how to do something!)
+        """
+        if not os.path.exists(self.history_file):
+            return []
+
+        results = []
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    record = json.loads(line)
+                    task_data = record.get("data", {})
+
+                    # If this past task matches what we are looking for
+                    if task_data.get("intent") == intent:
+                        results.append(task_data)
+
+                    if len(results) >= limit:
+                        break
+        except Exception as e:
+            self.logger.error(f"Error searching long-term memory: {e}")
+
+        return results
+
+
+# Global instance
+long_term_memory = LongTermMemory()
