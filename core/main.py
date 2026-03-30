@@ -15,6 +15,7 @@ from core.error_handler import ErrorHandler
 from core.orchestrator import orchestrator
 from executor.executor import executor
 from learning.evolution_engine import evolution_engine
+from debugging.error_listener import error_listener
 
 class IOSAgent:
     def __init__(self):
@@ -47,7 +48,11 @@ class IOSAgent:
         print("🚀 Operonix Agent: Starting engine...")
 
         init_capabilities()
+        # 1. Fire up the Event Bus in the background!
+        asyncio.create_task(bus.run())
 
+        # 2. Fire up the Error Listener!
+        await error_listener.start()
         # Order matters! Logger first to catch errors.
         await logger.start()
         await evolution_engine.start()
