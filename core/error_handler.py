@@ -63,4 +63,35 @@ class ErrorHandler:
             "context": context,
         }
 
-        
+        # 2. Log it specifically where the AI or dashboard can read it
+        self.logger.error(
+            f"[{component.upper()}] Crash in {func_name}: {error_type} - {error}"
+        )
+        self._write_to_error_log(error_data)
+
+        # 3. Notify the system (Event Bus & Self-Healing modules)
+        if self.event_bus:
+            # This triggers debugging/error_listener.py to wake up auto_fix.py
+            self.event_bus.publish("system_error", error_data)
+
+        # 4. Return an execution receipt the orchestrator/executor can understand
+        return {
+            "status": "error",
+            "error_id": error_data["timestamp"],
+            "recoverable": self._is_recoverable(error),
+            "summary": f"{error_type}: {str(error)}",
+        }
+
+    def _write_to_error_log(self, data: Dict[str, Any]) -> None:
+        """Appends the massive JSON stack trace to logs/errors.log."""
+        try:
+            os.makedirs(os.path.dirname(self.error_log_path), exist_ok=True)
+            import json
+
+            with open(self.error_log_path, "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            # If the logger itself fails, print to terminal as last resort
+            print(f"CRITICAL: Error handler could not write to log file: {e}")
+
+    
