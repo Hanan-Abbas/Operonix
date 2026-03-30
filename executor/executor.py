@@ -15,7 +15,14 @@ from executor.fallback_manager import FallbackManager
 from executor.focus_manager import FocusManager
 from executor.capability_dispatch import resolve_tool_call
 
+# --- IMPORT CONFIG AND ERROR HANDLER ---
+from core.config import settings
+from core.error_handler import ErrorHandler
+
 logger = logging.getLogger("Executor")
+
+# Initialize error handler for the execution layer
+error_handler = ErrorHandler(event_bus=bus, logger=logger)
 
 # -------------------------
 # Global Managers
@@ -44,6 +51,7 @@ class Executor:
     # Start Executor
     # -------------------------
     async def start(self):
+        # Listens to the planner we just updated!
         bus.subscribe("plan_ready", self.execute_plan)
         self.is_running = True
         logger.info(f"⚙️ Executor Online | OS: {self.os_name}")
@@ -62,20 +70,22 @@ class Executor:
         for step_index, step in enumerate(steps):
             action = step.get("action")
 
-            await bus.emit("execution_step_started", {
+            # Updated to publish for queue handling
+            bus.publish("execution_step_started", {
                 "task_id": task_id,
                 "step_index": step_index,
                 "action": action
-            })
+            }, source="executor")
 
             success, result = await self._execute_step_safe(task_id, step_index, step, context)
 
             if not success:
-                await bus.emit("task_failed", {
+                bus.publish("task_failed", {
                     "task_id": task_id,
                     "failed_step": step,
                     "error": result
-                })
+                }, source="executor")
+                
                 retry_manager.clear_task(task_id)
                 logger.error(f"❌ Task [{task_id}] failed at step {step_index}: {result}")
                 return
@@ -84,14 +94,14 @@ class Executor:
             context["last_result"] = result
             context["last_action"] = action
 
-            await bus.emit("execution_step_success", {
+            bus.publish("execution_step_success", {
                 "task_id": task_id,
                 "step_index": step_index,
                 "result": result
-            })
+            }, source="executor")
             logger.info(f"✅ Step {step_index} completed: {action}")
 
-        await bus.emit("task_completed", {"task_id": task_id})
+        bus.publish("task_completed", {"task_id": task_id}, source="executor")
         retry_manager.clear_task(task_id)
         logger.info(f"🏁 Task [{task_id}] completed successfully")
 
@@ -106,7 +116,7 @@ class Executor:
             args["path"] = os.path.normpath(args["path"])
 
         # -------------------------
-        # Restricted actions
+        # Restricted actions (Pulling from settings)
         # -------------------------
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}"
@@ -133,7 +143,7 @@ class Executor:
         # -------------------------
         tried_tools = []
         fallback_attempts = 0
-        max_fallbacks = 5
+        max_fallbacks = settings.MAX_RETRY_ATTEMPTS  # Pulling from core/config.py!
 
         while fallback_attempts < max_fallbacks:
             tool_type, tool_instance = await tool_selector.select_best_tool(
@@ -146,22 +156,23 @@ class Executor:
 
             tried_tools.append(getattr(tool_instance, "name", tool_type))
 
-            await bus.emit("tool_selected", {
+            bus.publish("tool_selected", {
                 "task_id": task_id,
                 "step_index": step_index,
                 "tool_type": tool_type,
                 "tool_name": getattr(tool_instance, "name", tool_type)
-            })
+            }, source="executor")
 
             try:
+                # 1. Execute capability validation
                 success, result = await capability_registry.execute(action, context, args)
 
-                await bus.emit("execution_strategy_used", {
+                bus.publish("execution_strategy_used", {
                     "task_id": task_id,
                     "step_index": step_index,
                     "tool_type": tool_type,
                     "tool_name": getattr(tool_instance, "name", tool_type)
-                })
+                }, source="executor")
 
                 if not success:
                     error_type = self._classify_error(result)
@@ -169,6 +180,8 @@ class Executor:
                     action_data = result if isinstance(result, dict) else {}
                     cap_intent = action_data.get("intent") or action
                     cap_args = action_data.get("args") or args
+                    
+                    # 2. Resolve to the real tool mapping
                     resolved = resolve_tool_call(cap_intent, cap_args)
                     if not resolved:
                         return False, f"No tool mapping for capability: {cap_intent}"
@@ -178,10 +191,12 @@ class Executor:
                     if not tool:
                         return False, f"Tool not registered: {tool_name}"
 
+                    # 3. Run the tool!
                     ok, tool_result = await tool.run(tool_action, tool_args)
                     if ok:
                         logger.debug(f"Action '{action}' -> {tool_name}.{tool_action} OK")
                         return True, tool_result
+                    
                     result = tool_result
                     error_type = self._classify_error(result)
 
@@ -191,6 +206,10 @@ class Executor:
             except Exception as e:
                 error_type = "exception"
                 result = str(e)
+                
+                # 🚨 CRITICAL SELF-HEALING LINK:
+                # We feed the hard exception to the error handler so it hits logs/errors.log!
+                error_handler.handle_error(e, component="executor", context={"task_id": task_id, "step": step_index})
 
             # -------------------------
             # Retry logic
@@ -205,12 +224,12 @@ class Executor:
             next_tool_type = fallback_manager.get_fallback(tool_type)
             if next_tool_type:
                 logger.info(f"Fallback: {tool_type} → {next_tool_type}")
-                await bus.emit("fallback_triggered", {
+                bus.publish("fallback_triggered", {
                     "from": tool_type,
                     "to": next_tool_type,
                     "task_id": task_id,
                     "step_index": step_index
-                })
+                }, source="executor")
                 fallback_attempts += 1
                 continue
 
