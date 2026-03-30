@@ -18,6 +18,7 @@ from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
 from learning.evolution_engine import evolution_engine
+from memory.long_term_memory import long_term_memory
 
 
 class LifecycleManager:
@@ -92,6 +93,8 @@ class LifecycleManager:
         await planner.start()
         await orchestrator.start()
         await session_memory.start()
+        await long_term_memory.start()
+
 
         logger.info(
             "✨ All modules are synchronized and listening to the Event Bus."
