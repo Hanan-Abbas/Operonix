@@ -13,7 +13,7 @@ class Planner:
 
     async def start(self):
         # Updated to subscribe to the 'intent_validated' event coming from IntentParser
-        bus.subscribe("intent_validated", self.create_plan)
+        bus.subscribe("capability_mapped", self.create_plan)  
         self.logger.info("Planner: Strategist active. Ready to build execution paths.")
 
     async def create_plan(self, event):
