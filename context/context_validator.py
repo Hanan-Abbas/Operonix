@@ -1,4 +1,3 @@
-# context/context_validator.py
 import logging
 from core.event_bus import bus
 from context.permission_checker import permission_checker
