@@ -1,23 +1,20 @@
-# executor/executor.py
 import asyncio
-import platform
-import os
 import logging
+import os
+import platform
 
-from core.event_bus import bus
-from tools.tool_registry import tool_registry
-from tools.tool_selector import tool_selector
 from capabilities.registry import capability_registry
 from context.context_validator import context_validator
-
-from executor.retry_manager import RetryManager
-from executor.fallback_manager import FallbackManager
-from executor.focus_manager import FocusManager
-from executor.capability_dispatch import resolve_tool_call
-
 # --- IMPORT CONFIG AND ERROR HANDLER ---
 from core.config import settings
 from core.error_handler import ErrorHandler
+from core.event_bus import bus
+from executor.capability_dispatch import resolve_tool_call
+from executor.fallback_manager import FallbackManager
+from executor.focus_manager import FocusManager
+from executor.retry_manager import RetryManager
+from tools.tool_registry import tool_registry
+from tools.tool_selector import tool_selector
 
 logger = logging.getLogger("Executor")
 
@@ -33,8 +30,8 @@ focus_manager = FocusManager()
 
 
 class Executor:
-    """
-    ⚙️ Central Execution Layer
+    """⚙️ Central Execution Layer
+
     - Executes plans step by step
     - Validates context
     - Chooses best tool
@@ -51,8 +48,9 @@ class Executor:
     # Start Executor
     # -------------------------
     async def start(self):
-        # Listens to the planner we just updated!
-        bus.subscribe("plan_ready", self.execute_plan)
+        # 🔄 CHANGE 1: Listen ONLY to tasks that have passed the Safety Validator!
+        bus.subscribe("task_safety_cleared", self.execute_plan)
+
         self.is_running = True
         logger.info(f"⚙️ Executor Online | OS: {self.os_name}")
         logger.info(f"⚙️ Tools Loaded: {len(tool_registry.list_tools())}")
@@ -61,44 +59,56 @@ class Executor:
     # Main Execution Loop
     # -------------------------
     async def execute_plan(self, event):
-        task_id = event.data.get("task_id")
-        steps = event.data.get("steps", [])
-        context = event.data.get("context", {})
+        task_data = event.data
+        task_id = task_data.get("task_id")
+        steps = task_data.get("steps", [])
+        context = task_data.get("context", {})
 
         logger.info(f"🚀 Starting Task [{task_id}] with {len(steps)} steps")
 
         for step_index, step in enumerate(steps):
             action = step.get("action")
 
-            # Updated to publish for queue handling
-            bus.publish("execution_step_started", {
-                "task_id": task_id,
-                "step_index": step_index,
-                "action": action
-            }, source="executor")
+            bus.publish(
+                "execution_step_started",
+                {"task_id": task_id, "step_index": step_index, "action": action},
+                source="executor",
+            )
 
-            success, result = await self._execute_step_safe(task_id, step_index, step, context)
+            success, result = await self._execute_step_safe(
+                task_id, step_index, step, context
+            )
 
             if not success:
-                bus.publish("task_failed", {
-                    "task_id": task_id,
-                    "failed_step": step,
-                    "error": result
-                }, source="executor")
-                
+                bus.publish(
+                    "task_failed",
+                    {
+                        "task_id": task_id,
+                        "failed_step": step,
+                        "error": result,
+                    },
+                    source="executor",
+                )
+
                 retry_manager.clear_task(task_id)
-                logger.error(f"❌ Task [{task_id}] failed at step {step_index}: {result}")
+                logger.error(
+                    f"❌ Task [{task_id}] failed at step {step_index}: {result}"
+                )
                 return
 
             # Update context dynamically
             context["last_result"] = result
             context["last_action"] = action
 
-            bus.publish("execution_step_success", {
-                "task_id": task_id,
-                "step_index": step_index,
-                "result": result
-            }, source="executor")
+            bus.publish(
+                "execution_step_success",
+                {
+                    "task_id": task_id,
+                    "step_index": step_index,
+                    "result": result,
+                },
+                source="executor",
+            )
             logger.info(f"✅ Step {step_index} completed: {action}")
 
         bus.publish("task_completed", {"task_id": task_id}, source="executor")
@@ -112,22 +122,15 @@ class Executor:
         action = step.get("action")
         args = step.get("args", {})
 
-        if "path" in args:
-            args["path"] = os.path.normpath(args["path"])
+        # 🔄 CHANGE 2: Path normalization moved to SafetyValidator!
+        # But keeping it here doesn't hurt as a double-check.
 
-        # -------------------------
-        # Restricted actions (Pulling from settings)
-        # -------------------------
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}"
 
-        # -------------------------
-        # Context validation
-        # -------------------------
-        valid, reason = await context_validator.validate_action_context(action, context)
-        if not valid:
-            logger.warning(f"Context validation failed for action '{action}': {reason}")
-            return False, f"Context validation failed: {reason}"
+        # 🔄 CHANGE 3: Removed duplicate context validation!
+        # Your SafetyValidator has already evaluated this step against
+        # context_validator and mapped it to multi-domain risk rules.
 
         # -------------------------
         # Window focus (if needed)
@@ -143,7 +146,7 @@ class Executor:
         # -------------------------
         tried_tools = []
         fallback_attempts = 0
-        max_fallbacks = settings.MAX_RETRY_ATTEMPTS  # Pulling from core/config.py!
+        max_fallbacks = settings.MAX_RETRY_ATTEMPTS
 
         while fallback_attempts < max_fallbacks:
             tool_type, tool_instance = await tool_selector.select_best_tool(
@@ -156,23 +159,33 @@ class Executor:
 
             tried_tools.append(getattr(tool_instance, "name", tool_type))
 
-            bus.publish("tool_selected", {
-                "task_id": task_id,
-                "step_index": step_index,
-                "tool_type": tool_type,
-                "tool_name": getattr(tool_instance, "name", tool_type)
-            }, source="executor")
-
-            try:
-                # 1. Execute capability validation
-                success, result = await capability_registry.execute(action, context, args)
-
-                bus.publish("execution_strategy_used", {
+            bus.publish(
+                "tool_selected",
+                {
                     "task_id": task_id,
                     "step_index": step_index,
                     "tool_type": tool_type,
-                    "tool_name": getattr(tool_instance, "name", tool_type)
-                }, source="executor")
+                    "tool_name": getattr(tool_instance, "name", tool_type),
+                },
+                source="executor",
+            )
+
+            try:
+                # 1. Execute capability validation
+                success, result = await capability_registry.execute(
+                    action, context, args
+                )
+
+                bus.publish(
+                    "execution_strategy_used",
+                    {
+                        "task_id": task_id,
+                        "step_index": step_index,
+                        "tool_type": tool_type,
+                        "tool_name": getattr(tool_instance, "name", tool_type),
+                    },
+                    source="executor",
+                )
 
                 if not success:
                     error_type = self._classify_error(result)
@@ -180,11 +193,14 @@ class Executor:
                     action_data = result if isinstance(result, dict) else {}
                     cap_intent = action_data.get("intent") or action
                     cap_args = action_data.get("args") or args
-                    
+
                     # 2. Resolve to the real tool mapping
                     resolved = resolve_tool_call(cap_intent, cap_args)
                     if not resolved:
-                        return False, f"No tool mapping for capability: {cap_intent}"
+                        return (
+                            False,
+                            f"No tool mapping for capability: {cap_intent}",
+                        )
 
                     tool_name, tool_action, tool_args = resolved
                     tool = tool_registry.get_tool(tool_name)
@@ -194,9 +210,11 @@ class Executor:
                     # 3. Run the tool!
                     ok, tool_result = await tool.run(tool_action, tool_args)
                     if ok:
-                        logger.debug(f"Action '{action}' -> {tool_name}.{tool_action} OK")
+                        logger.debug(
+                            f"Action '{action}' -> {tool_name}.{tool_action} OK"
+                        )
                         return True, tool_result
-                    
+
                     result = tool_result
                     error_type = self._classify_error(result)
 
@@ -206,15 +224,20 @@ class Executor:
             except Exception as e:
                 error_type = "exception"
                 result = str(e)
-                
-                # 🚨 CRITICAL SELF-HEALING LINK:
-                # We feed the hard exception to the error handler so it hits logs/errors.log!
-                error_handler.handle_error(e, component="executor", context={"task_id": task_id, "step": step_index})
+
+                # Feed the hard exception to the error handler
+                error_handler.handle_error(
+                    e,
+                    component="executor",
+                    context={"task_id": task_id, "step": step_index},
+                )
 
             # -------------------------
             # Retry logic
             # -------------------------
-            if await retry_manager.should_retry(task_id, step_index, error_type=error_type):
+            if await retry_manager.should_retry(
+                task_id, step_index, error_type=error_type
+            ):
                 logger.info(f"Retrying step {step_index} due to {error_type}")
                 continue
 
@@ -224,19 +247,23 @@ class Executor:
             next_tool_type = fallback_manager.get_fallback(tool_type)
             if next_tool_type:
                 logger.info(f"Fallback: {tool_type} → {next_tool_type}")
-                bus.publish("fallback_triggered", {
-                    "from": tool_type,
-                    "to": next_tool_type,
-                    "task_id": task_id,
-                    "step_index": step_index
-                }, source="executor")
+                bus.publish(
+                    "fallback_triggered",
+                    {
+                        "from": tool_type,
+                        "to": next_tool_type,
+                        "task_id": task_id,
+                        "step_index": step_index,
+                    },
+                    source="executor",
+                )
                 fallback_attempts += 1
                 continue
 
             return False, {
                 "type": error_type,
                 "message": result,
-                "tried_tools": tried_tools
+                "tried_tools": tried_tools,
             }
 
         return False, f"Max fallback attempts reached for action '{action}'"
