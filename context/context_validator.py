@@ -1,11 +1,13 @@
 import logging
-from core.event_bus import bus
 from context.permission_checker import permission_checker
+from core.event_bus import bus
+
 
 class ContextValidator:
-    """
-    🛡️ Validates if the current environment/context is safe
-    for executing a given intent.
+    """🛡️ Validates if the current environment/context is safe for executing a
+
+    given intent.
+
     Integrates system-level permission checks via PermissionChecker.
     """
 
@@ -13,41 +15,65 @@ class ContextValidator:
         self.logger = logging.getLogger("ContextValidator")
 
     async def validate_action_context(self, intent: str, current_context: dict):
-        """
-        Validate if the current environment is suitable for the intent.
+        """Validate if the current environment is suitable for the intent.
+
         Returns: (bool, str) -> (is_valid, reason_message)
         """
         active_app = current_context.get("active_window", "").lower()
         app_type = current_context.get("app_type")
         state = current_context.get("state", {})
 
-        self.logger.debug(f"Validating context for intent: '{intent}' | App: {active_app} ({app_type})")
+        self.logger.debug(
+            f"Validating context for intent: '{intent}' | App: {active_app} ({app_type})"
+        )
 
         # -----------------------------
         # 1️⃣ Permission Checker Integration
         # -----------------------------
         target_path = state.get("target_path")
-        allowed, reason = permission_checker.is_action_allowed(intent, target_path)
+        allowed, reason = permission_checker.is_action_allowed(
+            intent, target_path
+        )
         if not allowed:
-            self.logger.warning(f"PermissionChecker blocked intent '{intent}': {reason}")
+            self.logger.warning(
+                f"PermissionChecker blocked intent '{intent}': {reason}"
+            )
             return False, reason
 
         # -----------------------------
         # 2️⃣ File Operation Safety
         # -----------------------------
-        if "file" in intent:
-            # extra safety: prevent modifying system dirs without admin
-            if target_path and ("/etc/" in target_path or "/usr/" in target_path):
+        if "file" in intent and target_path:
+            # A. Extra safety: prevent modifying system dirs without admin
+            if "/etc/" in target_path or "/usr/" in target_path:
                 if not state.get("is_admin", False):
                     msg = f"Blocked: Insufficient permissions to modify {target_path}"
                     self.logger.warning(msg)
                     return False, msg
 
+            # B. 🚀 NEW: Physical OS write check (Calls the method we added!)
+            if not permission_checker.is_actually_writable(target_path):
+                msg = f"Blocked: OS reports '{target_path}' is not writable by the agent."
+                self.logger.warning(msg)
+                return False, msg
+
         # -----------------------------
         # 3️⃣ UI Operation Safety
         # -----------------------------
-        if intent in ("click", "double_click", "type_text", "move_cursor", "scroll"):
-            if app_type and app_type not in ("editor", "terminal", "browser", "desktop", "unknown"):
+        if intent in (
+            "click",
+            "double_click",
+            "type_text",
+            "move_cursor",
+            "scroll",
+        ):
+            if app_type and app_type not in (
+                "editor",
+                "terminal",
+                "browser",
+                "desktop",
+                "unknown",
+            ):
                 msg = f"Context mismatch: Cannot perform '{intent}' in app type '{app_type}'"
                 self.logger.warning(msg)
                 return False, msg
@@ -73,7 +99,9 @@ class ContextValidator:
         # -----------------------------
         # ✅ All checks passed
         # -----------------------------
-        self.logger.info(f"Context validated for intent '{intent}' in app '{active_app}'")
+        self.logger.info(
+            f"Context validated for intent '{intent}' in app '{active_app}'"
+        )
         return True, "Context Validated"
 
 
