@@ -19,7 +19,7 @@ from debugging.error_listener import error_listener
 from executor.executor import executor
 from learning.evolution_engine import evolution_engine
 from memory.long_term_memory import long_term_memory
-
+from memory.vector_store import vector_store
 
 class LifecycleManager:
     """Manages the startup, execution hooks, dashboard API, and graceful
@@ -94,6 +94,7 @@ class LifecycleManager:
         await orchestrator.start()
         await session_memory.start()
         await long_term_memory.start()
+        await vector_store.start()
 
 
         logger.info(
