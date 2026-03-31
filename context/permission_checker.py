@@ -65,7 +65,16 @@ class PermissionChecker:
                 return False
         return True
 
+    def is_actually_writable(self, path: str) -> bool:
+        """Checks if the OS will physically let the agent write to this path.
+        Prevents crashes before the executor tries to touch the disk.
+        """
+        # If the file doesn't exist yet, check its parent directory
+        target = path if os.path.exists(path) else os.path.dirname(path)
 
+        # os.W_OK checks for real OS write permissions
+        return os.access(target, os.W_OK)
+        
 # -------------------------
 # Global Instance
 # -------------------------
