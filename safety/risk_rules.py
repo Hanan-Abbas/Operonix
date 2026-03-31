@@ -38,3 +38,20 @@ PIPE_TO_SHELL_PATTERN = re.compile(
 
 # 4. Destructive Flags
 # Looks for force/recursive deletions or disk formatting patterns.
+DESTRUCTIVE_FLAGS_PATTERN = re.compile(
+    r"(\s-(r|f|rf|fr|R)\b|mkfs|dd\s+if=|>\s*/dev/|wipe|shred)", re.IGNORECASE
+)
+
+# 5. Sensitive File Patterns
+# Dynamically flags attempts to touch crypto keys, env files, or shell histories.
+SENSITIVE_FILES_PATTERN = re.compile(
+    r"(\.env|\.ssh|id_rsa|passwd|shadow|bash_history|zsh_history|master\.key)",
+    re.IGNORECASE,
+)
+
+
+# =========================================================
+# 🛡️ DYNAMIC RISK ASSESSMENT ENGINES
+# =========================================================
+
+
