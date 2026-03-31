@@ -52,4 +52,44 @@ class VectorStore:
                 f"Failed to initialize Vector Store: {e}", exc_info=True
             )
 
+    async def save_vector_experience(self, event):
+        """Converts an archived task into a vector and stores it in the
+
+        database.
+        """
+        task_data = event.data
+        task_id = task_data.get("task_id")
+        intent = task_data.get("intent")
+
+        # We only want to memorize successful tasks
+        if task_data.get("status") != "completed":
+            return
+
+        # We construct a highly descriptive string for the model to "understand"
+        steps = task_data.get("steps", [])
+        steps_summary = ", ".join(
+            [step.get("action", "") for step in steps if "action" in step]
+        )
+
+        content_to_vectorize = (
+            f"Intent: {intent}. Actions performed: {steps_summary}."
+        )
+
+        try:
+            # Chroma automatically handles the conversion to vectors behind the scenes!
+            self.collection.add(
+                documents=[content_to_vectorize],
+                metadatas=[{"task_id": task_id, "intent": intent}],
+                ids=[task_id],  # We use your unique task_id as the DB primary key
+            )
+
+            self.logger.debug(
+                f"Saved vector embedding for task [{task_id}] -> '{intent}'"
+            )
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to save vector for task {task_id}: {e}"
+            )
+
     
