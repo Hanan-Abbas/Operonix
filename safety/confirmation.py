@@ -114,4 +114,34 @@ class ConfirmationManager:
                 source="confirmation_manager",
             )
 
-    
+    async def _cleanup_expired_requests(self):
+        """Background loop to clear out confirmations that the user ignored."""
+        while True:
+            await asyncio.sleep(60)  # Check every minute
+            current_time = time.time()
+            expired_ids = []
+
+            for task_id, data in self.pending_confirmations.items():
+                if current_time - data["timestamp"] > self.timeout_seconds:
+                    expired_ids.append(task_id)
+
+            for task_id in expired_ids:
+                self.logger.warning(
+                    f"⏰ Confirmation for task [{task_id}] expired due to inactivity."
+                )
+                self.pending_confirmations.pop(task_id)
+
+                # Fail the task automatically if the user ignores it
+                bus.publish(
+                    "task_failed",
+                    {
+                        "task_id": task_id,
+                        "error": "Confirmation timeout. Action auto-denied for safety.",
+                        "stage": "confirmation",
+                    },
+                    source="confirmation_manager",
+                )
+
+
+# Global instance
+confirmation_manager = ConfirmationManager()
