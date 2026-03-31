@@ -20,6 +20,7 @@ from executor.executor import executor
 from learning.evolution_engine import evolution_engine
 from memory.long_term_memory import long_term_memory
 from memory.vector_store import vector_store
+from safety.confirmation import ConfirmationManager
 
 class LifecycleManager:
     """Manages the startup, execution hooks, dashboard API, and graceful
@@ -95,6 +96,7 @@ class LifecycleManager:
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
+        await confirmation_manager.start()
 
 
         logger.info(
