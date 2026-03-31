@@ -5,8 +5,14 @@ import time
 from context.context_validator import context_validator
 from core.config import settings
 from core.event_bus import bus
-# We import your rules and your environment checker
-from safety.risk_rules import RiskLevel, get_command_risk
+
+# 🔄 UPDATE: Import all specific risk functions from your new risk_rules file
+from safety.risk_rules import (
+    RiskLevel,
+    get_command_risk,
+    get_file_op_risk,
+    get_web_op_risk,
+)
 
 
 class SafetyValidator:
@@ -14,18 +20,17 @@ class SafetyValidator:
 
     Analyzes proposed execution steps, normalizes paths to prevent bypasses,
     integrates with ContextValidator, and intercepts tasks that violate safety
-    rules.
+    rules based on behavioral patterns.
     """
 
     def __init__(self):
         self.logger = logging.getLogger("SafetyValidator")
 
         # Track repeated dangerous attempts to prevent brute-forcing or looping
-        # {task_id: {offense_type: count}}
         self.violation_counts = {}
         self.max_violations = 3
 
-        # Hardcoded critical system paths (Fallback if PermissionChecker is missed)
+        # Hardcoded fallback regex patterns for critical path blocks
         self.forbidden_patterns = [
             r"node_modules",
             r"\.env$",
@@ -34,8 +39,6 @@ class SafetyValidator:
 
     async def start(self):
         """Subscribe to the event bus to intercept tasks before execution."""
-        # Listen for tasks that are ready to run but haven't been executed yet
-        # (Fired by the Planner)
         bus.subscribe("task_dispatched", self.validate_task_safety)
         self.logger.info("🚨 Safety Validator: Active and guarding execution.")
 
@@ -47,18 +50,12 @@ class SafetyValidator:
         task_data = event.data
         task_id = task_data.get("task_id")
         steps = task_data.get("steps", [])
-
-        # We assume the orchestrator or planner passes the current environmental snapshot
         current_context = task_data.get("context", {})
 
         self.logger.debug(f"Assessing safety for task [{task_id}]...")
 
         for index, step in enumerate(steps):
-            intent = step.get("intent") or task_data.get(
-                "intent"
-            )  # fallback to global intent
-
-            # ❌ FIX 1: Map "args" directly since your executor uses "args"
+            intent = step.get("intent") or task_data.get("intent")
             args = step.get("args", {})
 
             # -----------------------------
@@ -66,10 +63,9 @@ class SafetyValidator:
             # -----------------------------
             target_path = args.get("path") or args.get("target")
             if target_path:
-                # ❌ FIX 4: Normalize paths to prevent "../" bypasses
                 normalized_path = os.path.normpath(target_path)
 
-                # Check against regex patterns
+                # Check against fallback regex patterns
                 for pattern in self.forbidden_patterns:
                     if re.search(pattern, normalized_path, re.IGNORECASE):
                         await self._handle_violation(
@@ -78,7 +74,7 @@ class SafetyValidator:
                         )
                         return
 
-                # Update the args with the normalized path so the executor uses the safe version!
+                # Update the args with the normalized path
                 if "path" in args:
                     args["path"] = normalized_path
                 elif "target" in args:
@@ -87,8 +83,6 @@ class SafetyValidator:
             # -----------------------------
             # 2️⃣ Context & Permission Checker Integration
             # -----------------------------
-            # ❌ FIX 2: We pipe the action through your actual ContextValidator!
-            # We construct the state dictionary ContextValidator expects
             mock_state = {"target_path": target_path}
             mock_state.update(current_context.get("state", {}))
 
@@ -108,43 +102,61 @@ class SafetyValidator:
                 )
                 return
 
-            # -----------------------------
-            # 3️⃣ Deep Command Inspection
-            # -----------------------------
-            # ❌ FIX 3: Check more than just run_command if needed
+            # -----------------------------------------------
+            # 3️⃣ Dynamic Multi-Domain Risk Analysis (UPDATED)
+            # -----------------------------------------------
+            risk = RiskLevel.SAFE
+
+            # --- A. Command Execution Routing ---
             if intent == "run_command":
                 cmd = args.get("command", "")
                 risk = get_command_risk(cmd)
 
-                if risk == RiskLevel.HIGH:
-                    # Halt and ask for confirmation!
-                    # ❌ FIX 6: Use "publish" instead of "emit" to respect the background queue
-                    bus.publish(
-                        "confirmation_required",
-                        {
-                            "task_id": task_id,
-                            "reason": f"High risk command detected: {cmd}",
-                            "step_index": index,
-                        },
-                        source="safety_validator",
-                    )
-                    return
-                elif risk == RiskLevel.FORBIDDEN:
-                    await self._handle_violation(
-                        task_id, f"Forbidden command detected in step {index}: {cmd}"
-                    )
-                    return
+            # --- B. File System Routing ---
+            elif intent in ["write_file", "delete_file", "move_file"]:
+                path = args.get("path") or args.get("target", "")
+                risk = get_file_op_risk(intent, path)
 
-        # If all steps pass the gauntlet, we let the system proceed
+            # --- C. Web/Network Routing ---
+            elif intent in ["open_url", "search_web"]:
+                url = args.get("url") or args.get("query", "")
+                risk = get_web_op_risk(url)
+
+            # -----------------------------
+            # 4️⃣ Execution of Risk Judgments
+            # -----------------------------
+            if risk == RiskLevel.FORBIDDEN:
+                await self._handle_violation(
+                    task_id,
+                    f"Forbidden operation blocked on step {index} for intent '{intent}'.",
+                )
+                return
+
+            elif risk == RiskLevel.HIGH:
+                # Halt execution and request user human-in-the-loop intervention
+                self.logger.warning(
+                    f"Task [{task_id}] step {index} triggered HIGH RISK. Requesting confirmation."
+                )
+                bus.publish(
+                    "confirmation_required",
+                    {
+                        "task_id": task_id,
+                        "reason": f"High risk detected on step {index} with intent '{intent}'",
+                        "step_index": index,
+                        "step_data": step,
+                    },
+                    source="safety_validator",
+                )
+                return
+
+        # If it survives the gauntlet, ship it off to the executor!
         self.logger.info(f"✅ Task [{task_id}] passed all safety checks.")
-
-        # Let the executor know it is safe to proceed!
         bus.publish(
             "task_safety_cleared", task_data, source="safety_validator"
         )
 
     async def _handle_violation(self, task_id: str, reason: str):
-        """❌ FIX 5: Handles violations and tracks repeated offenses."""
+        """Handles violations and tracks repeated offenses."""
         if task_id not in self.violation_counts:
             self.violation_counts[task_id] = 0
 
@@ -154,7 +166,6 @@ class SafetyValidator:
             f"🛑 Safety violation on task {task_id} (Offense {self.violation_counts[task_id]}/{self.max_violations}): {reason}"
         )
 
-        # If the task repeatedly triggers violations, lock it out entirely
         if self.violation_counts[task_id] >= self.max_violations:
             self.logger.critical(
                 f"🚨 Task {task_id} exceeded maximum safety violations! Terminating."
@@ -166,7 +177,6 @@ class SafetyValidator:
             )
             return
 
-        # Standard failure response
         bus.publish(
             "task_failed",
             {
