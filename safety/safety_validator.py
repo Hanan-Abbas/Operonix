@@ -143,4 +143,40 @@ class SafetyValidator:
             "task_safety_cleared", task_data, source="safety_validator"
         )
 
-    
+    async def _handle_violation(self, task_id: str, reason: str):
+        """❌ FIX 5: Handles violations and tracks repeated offenses."""
+        if task_id not in self.violation_counts:
+            self.violation_counts[task_id] = 0
+
+        self.violation_counts[task_id] += 1
+
+        self.logger.warning(
+            f"🛑 Safety violation on task {task_id} (Offense {self.violation_counts[task_id]}/{self.max_violations}): {reason}"
+        )
+
+        # If the task repeatedly triggers violations, lock it out entirely
+        if self.violation_counts[task_id] >= self.max_violations:
+            self.logger.critical(
+                f"🚨 Task {task_id} exceeded maximum safety violations! Terminating."
+            )
+            bus.publish(
+                "task_aborted",
+                {"task_id": task_id, "reason": "Max safety violations reached"},
+                source="safety_validator",
+            )
+            return
+
+        # Standard failure response
+        bus.publish(
+            "task_failed",
+            {
+                "task_id": task_id,
+                "error": f"Safety Violation: {reason}",
+                "stage": "safety_check",
+            },
+            source="safety_validator",
+        )
+
+
+# Global instance
+safety_validator = SafetyValidator()
