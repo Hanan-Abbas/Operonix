@@ -92,4 +92,37 @@ class VectorStore:
                 f"Failed to save vector for task {task_id}: {e}"
             )
 
-    
+    def query_similar_experiences(self, current_intent: str, limit: int = 3):
+        """Searches the database for the closest semantic matches to a new
+
+        intent.
+
+        Returns a list of task IDs that the planner can use to look up in
+        LongTermMemory.
+        """
+        if not self.collection:
+            self.logger.warning("Query attempted before Vector Store started.")
+            return []
+
+        try:
+            results = self.collection.query(
+                query_texts=[current_intent], n_results=limit
+            )
+
+            # Extract the task IDs from the metadata results
+            matched_ids = []
+            if results and "metadatas" in results and results["metadatas"]:
+                for metadata_list in results["metadatas"]:
+                    for item in metadata_list:
+                        if item and "task_id" in item:
+                            matched_ids.append(item["task_id"])
+
+            return matched_ids
+
+        except Exception as e:
+            self.logger.error(f"Error querying vector store: {e}")
+            return []
+
+
+# Global instance
+vector_store = VectorStore()
