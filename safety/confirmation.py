@@ -70,4 +70,48 @@ class ConfirmationManager:
             source="confirmation_manager",
         )
 
+    async def handle_user_response(self, event):
+        """Processes the user's 'Allow' or 'Deny' input from the dashboard."""
+        data = event.data
+        task_id = data.get("task_id")
+        user_choice = data.get(
+            "choice"
+        ).lower()  # Expected: 'allow' or 'deny'
+
+        if task_id not in self.pending_confirmations:
+            self.logger.warning(
+                f"Received response for unknown or expired task: {task_id}"
+            )
+            return
+
+        saved_data = self.pending_confirmations.pop(task_id)
+
+        if user_choice == "allow":
+            self.logger.info(
+                f"🟢 User APPROVED task [{task_id}]. Resuming execution..."
+            )
+
+            # Re-publish the original task data to let the executor take over!
+            bus.publish(
+                "task_safety_cleared",
+                saved_data["full_task_data"],
+                source="confirmation_manager",
+            )
+
+        elif user_choice == "deny":
+            self.logger.warning(
+                f"🔴 User DENIED task [{task_id}]. Aborting execution."
+            )
+
+            # Tell the system the task failed due to user intervention
+            bus.publish(
+                "task_failed",
+                {
+                    "task_id": task_id,
+                    "error": "Operation denied by user.",
+                    "stage": "confirmation",
+                },
+                source="confirmation_manager",
+            )
+
     
