@@ -1,3 +1,13 @@
 {
-  "patterns": {}
+    "patterns": {
+        "file_create": [
+            {
+                "steps": [
+                    {"action": "create_file", "args": {"path": "<PATH>"}}
+                ],
+                "usage_count": 5,
+                "step_count": 1
+            }
+        ]
+    }
 }
