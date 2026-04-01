@@ -1,0 +1,15 @@
+{
+    "risky_intents": [
+        "file_delete",
+        "shell_command"
+    ],
+    "complex_intents": [
+        "write_code",
+        "debug_error",
+        "summarize_and_save",
+        "complex_workflow",
+        "code_generate",
+        "code_analyze",
+        "generate_text"
+    ]
+}
