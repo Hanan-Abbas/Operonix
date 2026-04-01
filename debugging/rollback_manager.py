@@ -44,4 +44,41 @@ class RollbackManager:
             )
             return ""
 
-    
+    def restore_backup(self, file_path: str, backup_path: str) -> bool:
+        """Restores a backup over the current file if the AI's fix fails."""
+        try:
+            if not backup_path or not os.path.exists(backup_path):
+                self.logger.warning(
+                    f"Cannot restore. Backup file not found: {backup_path}"
+                )
+                return False
+
+            # Copy the backup over the original file
+            shutil.copy(backup_path, file_path)
+            self.logger.info(f"♻️ Successfully rolled back {file_path}")
+
+            # Optional: Delete the backup file after successful restore to prevent clutter
+            self._delete_backup(backup_path)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to restore backup {backup_path}. Error: {e}"
+            )
+            return False
+
+    def _delete_backup(self, backup_path: str):
+        """Internal helper to clean up backup files after use."""
+        try:
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+                self.logger.info(
+                    f"🧹 Cleaned up temporary backup: {backup_path}"
+                )
+        except Exception as e:
+            self.logger.warning(f"Failed to delete backup file: {e}")
+
+
+# Global instance to be imported in auto_fix.py or elsewhere
+rollback_manager = RollbackManager()
