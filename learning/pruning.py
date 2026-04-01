@@ -64,4 +64,20 @@ class PatternPruner:
         except Exception as e:
             self.logger.error(f"Failed to prune pattern store: {e}")
 
-    
+    def _deduplicate(self, pattern_list: list) -> list:
+        """Removes exact duplicate arrays of steps while preserving order."""
+        unique_patterns = []
+        seen_steps = []
+        
+        for pattern_obj in pattern_list:
+            steps = pattern_obj.get("steps", [])
+            # We check if the actual execution steps are duplicates
+            if steps not in seen_steps:
+                seen_steps.append(steps)
+                unique_patterns.append(pattern_obj)
+                
+        return unique_patterns
+
+
+# Global instance
+pattern_pruner = PatternPruner()
