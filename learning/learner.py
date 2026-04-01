@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from core.event_bus import bus
+from learning.pattern_validator import pattern_validator
 
 
 class PatternLearner:
@@ -51,7 +52,12 @@ class PatternLearner:
         # Abstract the steps (remove specific hardcoded user parameters like specific file names)
         # to make the pattern reusable for other files!
         abstracted_steps = self._abstract_steps(steps)
-
+        is_valid = await pattern_validator.validate_pattern(
+            intent, abstracted_steps
+        )
+        if not is_valid:
+            return  # Drop the data; we don't learn bad habits!
+            
         # Save the pattern
         if intent not in self.patterns:
             self.patterns[intent] = []
