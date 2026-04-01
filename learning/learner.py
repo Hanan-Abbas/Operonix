@@ -20,7 +20,6 @@ class PatternLearner:
 
     async def start(self):
         """Subscribe to the event bus to listen for successful executions."""
-        # We listen for fully completed tasks to ensure we only learn winning strategies!
         bus.subscribe("task_completed", self.learn_from_success)
         self.logger.info(
             "🧠 Pattern Learner: Active. Watching for successful tasks to memorize."
@@ -33,9 +32,6 @@ class PatternLearner:
         """
         data = event.data
         task_id = data.get("task_id")
-
-        # In a real run, the tracker or executor would pass the full resolved plan here
-        # For now, we assume the successful steps are passed in the event payload
         steps = data.get("steps", [])
         intent = data.get("intent")
 
@@ -49,28 +45,51 @@ class PatternLearner:
             f"🤔 Analyzing successful task [{task_id}] for intent '{intent}'..."
         )
 
-        # Abstract the steps (remove specific hardcoded user parameters like specific file names)
-        # to make the pattern reusable for other files!
+        # 1. Abstract the steps
         abstracted_steps = self._abstract_steps(steps)
+
+        # 2. Validate
         is_valid = await pattern_validator.validate_pattern(
             intent, abstracted_steps
         )
         if not is_valid:
-            return  # Drop the data; we don't learn bad habits!
-            
-        # Save the pattern
+            return
+
+        # Initialize list if intent is new
         if intent not in self.patterns:
             self.patterns[intent] = []
 
-        # Check if we already have this exact sequence of actions saved
-        if abstracted_steps not in self.patterns[intent]:
-            self.patterns[intent].append(abstracted_steps)
+        # -----------------------------------------------------------------
+        # 🔄 NEW: Search through the stored objects to find a duplicate
+        # -----------------------------------------------------------------
+        duplicate_found = False
+        for pattern_obj in self.patterns[intent]:
+            if pattern_obj.get("steps") == abstracted_steps:
+                duplicate_found = True
+                # Optional: Increment how many times this specific strategy worked!
+                pattern_obj["usage_count"] = (
+                    pattern_obj.get("usage_count", 1) + 1
+                )
+                self._save_store()
+                break
+
+        # -----------------------------------------------------------------
+        # 🔄 NEW: If no duplicate exists, save it as a structured object
+        # -----------------------------------------------------------------
+        if not duplicate_found:
+            new_pattern_object = {
+                "steps": abstracted_steps,
+                "usage_count": 1,
+                "step_count": len(abstracted_steps),
+            }
+
+            self.patterns[intent].append(new_pattern_object)
             self._save_store()
+
             self.logger.info(
                 f"💾 Learned new pattern for '{intent}'! Total patterns for this intent: {len(self.patterns[intent])}"
             )
 
-            # Inform the system that the AI has evolved!
             bus.publish(
                 "pattern_learned",
                 {"intent": intent, "steps_count": len(abstracted_steps)},
@@ -78,21 +97,16 @@ class PatternLearner:
             )
         else:
             self.logger.debug(
-                f"Pattern for '{intent}' already exists. Skipping duplicate."
+                f"Pattern for '{intent}' already exists. Incremented usage count."
             )
 
     def _abstract_steps(self, steps):
-        """Replaces specific arguments with generic placeholders.
-
-        Turns: {'action': 'write_file', 'args': {'path': 'C:/user/notes.txt'}}
-        Into: {'action': 'write_file', 'args': {'path': '<PATH>'}}
-        """
+        """Replaces specific arguments with generic placeholders."""
         abstracted = []
         for step in steps:
             action = step.get("action")
             args = step.get("args", {})
 
-            # We keep the keys but clear the specific values to make it a template
             abstract_args = {}
             for key in args.keys():
                 abstract_args[key] = f"<{key.upper()}>"
@@ -114,7 +128,6 @@ class PatternLearner:
     def _save_store(self):
         """Saves patterns back to the JSON file."""
         try:
-            # Ensure directory exists
             os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
             with open(self.store_path, "w") as f:
                 json.dump({"patterns": self.patterns}, f, indent=4)
