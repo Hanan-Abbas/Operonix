@@ -64,6 +64,9 @@ class Executor:
         steps = task_data.get("steps", [])
         context = task_data.get("context", {})
 
+        # 🔄 GRAB INTENT: We need to pull this to pass it to the Learner at the end
+        intent = task_data.get("intent")
+
         logger.info(f"🚀 Starting Task [{task_id}] with {len(steps)} steps")
 
         for step_index, step in enumerate(steps):
@@ -111,7 +114,14 @@ class Executor:
             )
             logger.info(f"✅ Step {step_index} completed: {action}")
 
-        bus.publish("task_completed", {"task_id": task_id}, source="executor")
+        # 🔄 CRITICAL UPGRADE FOR LEARNER:
+        # We now pass the 'intent' and 'steps' back up so the learner can memorize them!
+        bus.publish(
+            "task_completed",
+            {"task_id": task_id, "intent": intent, "steps": steps},
+            source="executor",
+        )
+
         retry_manager.clear_task(task_id)
         logger.info(f"🏁 Task [{task_id}] completed successfully")
 
@@ -122,15 +132,8 @@ class Executor:
         action = step.get("action")
         args = step.get("args", {})
 
-        # 🔄 CHANGE 2: Path normalization moved to SafetyValidator!
-        # But keeping it here doesn't hurt as a double-check.
-
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}"
-
-        # 🔄 CHANGE 3: Removed duplicate context validation!
-        # Your SafetyValidator has already evaluated this step against
-        # context_validator and mapped it to multi-domain risk rules.
 
         # -------------------------
         # Window focus (if needed)
