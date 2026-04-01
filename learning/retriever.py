@@ -41,4 +41,46 @@ class PatternRetriever:
 
         return hydrated_steps
 
-    
+    def _hydrate_steps(self, abstract_steps: list, real_args: dict) -> list:
+        """Replaces generic placeholders like <PATH> with real arguments from
+
+        the user.
+        """
+        hydrated_steps = []
+
+        for step in abstract_steps:
+            action = step.get("action")
+            abstract_args = step.get("args", {})
+            realized_args = {}
+
+            for key, placeholder in abstract_args.items():
+                # If the placeholder is <PATH>, we look for 'path' in the user's arguments
+                lookup_key = key.lower()
+
+                if lookup_key in real_args:
+                    realized_args[key] = real_args[lookup_key]
+                else:
+                    # Fallback if the user omitted a required argument
+                    realized_args[key] = placeholder
+                    self.logger.warning(
+                        f"Missing argument '{lookup_key}' to fill pattern placeholder!"
+                    )
+
+            hydrated_steps.append({"action": action, "args": realized_args})
+
+        return hydrated_steps
+
+    def _load_patterns(self) -> dict:
+        """Loads the pattern store from disk."""
+        if os.path.exists(self.store_path):
+            try:
+                with open(self.store_path, "r") as f:
+                    data = json.load(f)
+                    return data.get("patterns", {})
+            except Exception as e:
+                self.logger.error(f"Failed to load pattern store: {e}")
+        return {}
+
+
+# Global instance
+retriever = PatternRetriever()
