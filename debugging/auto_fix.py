@@ -3,19 +3,17 @@ import os
 from core.config import settings
 from core.event_bus import bus
 from brain.llm_client import llm_client
-from executor.executor import executor  # Assuming executor handles subprocesses
-# 🔄 NEW: Import your dedicated rollback manager
+
+# 🔄 Externalized helpers mapped to the new architecture
 from debugging.rollback_manager import rollback_manager
+from debugging.fix_validator import fix_validator
 
 
 class AutoFixer:
     """🛠️ Advanced Self-Healing Engine.
 
-    Features:
-    - Multi-attempt fixing loop
-    - Externalized Rollback system
-    - Critic feedback loop
-    - Safe execution + logging
+    Orchestrates the loop: DeepSeek (Gen) -> Gemini (Critique via Validator) ->
+    Pytest (Execution).
     """
 
     def __init__(self):
@@ -25,6 +23,7 @@ class AutoFixer:
     async def attempt_fix(self, parsed_report: dict):
         file_path = parsed_report.get("file")
 
+        # 1. Guard rails
         if not file_path or not os.path.exists(file_path):
             self.logger.warning(f"Invalid file: {file_path}")
             return
@@ -35,19 +34,20 @@ class AutoFixer:
 
         self.logger.info(f"🔧 Starting self-healing for {file_path}")
 
-        # 💾 BACKUP (Now handled by rollback_manager)
+        # 💾 2. Backup using Rollback Manager
         backup_path = rollback_manager.create_backup(file_path)
 
         try:
             with open(file_path, "r") as f:
                 code = f.read()
 
+            # 3. Enter the multi-attempt fixing loop
             for attempt in range(self.max_attempts):
                 self.logger.info(
                     f"⚡ Attempt {attempt+1}/{self.max_attempts}"
                 )
 
-                # 🧠 GENERATE FIX (DeepSeek)
+                # 🧠 GENERATE FIX (DeepSeek via LLMClient)
                 gen_prompt = self._build_fix_prompt(
                     file_path, code, parsed_report
                 )
@@ -58,31 +58,30 @@ class AutoFixer:
                     self.logger.warning("No code generated.")
                     continue
 
-                # ✨ CRITIC REVIEW (Gemini)
-                critic_prompt = self._build_critic_prompt(
-                    file_path, new_code, parsed_report
+                # ✨ CRITIC REVIEW (Gemini via external FixValidator)
+                audit = await fix_validator.validate_fix(
+                    file_path, new_code, parsed_report.get("message")
                 )
-                audit = await llm_client.critique(critic_prompt)
 
                 if not audit.get("valid", False):
                     self.logger.warning(
                         f"❌ Critic rejected: {audit.get('reason')}"
                     )
 
-                    # 🧠 FEEDBACK LOOP
+                    # 🧠 Apply feedback and loop back to DeepSeek
                     code = self._apply_feedback(code, audit)
                     continue
 
-                # 💾 APPLY FIX
+                # 💾 APPLY PROPOSED FIX
                 with open(file_path, "w") as f:
                     f.write(new_code)
 
-                # 🧪 RUN TESTS
+                # 🧪 RUN TESTS (Executor)
                 success, error_output = self._run_tests(file_path)
 
                 if success:
                     self.logger.info("🔥 FIX SUCCESSFUL!")
-                    bus.publish(
+                    await bus.publish(
                         "fix_applied",
                         {"file": file_path, "status": "verified"},
                         source="auto_fix",
@@ -90,10 +89,10 @@ class AutoFixer:
                     return
 
                 self.logger.warning(
-                    "💥 Tests failed, retrying with feedback..."
+                    "💥 Tests failed, retrying with execution feedback..."
                 )
 
-                # 🧠 FEEDBACK FROM EXECUTOR
+                # 🧠 Feed failing terminal output back into the loop
                 code = f"""
 Previous code failed tests.
 
@@ -104,7 +103,7 @@ Fix the issues in this code:
 {new_code}
 """
 
-            # ❌ ALL ATTEMPTS FAILED → ROLLBACK
+            # ❌ ALL ATTEMPTS FAILED → Auto-execute Rollback
             self.logger.error("🚨 All fix attempts failed. Rolling back...")
             rollback_manager.restore_backup(file_path, backup_path)
 
@@ -117,7 +116,7 @@ Fix the issues in this code:
     def _apply_feedback(self, code, audit):
         """Builds a prompt inserting Gemini's rejection notes."""
         return f"""
-The previous code was rejected.
+The previous code was rejected by the auditor.
 
 REASON:
 {audit.get('reason')}
@@ -132,7 +131,6 @@ Fix this code:
     def _run_tests(self, file_path):
         """Runs pytest and returns (success_boolean, output_string)."""
         try:
-            # Reusing the clean subprocess pattern you wrote
             import subprocess
 
             result = subprocess.run(
@@ -146,11 +144,13 @@ Fix this code:
             return False, str(e)
 
     def _extract_code(self, response: str) -> str:
+        """Pulls raw python code out of LLM markdown wrappers."""
         if "```python" in response:
             return response.split("```python")[1].split("```")[0].strip()
         return response.strip()
 
     def _build_fix_prompt(self, file_path, code, report):
+        """Prepares a clear engineering prompt for DeepSeek."""
         return f"""
 Fix this Python file.
 
@@ -161,22 +161,4 @@ Code:
 {code}
 
 Return ONLY fixed code in ```python block.
-"""
-
-    def _build_critic_prompt(self, file_path, code, report):
-        return f"""
-Validate this fix.
-
-Error:
-{report.get('message')}
-
-Code:
-{code}
-
-Return JSON:
-{{
-"valid": true/false,
-"reason": "...",
-"suggested_tweaks": "..."
-}}
 """
