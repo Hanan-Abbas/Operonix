@@ -20,7 +20,7 @@ from executor.executor import executor
 from learning.evolution_engine import evolution_engine
 from memory.long_term_memory import long_term_memory
 from memory.vector_store import vector_store
-from safety.confirmation import ConfirmationManager
+from safety.confirmation import confirmation_manager
 
 # 🔄 NEW: Import your learning assets
 from learning.learner import learner
@@ -93,9 +93,7 @@ class LifecycleManager:
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
-        # Fixed a minor undefined variable bug from your snippet (confirmation_manager -> ConfirmationManager instance)
-        # Assuming you have a global instance imported, or initialized here:
-        # await confirmation_manager.start()
+        await confirmation_manager.start()
 
         # -----------------------------------------------------------------
         # 🔄 NEW: Boot the Learning System
