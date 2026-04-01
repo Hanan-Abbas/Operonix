@@ -1,15 +1,15 @@
 import asyncio
 import logging
-from core.config import settings  # <-- IMPORT CONFIG
+from core.config import settings
 from core.event_bus import bus
+# 🔄 NEW: Import your vector store!
+from memory.vector_store import vector_store
 
 
 class IntentParser:
 
     def __init__(self):
         self.logger = logging.getLogger("IntentParser")
-
-        # Fallback intents if registry.py isn't loaded yet
         self.fallback_intents = [
             "file_create",
             "file_delete",
@@ -24,29 +24,52 @@ class IntentParser:
 
     async def start(self):
         """Subscribe to the output of the LLM Client."""
-        # Listen for raw LLM outputs needing parsing and validation
         bus.subscribe("intent_parsed", self.validate_and_route)
         self.logger.info("Intent Parser active and monitoring LLM output...")
+
+        # 🔄 Populate the vector store with official intents on startup
+        try:
+            from capabilities.registry import capability_registry
+
+            supported = capability_registry.get_all_intents() or self.fallback_intents
+        except ImportError:
+            supported = self.fallback_intents
+
+        # We teach the vector DB what our official capabilities are!
+        await vector_store.add_intents(supported)
 
     async def validate_and_route(self, event):
         """Validates if the intent is supported and determines the next step."""
         task_id = event.data.get("task_id")
-        intent = event.data.get("intent")
+        raw_intent = event.data.get("intent")
         params = event.data.get("parameters", {})
 
-        # 1. Validation Check against the registry (or fallback)
-        supported = self.fallback_intents
+        # -----------------------------------------------------------------
+        # 🔄 NEW: Universal Vector Search (No hardcoding!)
+        # -----------------------------------------------------------------
+        self.logger.info(f"🔍 Searching VectorDB for closest match to: '{raw_intent}'")
+        
+        # Search the database. It returns the best match and a confidence score.
+        matched_intent, confidence = await vector_store.search_closest_intent(raw_intent)
+
+        # If the DB is highly confident it found a match, we rewrite it!
+        if matched_intent and confidence > 0.75:
+            self.logger.info(
+                f"🎯 Vector Match: '{raw_intent}' -> '{matched_intent}' (Conf: {confidence:.2f})"
+            )
+            intent = matched_intent
+        else:
+            # If no good match, we keep the raw intent and let validation handle it
+            intent = raw_intent
+
+        # 1. Validation Check against the registry
         try:
             from capabilities.registry import capability_registry
-
-            supported = capability_registry.get_all_intents() or supported
+            supported = capability_registry.get_all_intents() or self.fallback_intents
         except ImportError:
-            self.logger.warning(
-                "Could not load capability_registry. Using fallback intents."
-            )
+            supported = self.fallback_intents
 
         if intent not in supported:
-            # Using publish instead of emit for safe execution on the queue
             bus.publish(
                 "task_failed",
                 data={
@@ -57,11 +80,9 @@ class IntentParser:
             )
             return
 
-        print(
-            f"🎯 Intent Parser: Validated [{intent}] for Task [{task_id}]"
-        )
+        print(f"🎯 Intent Parser: Validated [{intent}] for Task [{task_id}]")
 
-        # 2. Safety & Risk Check (Pre-Planning)
+        # 2. Safety & Risk Check
         is_high_risk = self._check_risk(intent, params)
 
         if is_high_risk and settings.SAFE_MODE:
@@ -90,11 +111,9 @@ class IntentParser:
         """Advanced risk logic utilizing core/config.py."""
         risky_intents = ["file_delete", "shell_command"]
 
-        # Check 1: Is the intent inherently dangerous?
         if intent in risky_intents:
             return True
 
-        # Check 2: Is the AI trying to modify a restricted system path?
         target_path = params.get("path") or params.get("target")
         if target_path:
             for restricted in settings.RESTRICTED_PATHS:
