@@ -2,102 +2,181 @@ import logging
 import os
 from core.config import settings
 from core.event_bus import bus
-# We import your brain client to actually communicate with the LLMs!
 from brain.llm_client import llm_client
+from executor.executor import executor  # Assuming executor handles subprocesses
+# 🔄 NEW: Import your dedicated rollback manager
+from debugging.rollback_manager import rollback_manager
+
 
 class AutoFixer:
-    """🛠️ The self-healing engineer of the AI OS.
-    
-    Takes a parsed error report, reads the source code, asks the LLM for a 
-    solution, and applies the patch.
+    """🛠️ Advanced Self-Healing Engine.
+
+    Features:
+    - Multi-attempt fixing loop
+    - Externalized Rollback system
+    - Critic feedback loop
+    - Safe execution + logging
     """
+
     def __init__(self):
         self.logger = logging.getLogger("AutoFixer")
-        self.max_attempts = 3  # Prevent infinite debug loops!
+        self.max_attempts = 3
 
     async def attempt_fix(self, parsed_report: dict):
-        """Processes the error report and attempts to rewrite the broken file."""
         file_path = parsed_report.get("file")
-        error_type = parsed_report.get("error_type")
-        message = parsed_report.get("message")
-        
-        # Guard rails: Don't try to fix if there is no file associated
+
         if not file_path or not os.path.exists(file_path):
-            self.logger.warning(f"Cannot auto-fix. File not found or invalid: {file_path}")
+            self.logger.warning(f"Invalid file: {file_path}")
             return
 
-        # Guard rails: Prevent editing core system files for safety
-        if any(restricted in file_path for restricted in settings.RESTRICTED_PATHS):
-            self.logger.warning(f"🛡️ Auto-fix blocked! Attempted to modify a restricted path: {file_path}")
+        if any(r in file_path for r in settings.RESTRICTED_PATHS):
+            self.logger.warning(f"🛡️ Restricted file blocked: {file_path}")
             return
 
-        self.logger.info(f"🔧 Attempting to auto-fix {error_type} in {file_path}...")
+        self.logger.info(f"🔧 Starting self-healing for {file_path}")
+
+        # 💾 BACKUP (Now handled by rollback_manager)
+        backup_path = rollback_manager.create_backup(file_path)
 
         try:
-            # 1. Read the broken code
             with open(file_path, "r") as f:
-                original_code = f.read()
+                code = f.read()
 
-            # 2. Build a highly specific prompt (Zero Hardcoding!)
-            prompt = self._build_fix_prompt(file_path, original_code, parsed_report)
+            for attempt in range(self.max_attempts):
+                self.logger.info(
+                    f"⚡ Attempt {attempt+1}/{self.max_attempts}"
+                )
 
-            # 3. Call the LLM (This is where your API keys in config.py are finally used!)
-            self.logger.info(f"🧠 Consulting LLM ({settings.DEFAULT_LLM}) for a solution...")
-            
-            # We use the default LLM specified in your config (like gpt-4o)
-            suggested_code = await llm_client.generate(prompt, model=settings.DEFAULT_LLM)
+                # 🧠 GENERATE FIX (DeepSeek)
+                gen_prompt = self._build_fix_prompt(
+                    file_path, code, parsed_report
+                )
+                response = await llm_client.generate(gen_prompt)
+                new_code = self._extract_code(response)
 
-            if not suggested_code or "```python" not in suggested_code:
-                self.logger.error("LLM failed to return a valid code block for the fix.")
-                return
+                if not new_code:
+                    self.logger.warning("No code generated.")
+                    continue
 
-            # 4. Extract the clean code from the markdown response
-            clean_code = self._extract_code(suggested_code)
+                # ✨ CRITIC REVIEW (Gemini)
+                critic_prompt = self._build_critic_prompt(
+                    file_path, new_code, parsed_report
+                )
+                audit = await llm_client.critique(critic_prompt)
 
-            # 5. Apply the fix!
-            with open(file_path, "w") as f:
-                f.write(clean_code)
+                if not audit.get("valid", False):
+                    self.logger.warning(
+                        f"❌ Critic rejected: {audit.get('reason')}"
+                    )
 
-            self.logger.info(f"✅ Successfully patched {file_path}. Prompting system to re-run.")
-            
-            # 6. Alert the system that a fix was applied so it can test it!
-            bus.publish(
-                "fix_applied", 
-                {"file": file_path, "error_type": error_type}, 
-                source="auto_fix"
-            )
+                    # 🧠 FEEDBACK LOOP
+                    code = self._apply_feedback(code, audit)
+                    continue
+
+                # 💾 APPLY FIX
+                with open(file_path, "w") as f:
+                    f.write(new_code)
+
+                # 🧪 RUN TESTS
+                success, error_output = self._run_tests(file_path)
+
+                if success:
+                    self.logger.info("🔥 FIX SUCCESSFUL!")
+                    bus.publish(
+                        "fix_applied",
+                        {"file": file_path, "status": "verified"},
+                        source="auto_fix",
+                    )
+                    return
+
+                self.logger.warning(
+                    "💥 Tests failed, retrying with feedback..."
+                )
+
+                # 🧠 FEEDBACK FROM EXECUTOR
+                code = f"""
+Previous code failed tests.
+
+ERROR:
+{error_output}
+
+Fix the issues in this code:
+{new_code}
+"""
+
+            # ❌ ALL ATTEMPTS FAILED → ROLLBACK
+            self.logger.error("🚨 All fix attempts failed. Rolling back...")
+            rollback_manager.restore_backup(file_path, backup_path)
 
         except Exception as e:
-            self.logger.error(f"Failed to execute auto-fix: {e}")
+            self.logger.error(f"Critical failure: {e}")
+            rollback_manager.restore_backup(file_path, backup_path)
 
-    def _build_fix_prompt(self, file_path: str, code: str, report: dict) -> str:
-        """Constructs a prompt dynamically based on the specific error."""
+    # ---------------- HELPERS ---------------- #
+
+    def _apply_feedback(self, code, audit):
+        """Builds a prompt inserting Gemini's rejection notes."""
         return f"""
-You are the core debugging brain of an AI Operating System. 
-A python file has thrown an error during execution, and you need to fix it.
+The previous code was rejected.
 
-CRITICAL INSTRUCTIONS:
-1. Return ONLY the fully corrected python file inside a ```python ``` code block.
-2. Do not explain the fix. Do not write anything outside the code block.
-3. Preserve the original logic unless it is directly causing the bug.
+REASON:
+{audit.get('reason')}
 
---- BROKEN FILE ---
-Path: {file_path}
+SUGGESTIONS:
+{audit.get('suggested_tweaks')}
 
---- ERROR REPORT ---
-Type: {report.get('error_type')}
-Message: {report.get('message')}
-Line Number: {report.get('line')}
-Function: {report.get('function')}
-
---- ORIGINAL SOURCE CODE ---
+Fix this code:
 {code}
 """
 
+    def _run_tests(self, file_path):
+        """Runs pytest and returns (success_boolean, output_string)."""
+        try:
+            # Reusing the clean subprocess pattern you wrote
+            import subprocess
+
+            result = subprocess.run(
+                ["pytest", file_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return result.returncode == 0, result.stderr + result.stdout
+        except Exception as e:
+            return False, str(e)
+
     def _extract_code(self, response: str) -> str:
-        """Extracts raw code from an LLM markdown response."""
         if "```python" in response:
-            parts = response.split("```python")
-            code_part = parts[1].split("```")[0]
-            return code_part.strip()
+            return response.split("```python")[1].split("```")[0].strip()
         return response.strip()
+
+    def _build_fix_prompt(self, file_path, code, report):
+        return f"""
+Fix this Python file.
+
+Error:
+{report.get('message')}
+
+Code:
+{code}
+
+Return ONLY fixed code in ```python block.
+"""
+
+    def _build_critic_prompt(self, file_path, code, report):
+        return f"""
+Validate this fix.
+
+Error:
+{report.get('message')}
+
+Code:
+{code}
+
+Return JSON:
+{{
+"valid": true/false,
+"reason": "...",
+"suggested_tweaks": "..."
+}}
+"""
