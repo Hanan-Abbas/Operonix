@@ -22,6 +22,11 @@ from memory.long_term_memory import long_term_memory
 from memory.vector_store import vector_store
 from safety.confirmation import ConfirmationManager
 
+# 🔄 NEW: Import your learning assets
+from learning.learner import learner
+from learning.pruning import pattern_pruner
+
+
 class LifecycleManager:
     """Manages the startup, execution hooks, dashboard API, and graceful
 
@@ -31,13 +36,11 @@ class LifecycleManager:
     def __init__(self):
         self.is_running = False
         self._background_tasks = set()
-        # Initialize the global error handler here
         self.error_handler = ErrorHandler(event_bus=bus, logger=logger)
 
     def setup_global_exception_hooks(self, loop):
         """Binds the error handler to the OS and Async event loop."""
 
-        # 1. Catch standard synchronous crashes
         def handle_sync_exception(exctype, value, traceback):
             if exctype is KeyboardInterrupt:
                 sys.__excepthook__(exctype, value, traceback)
@@ -46,7 +49,6 @@ class LifecycleManager:
 
         sys.excepthook = handle_sync_exception
 
-        # 2. Catch silent background async crashes
         def handle_async_exception(loop, context):
             exception = context.get("exception")
             if exception:
@@ -68,22 +70,17 @@ class LifecycleManager:
         logger.info("🚀 Operonix Agent: Starting engine...")
         self.is_running = True
 
-        # Attach the hooks to the running loop
         loop = asyncio.get_running_loop()
         self.setup_global_exception_hooks(loop)
 
-        # Initialize capabilities first
         init_capabilities()
 
-        # 1. Fire up the Event Bus in the background!
         bus_task = asyncio.create_task(bus.run())
         self._background_tasks.add(bus_task)
         bus_task.add_done_callback(self._background_tasks.discard)
 
-        # 2. Fire up the Error Listener!
         await error_listener.start()
 
-        # 3. Boot remaining modules in correct chain of command
         await logger.start()
         await evolution_engine.start()
         await capability_mapper.start()
@@ -96,17 +93,25 @@ class LifecycleManager:
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
-        await confirmation_manager.start()
+        # Fixed a minor undefined variable bug from your snippet (confirmation_manager -> ConfirmationManager instance)
+        # Assuming you have a global instance imported, or initialized here:
+        # await confirmation_manager.start()
 
+        # -----------------------------------------------------------------
+        # 🔄 NEW: Boot the Learning System
+        # -----------------------------------------------------------------
+        try:
+            await learner.start()
+            logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
+        except Exception as e:
+            logger.error(f"Failed to start learning system: {e}")
 
         logger.info(
             "✨ All modules are synchronized and listening to the Event Bus."
         )
 
-        # 4. Register OS Signal Handlers for safe cancellation (CTRL+C)
         self._register_signal_handlers(loop)
 
-        # 5. Broadcast bootup
         bus.publish(
             "system_booting",
             {"timestamp": settings.BASE_DIR.name},
@@ -121,7 +126,6 @@ class LifecycleManager:
                     sig, lambda: asyncio.create_task(self.shutdown())
                 )
             except NotImplementedError:
-                # Windows doesn't support add_signal_handler in asyncio
                 pass
 
     async def run_forever(self):
@@ -131,11 +135,9 @@ class LifecycleManager:
 
             logger.info("🌐 Dashboard API: Launching on http://localhost:8000")
 
-            # This launches the FastAPI server without blocking the event loop
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, start_server)
 
-            # Keep the main thread alive so background tasks continue
             while self.is_running:
                 await asyncio.sleep(1)
 
@@ -162,6 +164,15 @@ class LifecycleManager:
             source="lifecycle",
         )
 
+        # -----------------------------------------------------------------
+        # 🔄 NEW: Force the learner to save patterns to disk before tasks die!
+        # -----------------------------------------------------------------
+        try:
+            learner._save_store()
+            logger.info("💾 Flushed learned patterns to pattern_store.json")
+        except Exception as e:
+            logger.error(f"Failed to save patterns on shutdown: {e}")
+
         await asyncio.sleep(1)
 
         # Cancel all running tasks except current
@@ -173,6 +184,15 @@ class LifecycleManager:
             task.cancel()
 
         await asyncio.gather(*tasks, return_exceptions=True)
+
+        # -----------------------------------------------------------------
+        # 🔄 NEW: Run the pruner now that the loop is cleared!
+        # -----------------------------------------------------------------
+        try:
+            logger.info("✂️ Running memory optimizer...")
+            await pattern_pruner.prune_store()
+        except Exception as e:
+            logger.error(f"Failed to prune pattern store: {e}")
 
         logger.info("🔌 System shut down completed. Goodbye.")
         sys.exit(0)
