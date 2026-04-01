@@ -15,6 +15,7 @@ class CapabilityMapper:
     (written by evolution_engine).
     """
 
+    # Static fallbacks for core system intents
     SYNONYMS = {
         "file_create": "write_file",
         "create_file": "write_file",
@@ -34,6 +35,15 @@ class CapabilityMapper:
         "open_app": "run_command",
         "write_code": "write_file",
         "ui_interact": "click",
+    }
+
+    # 🔄 UPGRADE: Dynamic argument normalization map instead of hardcoded IFs
+    ARG_ALIASES = {
+        "write_file": {"name": "path", "content": "data"},
+        "run_command": {"cmd": "command", "app": "command"},
+        "search_web": {"q": "query"},
+        "open_url": {"link": "url"},
+        "move_file": {"src": "path", "dst": "destination"},
     }
 
     def __init__(self):
@@ -60,26 +70,40 @@ class CapabilityMapper:
             return r
         if r in self.learned_aliases:
             return self.learned_aliases[r]
-        return self.SYNONYMS.get(r, r)
+
+        # Check if it hits our hardcoded base synonyms
+        if r in self.SYNONYMS:
+            return self.SYNONYMS[r]
+
+        # 🔄 UPGRADE: Dynamic prefix matching!
+        # If it's a completely new action (like 'edit_file'), we can infer it
+        if r.startswith("create_") or r.startswith("make_"):
+            return f"write_{r.split('_', 1)[1]}"
+
+        return r
 
     def normalize_args(self, intent: str, params: dict) -> dict:
+        """Standardizes argument keys dynamically."""
         p = dict(params or {})
-        if intent == "write_file" and "path" not in p and p.get("name"):
-            p["path"] = p.pop("name")
-        if intent == "run_command" and "command" not in p and p.get("cmd"):
-            p["command"] = p.pop("cmd")
-        if intent == "search_web" and "query" not in p and p.get("q"):
-            p["query"] = p.pop("q")
-        if intent == "open_url" and "url" not in p and p.get("link"):
-            p["url"] = p.pop("link")
-        if intent == "run_command" and "command" not in p and p.get("app"):
-            p["command"] = str(p.pop("app"))
+
+        # 🔄 UPGRADE: Apply mapped transformations dynamically
+        if intent in self.ARG_ALIASES:
+            rule = self.ARG_ALIASES[intent]
+            for old_key, new_key in rule.items():
+                if old_key in p and new_key not in p:
+                    # Move data over to the standardized key
+                    p[new_key] = p.pop(old_key)
+
+        # Catch remaining floating standard keys (fallback rule)
+        if "content" in p and "data" not in p:
+            p["data"] = p.pop("content")
+
         return p
 
     async def start(self):
         self._load_learned_aliases()
 
-        # 🔄 CHANGE 1: Listen to the IntentParser after it finishes validating
+        # Listen to the IntentParser after it finishes validating
         bus.subscribe("intent_validated", self.map_intent_to_capability)
 
         # Listen for when the evolution engine dumps new knowledge
@@ -107,7 +131,6 @@ class CapabilityMapper:
                 normalized,
             )
 
-            # Using publish instead of emit for background safety
             bus.publish(
                 "mapping_failed",
                 {
@@ -125,13 +148,12 @@ class CapabilityMapper:
             "intent": normalized,
             "capability": normalized,
             "suggested_tool": None,
-            # We pass the cleaned/normalized arguments forward!
             "parameters": args,
         }
 
         self.logger.info("Mapped '%s' -> '%s'", raw_intent, normalized)
 
-        # 🔄 CHANGE 2: Fire the exact event that the Decision Engine is waiting for!
+        # Fire the exact event that the Decision Engine is waiting for!
         bus.publish(
             "capability_mapped", mapping_result, source="capability_mapper"
         )
