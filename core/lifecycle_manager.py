@@ -21,8 +21,6 @@ from learning.evolution_engine import evolution_engine
 from memory.long_term_memory import long_term_memory
 from memory.vector_store import vector_store
 from safety.confirmation import confirmation_manager
-
-# 🔄 NEW: Import your learning assets
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 
