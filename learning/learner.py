@@ -75,4 +75,46 @@ class PatternLearner:
                 f"Pattern for '{intent}' already exists. Skipping duplicate."
             )
 
-    
+    def _abstract_steps(self, steps):
+        """Replaces specific arguments with generic placeholders.
+
+        Turns: {'action': 'write_file', 'args': {'path': 'C:/user/notes.txt'}}
+        Into: {'action': 'write_file', 'args': {'path': '<PATH>'}}
+        """
+        abstracted = []
+        for step in steps:
+            action = step.get("action")
+            args = step.get("args", {})
+
+            # We keep the keys but clear the specific values to make it a template
+            abstract_args = {}
+            for key in args.keys():
+                abstract_args[key] = f"<{key.upper()}>"
+
+            abstracted.append({"action": action, "args": abstract_args})
+        return abstracted
+
+    def _load_store(self):
+        """Loads existing patterns from the JSON file."""
+        if os.path.exists(self.store_path):
+            try:
+                with open(self.store_path, "r") as f:
+                    data = json.load(f)
+                    self.patterns = data.get("patterns", {})
+            except Exception as e:
+                self.logger.error(f"Failed to load pattern store: {e}")
+                self.patterns = {}
+
+    def _save_store(self):
+        """Saves patterns back to the JSON file."""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
+            with open(self.store_path, "w") as f:
+                json.dump({"patterns": self.patterns}, f, indent=4)
+        except Exception as e:
+            self.logger.error(f"Failed to save pattern store: {e}")
+
+
+# Global instance
+learner = PatternLearner()
