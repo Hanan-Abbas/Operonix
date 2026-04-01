@@ -70,4 +70,34 @@ class AutoFixer:
         except Exception as e:
             self.logger.error(f"Failed to execute auto-fix: {e}")
 
-    
+    def _build_fix_prompt(self, file_path: str, code: str, report: dict) -> str:
+        """Constructs a prompt dynamically based on the specific error."""
+        return f"""
+You are the core debugging brain of an AI Operating System. 
+A python file has thrown an error during execution, and you need to fix it.
+
+CRITICAL INSTRUCTIONS:
+1. Return ONLY the fully corrected python file inside a ```python ``` code block.
+2. Do not explain the fix. Do not write anything outside the code block.
+3. Preserve the original logic unless it is directly causing the bug.
+
+--- BROKEN FILE ---
+Path: {file_path}
+
+--- ERROR REPORT ---
+Type: {report.get('error_type')}
+Message: {report.get('message')}
+Line Number: {report.get('line')}
+Function: {report.get('function')}
+
+--- ORIGINAL SOURCE CODE ---
+{code}
+"""
+
+    def _extract_code(self, response: str) -> str:
+        """Extracts raw code from an LLM markdown response."""
+        if "```python" in response:
+            parts = response.split("```python")
+            code_part = parts[1].split("```")[0]
+            return code_part.strip()
+        return response.strip()
