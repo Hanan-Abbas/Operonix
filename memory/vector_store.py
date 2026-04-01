@@ -22,6 +22,7 @@ class VectorStore:
         self.storage_dir = os.path.join("memory", "stores", "chroma_db")
         self.client = None
         self.collection = None
+        self.intent_collection = None  # 🔄 NEW: For normalizing raw user inputs!
 
     async def start(self):
         """Initializes the database and subscribes to archiving events."""
@@ -32,7 +33,6 @@ class VectorStore:
             self.client = chromadb.PersistentClient(path=self.storage_dir)
 
             # 2. Use Chroma's default lightweight embedding model (runs locally!)
-            # Note: The first time this runs, it may download a small model file (~100MB)
             emb_fn = embedding_functions.DefaultEmbeddingFunction()
 
             # 3. Create or load the collection where experiences live
@@ -40,7 +40,12 @@ class VectorStore:
                 name="agent_experiences", embedding_function=emb_fn
             )
 
-            # 4. Listen to the same event as the LongTermMemory!
+            # 4. 🔄 NEW: Create or load the collection specifically for intents
+            self.intent_collection = self.client.get_or_create_collection(
+                name="system_intents", embedding_function=emb_fn
+            )
+
+            # 5. Listen to the same event as the LongTermMemory!
             bus.subscribe("task_memory_archived", self.save_vector_experience)
 
             self.logger.info(
@@ -61,11 +66,9 @@ class VectorStore:
         task_id = task_data.get("task_id")
         intent = task_data.get("intent")
 
-        # We only want to memorize successful tasks
         if task_data.get("status") != "completed":
             return
 
-        # We construct a highly descriptive string for the model to "understand"
         steps = task_data.get("steps", [])
         steps_summary = ", ".join(
             [step.get("action", "") for step in steps if "action" in step]
@@ -76,29 +79,22 @@ class VectorStore:
         )
 
         try:
-            # Chroma automatically handles the conversion to vectors behind the scenes!
             self.collection.add(
                 documents=[content_to_vectorize],
                 metadatas=[{"task_id": task_id, "intent": intent}],
-                ids=[task_id],  # We use your unique task_id as the DB primary key
+                ids=[task_id],
             )
-
             self.logger.debug(
                 f"Saved vector embedding for task [{task_id}] -> '{intent}'"
             )
 
         except Exception as e:
-            self.logger.error(
-                f"Failed to save vector for task {task_id}: {e}"
-            )
+            self.logger.error(f"Failed to save vector for task {task_id}: {e}")
 
     def query_similar_experiences(self, current_intent: str, limit: int = 3):
         """Searches the database for the closest semantic matches to a new
 
         intent.
-
-        Returns a list of task IDs that the planner can use to look up in
-        LongTermMemory.
         """
         if not self.collection:
             self.logger.warning("Query attempted before Vector Store started.")
@@ -109,7 +105,6 @@ class VectorStore:
                 query_texts=[current_intent], n_results=limit
             )
 
-            # Extract the task IDs from the metadata results
             matched_ids = []
             if results and "metadatas" in results and results["metadatas"]:
                 for metadata_list in results["metadatas"]:
@@ -122,6 +117,59 @@ class VectorStore:
         except Exception as e:
             self.logger.error(f"Error querying vector store: {e}")
             return []
+
+    # -----------------------------------------------------------------
+    # 🔄 NEW METHOD 1: Teach the DB what your official capabilities are
+    # -----------------------------------------------------------------
+    async def add_intents(self, intents: list):
+        """Populates the intent collection with official system capabilities."""
+        if not self.intent_collection:
+            return
+
+        try:
+            for intent in intents:
+                # We use the intent string as both the text and the ID to prevent duplicates
+                self.intent_collection.upsert(
+                    documents=[intent.replace("_", " ")],  # e.g., "file create" instead of "file_create"
+                    metadatas=[{"official_intent": intent}],
+                    ids=[intent],
+                )
+            self.logger.debug(
+                f"Successfully indexed {len(intents)} official intents."
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to add intents to vector store: {e}")
+
+    # -----------------------------------------------------------------
+    # 🔄 NEW METHOD 2: Find the closest matching official intent
+    # -----------------------------------------------------------------
+    async def search_closest_intent(
+        self, raw_intent: str
+    ) -> (str or None, float):
+        """Searches for the closest official intent to a raw string."""
+        if not self.intent_collection:
+            return None, 0.0
+
+        try:
+            results = self.intent_collection.query(
+                query_texts=[raw_intent], n_results=1
+            )
+
+            if results and results["metadatas"] and results["metadatas"][0]:
+                best_match = results["metadatas"][0][0]["official_intent"]
+                # Chroma returns squared L2 distances. A distance of 0.0 means an exact match.
+                # Smaller distances = closer matches. 
+                distance = results["distances"][0][0]
+
+                # Convert L2 distance to a rough confidence score (1.0 = perfect match)
+                confidence = max(0.0, 1.0 - (distance / 2.0))
+
+                return best_match, confidence
+
+        except Exception as e:
+            self.logger.error(f"Error searching closest intent: {e}")
+
+        return None, 0.0
 
 
 # Global instance
