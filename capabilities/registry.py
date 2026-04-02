@@ -1,4 +1,3 @@
-# capabilities/registry.py
 import asyncio
 import importlib
 import pkgutil
@@ -33,6 +32,14 @@ class CapabilityRegistry:
     def get(self, name: str):
         """Retrieve a capability function by intent name."""
         return self.registry.get(name)
+
+    # 🔗 NEW: Bridge for CapabilityMapper
+    def get_all_names(self):
+        """Returns a list of all registered capability names.
+        
+        Required by the vector CapabilityMapper to generate embeddings on boot.
+        """
+        return list(self.registry.keys())
 
     # -------------------------
     # Validation Methods
@@ -77,9 +84,7 @@ class CapabilityRegistry:
     async def execute(self, intent_name, context, args):
         """
         Unified interface to execute a capability:
-        - Fetch capability
-        - Run it
-        - Validate output
+        - Fetch capability -> Run it -> Validate output
         Returns (success: bool, action_data or error_message)
         """
         capability = self.get(intent_name)
@@ -124,8 +129,14 @@ class CapabilityRegistry:
                 for attr_name in dir(module):
                     if attr_name.startswith("_"):
                         continue
-                    if attr_name.startswith("validate_") or attr_name.endswith("_check"):
+                    # 🔄 UPGRADE: Added 'normalize_' and 'parse_' to protected words 
+                    # so helper functions don't get exposed as user intents!
+                    if (attr_name.startswith("validate_") or 
+                        attr_name.startswith("normalize_") or
+                        attr_name.startswith("parse_") or
+                        attr_name.endswith("_check")):
                         continue
+                        
                     attr = getattr(module, attr_name)
                     if asyncio.iscoroutinefunction(attr):
                         self.register(attr_name, attr)
