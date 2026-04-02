@@ -8,6 +8,7 @@ class LLMClient:
     def __init__(self):
         self.logger = logging.getLogger("LLMClient")
         self.ollama_url = "http://localhost:11434/api/generate"
+        self.ollama_embed_url = "http://localhost:11434/api/embed"  # 🟢 Added for embeddings
 
     async def start(self):
         """Listen for any brain-related requests."""
@@ -63,6 +64,29 @@ class LLMClient:
             except Exception as e:
                 self.logger.warning(f"Attempt {i+1} failed with error: {e}")
         return None
+
+    # 🟢 NEW: Math vector generation for CapabilityMapper
+    async def get_embedding(self, text: str) -> list[float]:
+        """Generates a vector embedding for a given text using Ollama's all-minilm."""
+        payload = {
+            "model": "all-minilm",
+            "input": text  # Ollama's /embed endpoint expects 'input'
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.ollama_embed_url, json=payload) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Returns a dictionary containing a list of lists under 'embeddings'
+                        vectors = data.get("embeddings", [])
+                        return vectors[0] if vectors else []
+                    else:
+                        self.logger.error(f"Ollama embedding failed with status: {resp.status}")
+                        return []
+        except Exception as e:
+            self.logger.error(f"Error connecting to Ollama for embeddings: {e}")
+            return []
 
     # 🔄 UPGRADE 3: Safe JSON parsing
     def _safe_json(self, text):
