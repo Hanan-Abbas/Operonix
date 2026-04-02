@@ -61,6 +61,26 @@ class SpeechToText:
         text = "".join([segment.text for segment in segments]).strip()
         return text
 
+    def transcribe_raw_bytes(self, audio_data):
+        """🟢 NEW: Accepts raw audio bytes and transcribes them."""
+        import io
+        import wave
+        
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, 'wb') as wf:
+            wf.setnchannels(self.channels)
+            wf.setsampwidth(self.audio.get_sample_size(self.format))
+            wf.setframerate(self.rate)
+            wf.writeframes(audio_data)
+            
+        wav_io.seek(0)
+        
+        # Transcribe the audio
+        segments, _ = self.model.transcribe(wav_io, beam_size=5)
+        
+        text = "".join([segment.text for segment in segments]).strip()
+        return text
+        
 # Simple test execution
 if __name__ == "__main__":
     stt = SpeechToText(model_size="base")
