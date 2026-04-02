@@ -22,6 +22,8 @@ keyboard         # Global hotkey listening and simulation
 pillow           # Image processing for screenshots and vision fallback
 fast-whisper
 pyaudio
+webrtcvad
+wave
 
 # --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
 # These are strictly required for CapabilityMapper's numpy math and vector store!
