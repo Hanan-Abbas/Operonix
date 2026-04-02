@@ -1,13 +1,29 @@
 import os
+import sys
+
+# Stop NNPACK from firing
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
 
-import sys
-import numpy as np
-import torch
-import pyaudio
-from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
-from voice.stt import SpeechToText
-from core.event_bus import bus
+# A context manager to temporarily silence low-level C++ logs (like NNPACK)
+class SuppressStderr:
+    def __enter__(self):
+        self.null_fds = [os.open(os.devnull, os.O_RDWR)]
+        self.save_fds = [os.dup(2)]
+        os.dup2(self.null_fds[0], 2)
+
+    def __exit__(self, *_):
+        os.dup2(self.save_fds[0], 2)
+        os.close(self.null_fds[0])
+        os.close(self.save_fds[0])
+
+# Silence the imports and model loading flood
+with SuppressStderr():
+    import numpy as np
+    import torch
+    import pyaudio
+    from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+    from voice.stt import SpeechToText
+    from core.event_bus import bus
 
 class VoiceListener:
     def __init__(self):
@@ -45,7 +61,6 @@ class VoiceListener:
             audio_float32 = audio_int16.astype(np.float32) / 32768.0
 
             # Get speech probability (returns a float between 0 and 1)
-            # We wrap the chunk in a list because Silero expects a batch
             audio_tensor = torch.from_numpy(audio_float32)
 
             speech_prob = self.model(audio_tensor, self.rate).item()
