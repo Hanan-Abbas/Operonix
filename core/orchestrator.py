@@ -18,8 +18,16 @@ class Orchestrator:
         
         # 2. Pipeline Tracking: Monitor the journey from Brain to Hand
         bus.subscribe("intent_parsed", self.route_to_mapper)
-        bus.subscribe("capability_mapped", self.route_to_planner)
-        bus.subscribe("plan_ready", self.route_to_executor)
+        
+        # 🔄 FIX: Mapper outputs 'capability_mapped'. 
+        # We route this to the Decision Engine first!
+        bus.subscribe("capability_mapped", self.route_to_decision_engine)
+        
+        # 🔄 FIX: Decision Engine determines the tool and outputs 'request_planning'
+        bus.subscribe("request_planning", self.route_to_planner)
+        
+        # 🔄 FIX: Planner finishes building steps and outputs 'task_dispatched'
+        bus.subscribe("task_dispatched", self.route_to_executor)
         
         # 3. Lifecycle: Success and Error handling
         bus.subscribe("task_completed", self.finalize_task)
@@ -42,7 +50,6 @@ class Orchestrator:
         print(f"🎛️ Task [{task_id}] Initialized: '{user_text}'")
 
         # STEP 1: Ask context/window_detector.py what app is currently focused
-        # This is vital for your "Plugin -> Tool -> UI" priority logic
         await bus.emit("request_context_snapshot", {"task_id": task_id}, source="orchestrator")
 
         # STEP 2: Send to brain/llm_client.py for parsing
@@ -53,19 +60,25 @@ class Orchestrator:
 
     async def route_to_mapper(self, event):
         """Phase 2: Intent -> Capability Mapping."""
-        # After LLM Client parses intent, we send it to capability_mapper.py
         await bus.emit("request_capability_mapping", event.data, source="orchestrator")
+
+    # 🔗 NEW: Added middleman to let Decision Engine prioritize & route
+    async def route_to_decision_engine(self, event):
+        """Phase 2.5: Enqueue and determine optimal execution tool."""
+        # The Decision Engine handles queueing and tool fallback strategies.
+        # We don't need to manually emit here because the Decision Engine 
+        # subscribes to 'capability_mapped' directly!
+        pass
 
     async def route_to_planner(self, event):
         """Phase 3: Capability -> Step-by-Step Plan."""
-        # After Mapper validates we CAN do it, we send it to brain/planner.py
-        # This is where 'Coding' logic or 'File' logic is generated
-        await bus.emit("request_planning", event.data, source="orchestrator")
+        # This pass is handled directly since Planner listens to 'request_planning'
+        # in the new structure! I am keeping the method placeholder for your logs.
+        pass
 
     async def route_to_executor(self, event):
         """Phase 4: Plan -> Real-world Action."""
-        # The planner is done, now we hand the 'Steps' to executor/executor.py
-        # The Executor will use tool_selector to choose between Shell, File, or UI.
+        # 🔄 FIX: Planner fires 'task_dispatched'. We grab it and request execution!
         await bus.emit("request_execution", event.data, source="orchestrator")
 
     async def handle_failure(self, event):
@@ -75,7 +88,6 @@ class Orchestrator:
         
         print(f"❌ Task [{task_id}] failed: {error}")
         
-        # Per your structure: Trigger debugging/error_parser.py and auto_fix.py
         await bus.emit("error_detected", {
             "task_id": task_id,
             "error": error,
