@@ -66,6 +66,24 @@ class VoiceListener:
         text = self.stt.transcribe_raw_bytes(audio_data) # We can add this small helper to your STT
         return text
 
+    def transcribe_raw_bytes(self, raw_audio_data):
+        """Helper to transcribe raw PCM bytes from the VAD listener directly in memory."""
+        import io
+        import wave
+
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, 'wb') as wf:
+            wf.setnchannels(self.channels)
+            wf.setsampwidth(self.audio.get_sample_size(self.format))
+            wf.setframerate(self.rate)
+            wf.writeframes(raw_audio_data)
+            
+        wav_io.seek(0)
+        
+        segments, info = self.model.transcribe(wav_io, beam_size=5, vad_filter=True)
+        text = "".join([segment.text for segment in segments]).strip()
+        return text
+        
 if __name__ == "__main__":
     listener = VoiceListener()
     while True:
