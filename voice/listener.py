@@ -1,5 +1,9 @@
+import os
+os.environ['PyTorch_NNPACK_ENABLED'] = '0'
+
 import sys
 import numpy as np
+import torch
 import pyaudio
 from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
 from voice.stt import SpeechToText
@@ -42,7 +46,9 @@ class VoiceListener:
 
             # Get speech probability (returns a float between 0 and 1)
             # We wrap the chunk in a list because Silero expects a batch
-            speech_prob = self.model(audio_float32, self.rate).item()
+            audio_tensor = torch.from_numpy(audio_float32)
+
+            speech_prob = self.model(audio_tensor, self.rate).item()
 
             if speech_prob > 0.5:
                 if not triggered:
