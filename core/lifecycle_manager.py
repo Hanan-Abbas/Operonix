@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os  # 🟢 Added to prevent NameError on hard exit!
 import signal
 import sys
 from datetime import datetime
@@ -15,7 +16,7 @@ from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
 from memory.session_memory import session_memory
-from core.logger import logger as sys_logger  # Guarded: Renamed custom logger instance
+from core.logger import sys_logger
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
@@ -25,7 +26,7 @@ from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 
-# 🟢 FIX: Instantiating standard Python logger for console reporting
+# Instantiating standard Python logger for console reporting
 logger = logging.getLogger("LifecycleManager")
 
 class LifecycleManager:
@@ -37,7 +38,6 @@ class LifecycleManager:
         self.is_running = False
         self._background_tasks = set()
         
-        # Passed custom logger instance safely to handle file streaming
         self.error_handler = ErrorHandler(event_bus=bus, logger=sys_logger)
 
     def setup_global_exception_hooks(self, loop):
@@ -81,7 +81,6 @@ class LifecycleManager:
         bus_task.add_done_callback(self._background_tasks.discard)
         await error_listener.start()
         
-        # Start the custom file system logger correctly
         await sys_logger.start()
 
         # 3. Boot LLM first before any system that relies on it!
@@ -125,10 +124,19 @@ class LifecycleManager:
 
     def _register_signal_handlers(self, loop):
         """Captures OS-level termination signals to trigger a clean exit."""
+        
+        # Brutal sync handler for repeated interrupts
+        def force_exit_handler():
+            print("\n🛑 Force quit requested. Terminating immediately.")
+            os._exit(1)
+
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
+                # If we are already shutting down and the user hits Ctrl+C again,
+                # immediately terminate without waiting.
                 loop.add_signal_handler(
-                    sig, lambda: asyncio.create_task(self.shutdown())
+                    sig, 
+                    lambda: asyncio.create_task(self.shutdown()) if self.is_running else force_exit_handler()
                 )
             except NotImplementedError:
                 pass
@@ -140,8 +148,9 @@ class LifecycleManager:
 
             logger.info("🌐 Dashboard API: Launching on http://localhost:8000")
 
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, start_server)
+            server_task = asyncio.create_task(asyncio.to_thread(start_server))
+            self._background_tasks.add(server_task)
+            server_task.add_done_callback(self._background_tasks.discard)
 
             while self.is_running:
                 await asyncio.sleep(1)
@@ -176,14 +185,17 @@ class LifecycleManager:
         except Exception as e:
             logger.error(f"Failed to save patterns on shutdown: {e}")
 
-        # 2. Run the pruner *before* killing the loop tasks!
+        # 2. Run the pruner with a strict async timeout so it can't hang the loop!
         try:
             logger.info("✂️ Running memory optimizer...")
-            await pattern_pruner.prune_store()
+            await asyncio.wait_for(pattern_pruner.prune_store(), timeout=2.0)
+            logger.info("✂️ Memory optimized successfully.")
+        except asyncio.TimeoutError:
+            logger.warning("⏰ Pattern pruner took too long. Skipping optimization to avoid hanging.")
         except Exception as e:
             logger.error(f"Failed to prune pattern store: {e}")
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
         # 3. Now safely cancel all running tasks
         tasks = [
@@ -194,16 +206,16 @@ class LifecycleManager:
             task.cancel()
 
         try:
-            # 🟢 UPGRADE: Give them 5 seconds to die, or move on!
             await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True), 
-                timeout=5.0
+                timeout=2.0
             )
-        except asyncio.TimeoutError:
-            logger.warning("⏰ Some tasks refused to exit on time. Forcing stop.")
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning("⏰ Tasks refused to exit. Hard killing the process.")
 
+        # The Nuclear Option
         logger.info("🔌 System shut down completed. Goodbye.")
-        sys.exit(0)
+        os._exit(0)
 
 
 # Global instance
