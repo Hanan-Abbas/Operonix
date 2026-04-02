@@ -2,11 +2,12 @@ import asyncio
 import logging
 import signal
 import sys
+from datetime import datetime
 from api.server import start_server
 from brain.capability_mapper import capability_mapper
 from brain.llm_client import llm_client
 from brain.planner import planner
-from brain.decision_engine import decision_engine  # 🔗 NEW: Added missing engine
+from brain.decision_engine import decision_engine
 from capabilities.bootstrap import init_capabilities
 from context.state_extractor import state_extractor
 from context.window_detector import window_detector
@@ -14,7 +15,7 @@ from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
 from memory.session_memory import session_memory
-from core.logger import logger
+from core.logger import logger as sys_logger  # Guarded: Renamed custom logger instance
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
@@ -24,6 +25,8 @@ from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 
+# 🟢 FIX: Instantiating standard Python logger for console reporting
+logger = logging.getLogger("LifecycleManager")
 
 class LifecycleManager:
     """Manages the startup, execution hooks, dashboard API, and graceful
@@ -33,7 +36,9 @@ class LifecycleManager:
     def __init__(self):
         self.is_running = False
         self._background_tasks = set()
-        self.error_handler = ErrorHandler(event_bus=bus, logger=logger)
+        
+        # Passed custom logger instance safely to handle file streaming
+        self.error_handler = ErrorHandler(event_bus=bus, logger=sys_logger)
 
     def setup_global_exception_hooks(self, loop):
         """Binds the error handler to the OS and Async event loop."""
@@ -75,14 +80,16 @@ class LifecycleManager:
         self._background_tasks.add(bus_task)
         bus_task.add_done_callback(self._background_tasks.discard)
         await error_listener.start()
-        await logger.start()
+        
+        # Start the custom file system logger correctly
+        await sys_logger.start()
 
-        # 3. 🔄 FIX: Boot LLM first before any system that relies on it!
+        # 3. Boot LLM first before any system that relies on it!
         await llm_client.start()
         
         # 4. Boot remaining brain components
         await capability_mapper.start()
-        await decision_engine.start()  # 🔗 NEW: Booting the upgraded engine!
+        await decision_engine.start()  
         await planner.start()
         
         # 5. Boot context & execution layers
@@ -95,7 +102,6 @@ class LifecycleManager:
         await long_term_memory.start()
         await vector_store.start()
         await confirmation_manager.start()
-        await evolution_engine.start()
         await orchestrator.start()
 
         # 7. Boot the Learning System
@@ -111,7 +117,6 @@ class LifecycleManager:
 
         self._register_signal_handlers(loop)
 
-        # 🔄 UPGRADE: Removing hardcoded `settings.BASE_DIR.name` timestamp mapping
         bus.publish(
             "system_booting",
             {"timestamp": datetime.now().isoformat()},
@@ -142,7 +147,10 @@ class LifecycleManager:
                 await asyncio.sleep(1)
 
         except Exception as e:
-            self.error_handler.handle_error(e, component="main_core")
+            try:
+                self.error_handler.handle_error(e, component="main_core")
+            except Exception:
+                pass
             logger.critical(f"💥 Critical System Failure: {e}")
         finally:
             await self.shutdown()
@@ -168,7 +176,7 @@ class LifecycleManager:
         except Exception as e:
             logger.error(f"Failed to save patterns on shutdown: {e}")
 
-        # 2. 🔄 FIX: Run the pruner *before* killing the loop tasks!
+        # 2. Run the pruner *before* killing the loop tasks!
         try:
             logger.info("✂️ Running memory optimizer...")
             await pattern_pruner.prune_store()
