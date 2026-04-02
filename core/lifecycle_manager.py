@@ -193,7 +193,14 @@ class LifecycleManager:
         for task in tasks:
             task.cancel()
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            # 🟢 UPGRADE: Give them 5 seconds to die, or move on!
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), 
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("⏰ Some tasks refused to exit on time. Forcing stop.")
 
         logger.info("🔌 System shut down completed. Goodbye.")
         sys.exit(0)
