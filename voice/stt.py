@@ -1,4 +1,7 @@
 import os
+os.environ['PyTorch_NNPACK_ENABLED'] = '0'
+
+import os
 import io
 import wave
 import pyaudio
@@ -80,7 +83,7 @@ class SpeechToText:
         
         text = "".join([segment.text for segment in segments]).strip()
         return text
-        
+
 # Simple test execution
 if __name__ == "__main__":
     stt = SpeechToText(model_size="base")
