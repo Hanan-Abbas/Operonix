@@ -63,7 +63,7 @@ class SpeechToText:
 
 # Simple test execution
 if __name__ == "__main__":
-    stt = SpeechToText(model_size="tiny")
+    stt = SpeechToText(model_size="base")
     try:
         while True:
             text = stt.listen_and_transcribe(duration=4)
