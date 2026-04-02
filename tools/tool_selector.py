@@ -1,6 +1,6 @@
 import logging
 from tools.tool_registry import tool_registry
-from plugins.plugin_registry import plugin_registry
+# from plugins.plugin_registry import plugin_registry
 
 class ToolSelector:
     def __init__(self):
@@ -21,16 +21,16 @@ class ToolSelector:
 
         candidates = []
 
-        # --- 1. Plugins ---
-        plugins = plugin_registry.get_all_plugins_for_app(target_app)
+        # # --- 1. Plugins ---
+        # plugins = plugin_registry.get_all_plugins_for_app(target_app)
 
-        for plugin in plugins:
-            if plugin.name in exclude:
-                continue
-            if forced_type and forced_type != "plugin":
-                continue
-            if plugin.supports_action(intent):
-                candidates.append((self.PRIORITY_MAP["plugin"], "plugin", plugin))
+        # for plugin in plugins:
+        #     if plugin.name in exclude:
+        #         continue
+        #     if forced_type and forced_type != "plugin":
+        #         continue
+        #     if plugin.supports_action(intent):
+        #         candidates.append((self.PRIORITY_MAP["plugin"], "plugin", plugin))
 
         # --- 2. Tools ---
         for tool_name in tool_registry.list_tools():
