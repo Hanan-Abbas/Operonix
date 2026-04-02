@@ -1,19 +1,20 @@
-import collections
-import queue
 import sys
+import numpy as np
 import pyaudio
-import webrtcvad
+from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
 from voice.stt import SpeechToText
 from core.event_bus import bus
 
 class VoiceListener:
     def __init__(self):
-        self.vad = webrtcvad.Vad(2) # Aggressiveness from 0 to 3. 2 is a good balance.
+        print("🎙️ VAD: Loading Silero Voice Activity Detector...")
+        self.model = load_silero_vad()
         self.audio = pyaudio.PyAudio()
-        self.stt = SpeechToText(model_size="base") # Using the upgraded base model!
+        self.stt = SpeechToText(model_size="base")
         
         self.rate = 16000
-        self.chunk = 480 # 30ms chunks at 16kHz
+        # Silero prefers chunks of 512, 1024, or 1536 for 16kHz
+        self.chunk = 512 
         
     def listen_until_silent(self):
         """Listens to the mic and stops recording when the user stops talking."""
@@ -27,31 +28,32 @@ class VoiceListener:
             frames_per_buffer=self.chunk
         )
 
-        triggered = False
-        ring_buffer = collections.deque(maxlen=10)
         voiced_frames = []
+        silent_chunks = 0
+        triggered = False
 
-        # Wait for speech, then wait for silence
         while True:
-            chunk = stream.read(self.chunk, exception_on_overflow=False)
-            is_speech = self.vad.is_speech(chunk, self.rate)
+            data = stream.read(self.chunk, exception_on_overflow=False)
+            voiced_frames.append(data)
 
-            if not triggered:
-                ring_buffer.append((chunk, is_speech))
-                num_voiced = len([f for f, speech in ring_buffer if speech])
-                if num_voiced > 0.8 * ring_buffer.maxlen:
-                    triggered = True
+            # Convert raw bytes to float32 numpy array for Silero
+            audio_int16 = np.frombuffer(data, dtype=np.int16)
+            audio_float32 = audio_int16.astype(np.float32) / 32768.0
+
+            # Get speech probability (returns a float between 0 and 1)
+            # We wrap the chunk in a list because Silero expects a batch
+            speech_prob = self.model(audio_float32, self.rate).item()
+
+            if speech_prob > 0.5:
+                if not triggered:
                     print("🔊 Speech detected...")
-                    for f, s in ring_buffer:
-                        voiced_frames.append(f)
-                    ring_buffer.clear()
-            else:
-                voiced_frames.append(chunk)
-                ring_buffer.append((chunk, is_speech))
-                num_unvoiced = len([f for f, speech in ring_buffer if not speech])
+                    triggered = True
+                silent_chunks = 0
+            elif triggered:
+                silent_chunks += 1
                 
-                # If 90% of the last 10 frames are silent, user stopped talking!
-                if num_unvoiced > 0.9 * ring_buffer.maxlen:
+                # If silent for about 1 second (16000 samples / 512 chunk size = ~31 chunks)
+                if silent_chunks > 25:
                     print("🔇 Silence detected. Processing...")
                     break
 
@@ -59,36 +61,19 @@ class VoiceListener:
         stream.close()
         
         # Combine frames and send to Whisper
-        # (This is where we link to your existing STT logic)
         audio_data = b''.join(voiced_frames)
         
-        # Shoot command over to your event bus or print it
-        text = self.stt.transcribe_raw_bytes(audio_data) # We can add this small helper to your STT
+        text = self.stt.transcribe_raw_bytes(audio_data)
         return text
 
-    def transcribe_raw_bytes(self, raw_audio_data):
-        """Helper to transcribe raw PCM bytes from the VAD listener directly in memory."""
-        import io
-        import wave
-
-        wav_io = io.BytesIO()
-        with wave.open(wav_io, 'wb') as wf:
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.format))
-            wf.setframerate(self.rate)
-            wf.writeframes(raw_audio_data)
-            
-        wav_io.seek(0)
-        
-        segments, info = self.model.transcribe(wav_io, beam_size=5, vad_filter=True)
-        text = "".join([segment.text for segment in segments]).strip()
-        return text
-        
 if __name__ == "__main__":
     listener = VoiceListener()
-    while True:
-        command = listener.listen_until_silent()
-        print(f"📡 Dispatched Command: {command}")
-        
-        # Here we would do:
-        # bus.publish("user_command_received", {"command": command})
+    try:
+        while True:
+            command = listener.listen_until_silent()
+            if command:
+                print(f"📡 Dispatched Command: {command}")
+            else:
+                print("🔇 No clear speech understood.")
+    except KeyboardInterrupt:
+        print("\n🛑 Listener stopped.")
