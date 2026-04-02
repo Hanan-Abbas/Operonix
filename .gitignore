@@ -25,6 +25,7 @@ wheels/
 .venv/
 venv/
 ENV/
+operonix/
 
 # --- Environment Variables & Keys (CRITICAL) ---
 .env
