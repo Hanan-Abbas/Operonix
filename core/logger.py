@@ -39,7 +39,7 @@ class SystemLogger:
 
         event_lower = event.name.lower()
 
-        # 🔄 UPGRADE: Dynamic sorting based on our actual AI pipeline events!
+        # Dynamic sorting based on actual AI pipeline events
         
         # 🔴 1. Error Log
         if any(x in event_lower for x in ["error", "fail", "alert"]):
@@ -59,9 +59,8 @@ class SystemLogger:
             with open(file_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
         except Exception as e:
-            # We use standard print here because if logging fails, 
-            # trying to log the logging failure would cause an infinite loop!
+            # Standard print used here to avoid infinite loops on failure
             print(f"❌ Logger failed to write to {file_path}: {e}")
 
-# Global instance
-logger = SystemLogger()
+# 🟢 FIX: Renamed global instance to avoid terminal-crashing collisions!
+sys_logger = SystemLogger()
