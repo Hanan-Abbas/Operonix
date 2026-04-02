@@ -3,7 +3,7 @@ asyncio          # Asynchronous I/O for the Event Bus and Orchestrator
 aiohttp          # Async HTTP client for Ollama/LLM communication
 fastapi          # Backend for the Dashboard
 uvicorn          # High-performance ASGI server to run the API
-pydantic         # Data validation for the API and Settings
+pydantic          # Data validation for the API and Settings
 
 # --- OS & WINDOW DETECTION ---
 psutil           # System process and memory monitoring
@@ -21,6 +21,11 @@ mouse            # Fine-grained mouse control fallback
 keyboard         # Global hotkey listening and simulation
 pillow           # Image processing for screenshots and vision fallback
 
+# --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
+# These are strictly required for CapabilityMapper's numpy math and vector store!
+numpy            # Fast matrix math for cosine similarity calculations
+scikit-learn     # Optional but great for heavy vector distance checks
+
 # --- UTILITIES ---
 python-dotenv    # For managing API keys and local configs in core/config.py
-logging          # Advanced logging for the /logs/ directory
+# (Removed 'logging' as it is a native Python built-in and cannot be pip installed!)
