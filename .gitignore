@@ -1,0 +1,58 @@
+# --- Python Specific ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# --- Virtual Environments ---
+.venv/
+venv/
+ENV/
+
+# --- Environment Variables & Keys (CRITICAL) ---
+.env
+.env.local
+.env.*
+*.pem
+*.key
+certs/
+
+# --- Operonix System Specific ---
+logs/
+sandbox/temp_files/
+
+# --- AI Data & Dynamic Configs ---
+# Ignore learned patterns and dynamic settings so your local test state 
+# doesn't overwrite your clean repo defaults.
+learning/pattern_store.json
+core/dynamic_settings.json
+
+# --- OS & IDE Specific ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
