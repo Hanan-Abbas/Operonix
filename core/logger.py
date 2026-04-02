@@ -54,12 +54,15 @@ class SystemLogger:
             self._write_to_file(self.action_log, log_entry)
 
     def _write_to_file(self, file_path, entry):
-        """Appends a JSON entry to the specified log file."""
+        """Appends a JSON entry to the specified log file, forcing it into the logs directory."""
         try:
-            with open(file_path, "a") as f:
+            # 🟢 UPGRADE: Extract just the filename and force it into the log_dir
+            filename = os.path.basename(file_path)
+            safe_path = os.path.join(self.log_dir, filename)
+            
+            with open(safe_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
         except Exception as e:
-            # Standard print used here to avoid infinite loops on failure
             print(f"❌ Logger failed to write to {file_path}: {e}")
 
 # 🟢 FIX: Renamed global instance to avoid terminal-crashing collisions!
