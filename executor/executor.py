@@ -9,7 +9,6 @@ from context.context_validator import context_validator
 from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
-from executor.capability_dispatch import resolve_tool_call
 from executor.fallback_manager import FallbackManager
 from executor.focus_manager import FocusManager
 from executor.retry_manager import RetryManager

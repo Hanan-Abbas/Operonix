@@ -18,7 +18,6 @@ from core.logger import logger
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
-from learning.evolution_engine import evolution_engine
 from memory.long_term_memory import long_term_memory
 from memory.vector_store import vector_store
 from safety.confirmation import confirmation_manager
