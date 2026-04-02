@@ -21,6 +21,7 @@ class SystemLogger:
 
     async def start(self):
         """Subscribe to all events to record them."""
+        # This works perfectly because our new event bus supports '*'!
         bus.subscribe("*", self.handle_event)
         print("📜 System Logger: Online and recording to /logs")
 
@@ -36,16 +37,21 @@ class SystemLogger:
             "data": event.data
         }
 
-        # 1. Categorize the log
-        if "error" in event.name.lower():
+        event_lower = event.name.lower()
+
+        # 🔄 UPGRADE: Dynamic sorting based on our actual AI pipeline events!
+        
+        # 🔴 1. Error Log
+        if any(x in event_lower for x in ["error", "fail", "alert"]):
             self._write_to_file(self.error_log, log_entry)
         
-        elif event.name == "context_snapshot_ready":
-            # This is our Action History!
-            self._write_to_file(self.action_log, log_entry)
-            
-        elif "decision" in event.name.lower() or "intent" in event.name.lower():
+        # 🟡 2. Decision Log (The Brain's reasoning steps)
+        elif any(x in event_lower for x in ["intent", "mapped", "reasoning", "planning", "dispatched"]):
             self._write_to_file(self.decision_log, log_entry)
+            
+        # 🟢 3. Action Log (Actual operations that change the environment)
+        elif any(x in event_lower for x in ["execution", "action", "executed", "snapshot"]):
+            self._write_to_file(self.action_log, log_entry)
 
     def _write_to_file(self, file_path, entry):
         """Appends a JSON entry to the specified log file."""
@@ -53,6 +59,8 @@ class SystemLogger:
             with open(file_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
         except Exception as e:
+            # We use standard print here because if logging fails, 
+            # trying to log the logging failure would cause an infinite loop!
             print(f"❌ Logger failed to write to {file_path}: {e}")
 
 # Global instance
