@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import fnmatch
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 
 class Event:
@@ -22,30 +23,36 @@ class EventBus:
     def __init__(self):
         self.listeners: Dict[str, List[Callable]] = {}
         self.logger = logging.getLogger("EventBus")
-        # 1. Initialize the queue properly
-        self._queue = asyncio.Queue()
+        
+        # 🔄 UPGRADE: Changed to PriorityQueue to handle high-priority safety tasks first.
+        self._queue = asyncio.PriorityQueue()
 
-    def subscribe(self, event_name: str, callback: Callable):
-        if event_name not in self.listeners:
-            self.listeners[event_name] = []
-        if callback not in self.listeners[event_name]:
-            self.listeners[event_name].append(callback)
-            self.logger.info(f"Subscribed to {event_name}")
+    def subscribe(self, event_pattern: str, callback: Callable):
+        """Subscribes to an event pattern. Supports wildcards like 'file_*'."""
+        if event_pattern not in self.listeners:
+            self.listeners[event_pattern] = []
+        if callback not in self.listeners[event_pattern]:
+            self.listeners[event_pattern].append(callback)
+            self.logger.info(f"Subscribed to pattern: {event_pattern}")
 
     async def emit(self, event_type: str, data: Any = None, source: str = None):
-        """Pushes an event into the queue.
-
-        This is the correct way to feed the 'run' loop.
-        """
+        """Pushes an event into the queue dynamically with priority inference."""
         event = Event(event_type, data, source)
-        # Put the event in the queue for the background worker to handle
-        await self._queue.put(event)
+        
+        # 🔄 UPGRADE: Zero-hardcoded priority inference based on words in the event name
+        priority = 50 # Default middle-ground priority
+        
+        event_lower = event_type.lower()
+        if any(x in event_lower for x in ["stop", "abort", "security", "fail", "alert"]):
+            priority = 10 # High priority (Lower number = processed first in asyncio.PriorityQueue)
+        elif any(x in event_lower for x in ["log", "metric", "update", "state"]):
+            priority = 90 # Low priority background noise
+            
+        # Put the event in the queue with its priority
+        await self._queue.put((priority, event))
 
     def publish(self, event_type: str, data: Any = None, source: str = None):
-        """A synchronous wrapper to emit events from normal, non-async def
-
-        functions.
-        """
+        """A synchronous wrapper to emit events from normal, non-async functions."""
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self.emit(event_type, data, source))
@@ -59,18 +66,20 @@ class EventBus:
         self.logger.info("Event Bus is running...")
         while True:
             # Wait for an event to be added via emit()
-            event = await self._queue.get()
+            priority, event = await self._queue.get()
 
             # Print for immediate debugging
-            print(event)
+            print(f"[Priority {priority}] {event}")
 
-            # Gather normal listeners and wildcard (*) listeners
-            listeners = self.listeners.get(
-                event.name, []
-            ) + self.listeners.get("*", [])
+            # 🔄 UPGRADE: Dynamic Pattern Matching! 
+            # Now modules can subscribe to 'file_*' instead of hardcoding exact matches.
+            matched_listeners = []
+            for pattern, callbacks in self.listeners.items():
+                if fnmatch.fnmatch(event.name, pattern):
+                    matched_listeners.extend(callbacks)
 
-            for callback in listeners:
-                # Use create_task so slow listeners don't hold up the entire queue
+            # Fire them off in the background asynchronously
+            for callback in matched_listeners:
                 asyncio.create_task(self._execute_callback(callback, event))
 
             self._queue.task_done()
