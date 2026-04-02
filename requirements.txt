@@ -25,6 +25,7 @@ pillow           # Image processing for screenshots and vision fallback
 # These are strictly required for CapabilityMapper's numpy math and vector store!
 numpy            # Fast matrix math for cosine similarity calculations
 scikit-learn     # Optional but great for heavy vector distance checks
+chromadb
 
 # --- UTILITIES ---
 python-dotenv    # For managing API keys and local configs in core/config.py
