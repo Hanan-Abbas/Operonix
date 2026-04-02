@@ -25,14 +25,14 @@ class Settings:
     # File where the AI is allowed to save new learned categories safely
     DYNAMIC_SETTINGS_FILE: Path = BASE_DIR / "core" / "dynamic_settings.json"
 
-    # --- API KEYS & EXTERNAL SERVICES ---
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    # --- 🔄 API KEYS & EXTERNAL SERVICES ---
+    # Swapped OpenAI/Anthropic out for the ones your LLMClient actually calls!
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
     # --- BRAIN & LLM SETTINGS ---
-    DEFAULT_LLM: str = "gpt-4o"
-    FAST_LLM: str = "gpt-4o-mini"
-    VISION_LLM: str = "gpt-4o"
+    # Removed gpt-4o variables. Your LLMClient is now provider-routed!
+    OLLAMA_EMBED_MODEL: str = "all-minilm"
 
     # --- SYSTEM GUARDRAILS ---
     MAX_RETRY_ATTEMPTS: int = 3
@@ -43,15 +43,9 @@ class Settings:
         str(BASE_DIR / "safety"),
     ]
 
-    # --- UI & FALLBACK DEFAULTS ---
-    TOOL_PRIORITY: Dict[str, int] = {
-        "api_tool": 3,
-        "shell_tool": 2,
-        "ui_tool": 1,
-    }
-
-    # --- SERVER & DASHBOARD ---
-    API_HOST: str = "127.0.0.1"
+    # --- 🔄 SERVER & DASHBOARD ---
+    # Pointing to full localhost is standard for FastAPI + WebSocket setups
+    API_HOST: str = "localhost"
     API_PORT: int = 8000
 
     def __init__(self):
@@ -59,9 +53,10 @@ class Settings:
         for path in [self.LOGS_DIR, self.SANDBOX_DIR]:
             path.mkdir(parents=True, exist_ok=True)
 
-        # 2. Set hardcoded fallback defaults
-        self.RISKY_INTENTS: List[str] = ["file_delete", "shell_command"]
-        self.COMPLEX_INTENTS: List[str] = ["write_code", "debug_error"]
+        # 2. 🔄 Zero-Hardcoded Fallback Defaults
+        # Notice we are using prefix concepts rather than exact rigid matches!
+        self.RISKY_INTENTS: List[str] = ["file_delete", "shell_command", "run_command"]
+        self.COMPLEX_INTENTS: List[str] = ["write_", "debug_", "complex_"]
 
         # 3. Load dynamic settings from JSON if the file exists!
         self._load_dynamic_settings()
@@ -89,7 +84,7 @@ class Settings:
                 logger.info("Successfully loaded dynamic intent configurations.")
         except json.JSONDecodeError:
             logger.error(
-                "🚨 Corrupted dynamic_settings.json detected! Falling back to safe defaults to prevent a crash."
+                "🚨 Corrupted dynamic_settings.json detected! Safe defaults used."
             )
         except Exception as e:
             logger.error(
