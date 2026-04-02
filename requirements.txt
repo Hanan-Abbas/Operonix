@@ -20,6 +20,8 @@ pyautogui        # Cross-platform UI automation (Click/Type)
 mouse            # Fine-grained mouse control fallback
 keyboard         # Global hotkey listening and simulation
 pillow           # Image processing for screenshots and vision fallback
+fast-whisper
+pyaudio
 
 # --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
 # These are strictly required for CapabilityMapper's numpy math and vector store!
