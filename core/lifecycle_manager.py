@@ -6,6 +6,7 @@ from api.server import start_server
 from brain.capability_mapper import capability_mapper
 from brain.llm_client import llm_client
 from brain.planner import planner
+from brain.decision_engine import decision_engine  # 🔗 NEW: Added missing engine
 from capabilities.bootstrap import init_capabilities
 from context.state_extractor import state_extractor
 from context.window_detector import window_detector
@@ -27,7 +28,6 @@ from learning.pruning import pattern_pruner
 
 class LifecycleManager:
     """Manages the startup, execution hooks, dashboard API, and graceful
-
     shutdown of the AI OS.
     """
 
@@ -61,41 +61,45 @@ class LifecycleManager:
         loop.set_exception_handler(handle_async_exception)
 
     async def startup(self):
-        """Initializes and boots all core system components in the correct
-
-        order.
-        """
+        """Initializes and boots all core system components in the correct order."""
         logger.info("🚀 Operonix Agent: Starting engine...")
         self.is_running = True
 
         loop = asyncio.get_running_loop()
         self.setup_global_exception_hooks(loop)
 
+        # 1. First establish foundational capabilities
         init_capabilities()
 
+        # 2. Boot the Highway & the Logger listening to it
         bus_task = asyncio.create_task(bus.run())
         self._background_tasks.add(bus_task)
         bus_task.add_done_callback(self._background_tasks.discard)
-
         await error_listener.start()
-
         await logger.start()
-        await evolution_engine.start()
+
+        # 3. 🔄 FIX: Boot LLM first before any system that relies on it!
+        await llm_client.start()
+        
+        # 4. Boot remaining brain components
         await capability_mapper.start()
-        await executor.start()
+        await decision_engine.start()  # 🔗 NEW: Booting the upgraded engine!
+        await planner.start()
+        
+        # 5. Boot context & execution layers
         await window_detector.start()
         await state_extractor.start()
-        await llm_client.start()
-        await planner.start()
-        await orchestrator.start()
+        await executor.start()
+        
+        # 6. Boot memory & management layers
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
         await confirmation_manager.start()
+        await evolution_engine.start()
+        await orchestrator.start()
 
-        # -----------------------------------------------------------------
-        # 🔄 NEW: Boot the Learning System
-        # -----------------------------------------------------------------
+        # 7. Boot the Learning System
         try:
             await learner.start()
             logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
@@ -108,9 +112,10 @@ class LifecycleManager:
 
         self._register_signal_handlers(loop)
 
+        # 🔄 UPGRADE: Removing hardcoded `settings.BASE_DIR.name` timestamp mapping
         bus.publish(
             "system_booting",
-            {"timestamp": settings.BASE_DIR.name},
+            {"timestamp": datetime.now().isoformat()},
             source="lifecycle",
         )
 
@@ -144,10 +149,7 @@ class LifecycleManager:
             await self.shutdown()
 
     async def shutdown(self):
-        """Performs an orderly cleanup of memory, active plugins, and background
-
-        tasks.
-        """
+        """Performs an orderly cleanup of memory, active plugins, and background tasks."""
         if not self.is_running:
             return
 
@@ -160,18 +162,23 @@ class LifecycleManager:
             source="lifecycle",
         )
 
-        # -----------------------------------------------------------------
-        # 🔄 NEW: Force the learner to save patterns to disk before tasks die!
-        # -----------------------------------------------------------------
+        # 1. Force the learner to save patterns to disk before tasks die!
         try:
             learner._save_store()
             logger.info("💾 Flushed learned patterns to pattern_store.json")
         except Exception as e:
             logger.error(f"Failed to save patterns on shutdown: {e}")
 
+        # 2. 🔄 FIX: Run the pruner *before* killing the loop tasks!
+        try:
+            logger.info("✂️ Running memory optimizer...")
+            await pattern_pruner.prune_store()
+        except Exception as e:
+            logger.error(f"Failed to prune pattern store: {e}")
+
         await asyncio.sleep(1)
 
-        # Cancel all running tasks except current
+        # 3. Now safely cancel all running tasks
         tasks = [
             t for t in asyncio.all_tasks() if t is not asyncio.current_task()
         ]
@@ -180,15 +187,6 @@ class LifecycleManager:
             task.cancel()
 
         await asyncio.gather(*tasks, return_exceptions=True)
-
-        # -----------------------------------------------------------------
-        # 🔄 NEW: Run the pruner now that the loop is cleared!
-        # -----------------------------------------------------------------
-        try:
-            logger.info("✂️ Running memory optimizer...")
-            await pattern_pruner.prune_store()
-        except Exception as e:
-            logger.error(f"Failed to prune pattern store: {e}")
 
         logger.info("🔌 System shut down completed. Goodbye.")
         sys.exit(0)
