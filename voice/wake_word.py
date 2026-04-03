@@ -23,11 +23,11 @@ class WakeWordDetector:
         print(f"👂 Wake Word: Initializing detector for '{wake_word}'...")
         self.wake_word = wake_word
         
-        # Download standard models if they don't exist yet
-        openwakeword.utils.download_models()
+        # 🟢 FIX: Commented out the broken download_models() function.
+        # openwakeword.utils.download_models()
         
-        # Instantiate the model
-        self.model = Model(wakeword_models=[wake_word])
+        # Instantiate the model. If empty, it loads all default models and downloads them if needed!
+        self.model = Model() 
         self.audio = pyaudio.PyAudio()
         
         # openWakeWord relies on 16kHz audio
