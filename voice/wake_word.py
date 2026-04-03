@@ -36,4 +36,42 @@ class WakeWordDetector:
         # openWakeWord expects frames in multiples of 80 ms (1280 samples)
         self.chunk = 1280 
         
-    
+    def listen_for_wake_word(self):
+        """Sits in a lightweight loop listening for the trigger phrase."""
+        print("👂 Wake Word: Active and listening in background...")
+        
+        stream = self.audio.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk
+        )
+        
+        try:
+            while True:
+                # Read chunks of raw audio data from the microphone
+                data = stream.read(self.chunk, exception_on_overflow=False)
+                
+                # Feed the raw bytes directly to openWakeWord
+                prediction = self.model.predict(data)
+                
+                # Check the confidence score of your specific trigger word
+                score = prediction.get(self.wake_word, 0)
+                
+                # Threshold of 0.5 works well as a start. 
+                # Raise it to avoid false positives, lower it if it ignores you.
+                if score > 0.5:
+                    print(f"🔔 Wake Word: Detected '{self.wake_word}' with confidence {score:.2f}!")
+                    
+                    # Shout over to your event bus that the system needs to wake up!
+                    bus.publish("wake_word_detected", {"trigger": self.wake_word})
+                    break
+                    
+        finally:
+            stream.stop_stream()
+            stream.close()
+
+if __name__ == "__main__":
+    detector = WakeWordDetector()
+    detector.listen_for_wake_word()
