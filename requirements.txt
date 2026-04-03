@@ -23,6 +23,7 @@ pillow           # Image processing for screenshots and vision fallback
 fast-whisper
 pyaudio
 silero_vad
+pyttsx3
 
 # --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
 # These are strictly required for CapabilityMapper's numpy math and vector store!
