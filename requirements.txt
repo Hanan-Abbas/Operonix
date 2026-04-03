@@ -22,9 +22,10 @@ keyboard         # Global hotkey listening and simulation
 pillow           # Image processing for screenshots and vision fallback
 fast-whisper
 pyaudio
-silero_vad
+silero_vad       # Add the pytorch dependency with his cpu only version
 pyttsx3
 openwakeword
+noicereduce
 
 # --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
 # These are strictly required for CapabilityMapper's numpy math and vector store!
