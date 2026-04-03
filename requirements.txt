@@ -24,6 +24,7 @@ fast-whisper
 pyaudio
 silero_vad
 pyttsx3
+openwakeword
 
 # --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
 # These are strictly required for CapabilityMapper's numpy math and vector store!
