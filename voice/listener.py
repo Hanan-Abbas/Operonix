@@ -27,6 +27,7 @@ import pyaudio
 from silero_vad import load_silero_vad
 from voice.stt import SpeechToText
 from voice.noise_filter import NoiseFilter
+from core.config import settings
 
 class VoiceListener:
     def __init__(self):
@@ -51,7 +52,8 @@ class VoiceListener:
             channels=1,
             rate=self.rate,
             input=True,
-            frames_per_buffer=self.chunk
+            frames_per_buffer=self.chunk,
+            input_device_index=AUDIO_INPUT_INDEX
         )
 
         voiced_frames = []
