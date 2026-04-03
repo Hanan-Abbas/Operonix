@@ -1,11 +1,13 @@
 import os
-os.environ['PyTorch_NNPACK_ENABLED'] = '0'
-os.environ['JACK_NO_START_SERVER'] = '1'
-import os
 import io
 import wave
+import numpy as np
 import pyaudio
 from faster_whisper import WhisperModel
+
+# Suppress annoying background spam before initializing
+os.environ['PyTorch_NNPACK_ENABLED'] = '0'
+os.environ['JACK_NO_START_SERVER'] = '1'
 
 class SpeechToText:
     def __init__(self, model_size="tiny"):
@@ -14,8 +16,10 @@ class SpeechToText:
         Model sizes: 'tiny', 'base', 'small', 'medium'
         'tiny' is the fastest and perfect for short command parsing!
         """
-        print(f"🎙️ STT: Loading Whisper model ({model_size})...")
+        print(f"🎙️ STT: Loading Faster-Whisper model ({model_size})...")
+        
         # Running on CPU. Change device to "cuda" if you have a dedicated Nvidia GPU.
+        # compute_type="int8" keeps RAM usage low and inference fast.
         self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
         print("🎙️ STT: Model loaded successfully.")
         
@@ -47,39 +51,26 @@ class SpeechToText:
         stream.stop_stream()
         stream.close()
         
-        # Convert audio frames to a format Whisper can read directly in memory
+        # Combine bytes
         audio_data = b''.join(frames)
-        wav_io = io.BytesIO()
-        with wave.open(wav_io, 'wb') as wf:
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.format))
-            wf.setframerate(self.rate)
-            wf.writeframes(audio_data)
-            
-        wav_io.seek(0)
         
-        # Transcribe the audio
-        segments, info = self.model.transcribe(wav_io, beam_size=5)
-        
-        text = "".join([segment.text for segment in segments]).strip()
-        return text
+        # Transcribe directly using the raw byte handler!
+        return self.transcribe_raw_bytes(audio_data)
 
     def transcribe_raw_bytes(self, audio_data):
-        """🟢 NEW: Accepts raw audio bytes and transcribes them."""
-        import io
-        import wave
+        """
+        🟢 UPGRADED: Accepts raw audio bytes and transcribes them.
+        Skips in-memory WAV creation for pure speed!
+        """
+        if not audio_data:
+            return ""
+
+        # Convert the raw 16-bit PCM bytes directly into a float32 NumPy array
+        # This is exactly what faster-whisper expects.
+        audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
         
-        wav_io = io.BytesIO()
-        with wave.open(wav_io, 'wb') as wf:
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.format))
-            wf.setframerate(self.rate)
-            wf.writeframes(audio_data)
-            
-        wav_io.seek(0)
-        
-        # Transcribe the audio
-        segments, _ = self.model.transcribe(wav_io, beam_size=5)
+        # 🟢 FIX: Forcing language='en' so it doesn't hallucinate non-English
+        segments, _ = self.model.transcribe(audio_np, beam_size=5, language="en")
         
         text = "".join([segment.text for segment in segments]).strip()
         return text
