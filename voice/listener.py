@@ -1,36 +1,42 @@
 import os
 import sys
+from ctypes import *
 
-# Stop NNPACK from firing
+# Stop NNPACK and Torch C++ flood from firing
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
+os.environ['TORCH_CPP_LOG_LEVEL'] = 'ERROR' 
 
-# A context manager to temporarily silence low-level C++ logs (like NNPACK)
-class SuppressStderr:
-    def __enter__(self):
-        self.null_fds = [os.open(os.devnull, os.O_RDWR)]
-        self.save_fds = [os.dup(2)]
-        os.dup2(self.null_fds[0], 2)
+# 🟢 FIX: Suppress ALSA/JACK sound driver flood in the terminal
+ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
+def py_error_handler(filename, line, function, err, fmt):
+    pass
+c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
 
-    def __exit__(self, *_):
-        os.dup2(self.save_fds[0], 2)
-        os.close(self.null_fds[0])
-        os.close(self.save_fds[0])
+try:
+    asound = cdll.LoadLibrary('libasound.so.2')
+    asound.snd_lib_error_set_handler(c_error_handler)
+except OSError:
+    pass # Falls back safely if executed on a system without ALSA
 
-# Silence the imports and model loading flood
-with SuppressStderr():
-    import numpy as np
-    import torch
-    import pyaudio
-    from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
-    from voice.stt import SpeechToText
-    from core.event_bus import bus
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+
+import numpy as np
+import torch
+import pyaudio
+from silero_vad import load_silero_vad
+from voice.stt import SpeechToText
+from core.event_bus import bus
 
 class VoiceListener:
     def __init__(self):
         print("🎙️ VAD: Loading Silero Voice Activity Detector...")
+        
+        torch.set_num_threads(1) 
+        
         self.model = load_silero_vad()
         self.audio = pyaudio.PyAudio()
-        self.stt = SpeechToText(model_size="base")
+        self.stt = SpeechToText(model_size="tiny")
         
         self.rate = 16000
         # Silero prefers chunks of 512, 1024, or 1536 for 16kHz
@@ -60,7 +66,6 @@ class VoiceListener:
             audio_int16 = np.frombuffer(data, dtype=np.int16)
             audio_float32 = audio_int16.astype(np.float32) / 32768.0
 
-            # Get speech probability (returns a float between 0 and 1)
             audio_tensor = torch.from_numpy(audio_float32)
 
             speech_prob = self.model(audio_tensor, self.rate).item()
@@ -73,8 +78,9 @@ class VoiceListener:
             elif triggered:
                 silent_chunks += 1
                 
-                # If silent for about 1 second (16000 samples / 512 chunk size = ~31 chunks)
-                if silent_chunks > 25:
+                # 🟢 FIX: Changed from 25 to 50 (~1.6 seconds of silence) 
+                # Gives you more time to think without it aggressively cutting off
+                if silent_chunks > 50:
                     print("🔇 Silence detected. Processing...")
                     break
 
