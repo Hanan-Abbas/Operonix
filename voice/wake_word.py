@@ -4,6 +4,7 @@ import sys
 # Stop NNPACK and PyTorch C++ backend spam before execution
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
 os.environ['TORCH_CPP_LOG_LEVEL'] = 'ERROR' 
+os.environ['JACK_NO_START_SERVER'] = '1'
 
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -13,7 +14,7 @@ import numpy as np
 import openwakeword
 from openwakeword.model import Model
 from core.event_bus import bus
-
+from core.config import settings
 class WakeWordDetector:
     def __init__(self, wake_word="alexa"):
         """
@@ -23,17 +24,12 @@ class WakeWordDetector:
         print(f"👂 Wake Word: Initializing detector for '{wake_word}'...")
         self.wake_word = wake_word
         
-        # 🟢 FIX: Commented out the broken download_models() function.
-        # openwakeword.utils.download_models()
-        
-        # Instantiate the model. If empty, it loads all default models and downloads them if needed!
+        # Instantiate the model (auto-downloads if needed)
         self.model = Model() 
         self.audio = pyaudio.PyAudio()
         
         # openWakeWord relies on 16kHz audio
         self.rate = 16000
-        
-        # openWakeWord expects frames in multiples of 80 ms (1280 samples)
         self.chunk = 1280 
         
     def listen_for_wake_word(self):
@@ -45,7 +41,9 @@ class WakeWordDetector:
             channels=1,
             rate=self.rate,
             input=True,
-            frames_per_buffer=self.chunk
+            frames_per_buffer=self.chunk,
+            # 🟢 FIX: Forcing it to use the PulseAudio mic index!
+            input_device_index=settings.AUDIO_INPUT_INDEX  
         )
         
         try:
@@ -58,11 +56,10 @@ class WakeWordDetector:
                 
                 # Check the confidence score of your specific trigger word
                 score = prediction.get(self.wake_word, 0)
-                
-                # Threshold of 0.5 works well as a start. 
-                # Raise it to avoid false positives, lower it if it ignores you.
-                if score > 0.5:
-                    print(f"🔔 Wake Word: Detected '{self.wake_word}' with confidence {score:.2f}!")
+                print(f"Debug Score: {score:.4f}", end="\r")
+                # 🟢 FIX: Lowered to 0.3 so it's not strictly stubborn
+                if score > 0.3:
+                    print(f"\n🔔 Wake Word: Detected '{self.wake_word}' with confidence {score:.2f}!")
                     
                     # Shout over to your event bus that the system needs to wake up!
                     bus.publish("wake_word_detected", {"trigger": self.wake_word})
