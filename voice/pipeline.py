@@ -69,7 +69,8 @@ class VoicePipeline:
             channels=1,
             rate=self.rate,
             input=True,
-            frames_per_buffer=self.chunk
+            frames_per_buffer=self.chunk,
+            input_device_index=AUDIO_INPUT_INDEX
         )
 
         voiced_frames = []
