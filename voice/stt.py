@@ -1,6 +1,6 @@
 import os
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
-
+os.environ['JACK_NO_START_SERVER'] = '1'
 import os
 import io
 import wave
@@ -86,7 +86,7 @@ class SpeechToText:
 
 # Simple test execution
 if __name__ == "__main__":
-    stt = SpeechToText(model_size="base")
+    stt = SpeechToText(model_size="tiny")
     try:
         while True:
             text = stt.listen_and_transcribe(duration=4)
