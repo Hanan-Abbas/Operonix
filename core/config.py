@@ -17,7 +17,7 @@ class Settings:
 
     # --- PROJECT PATHS ---
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-
+    AUDIO_INPUT_INDEX = 2  # 🟢 FIX: Set this to the correct index for your microphone (use pyaudio to list devices)
     LOGS_DIR: Path = BASE_DIR / "logs"
     SANDBOX_DIR: Path = BASE_DIR / "sandbox"
     PLUGINS_DIR: Path = BASE_DIR / "plugins"
