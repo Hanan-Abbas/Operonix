@@ -68,7 +68,7 @@ class WakeWordDetector:
                 print(f"Debug Score: {score:.4f}", end="\r")
 
                 # If the score is decent, trigger the event
-                if score > 0.3:
+                if score > 0.85:
                     print(
                         f"\n🔔 Wake Word: Detected '{self.wake_word}' with confidence {score:.2f}!"
                     )
