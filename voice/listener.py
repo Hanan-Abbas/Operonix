@@ -33,46 +33,62 @@ from voice.audio_devices import resolve_input_device_index
 class VoiceListener:
     def __init__(self):
         print("🎙️ VAD: Loading Silero Voice Activity Detector...")
-        torch.set_num_threads(1) 
-        
+        torch.set_num_threads(1)
+
         self.model = load_silero_vad()
         self.audio = pyaudio.PyAudio()
-        
-        # 🟢 FIX 1: Force Whisper to only expect English so it doesn't guess Thai or Spanish!
+
         self.stt = SpeechToText(model_size="tiny")
-        
         self.noise_filter = NoiseFilter(rate=16000)
+
         self.rate = 16000
-        self.chunk = 512 
-        
+        self.chunk = 512
+
+        # 🔥 Safety configs
+        self.max_record_seconds = 10
+        self.silence_limit = 80
+
     def listen_until_silent(self):
-        print("\n🎤 Voice OS: Listening...")
-        
-        stream = self.audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.chunk,
-            input_device_index=resolve_input_device_index(settings.AUDIO_INPUT_INDEX),
-        )
+        print("\n🎤 Listening for command...")
+
+        try:
+            stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk,
+                input_device_index=resolve_input_device_index(settings.AUDIO_INPUT_INDEX),
+            )
+        except Exception as e:
+            print(f"❌ Mic error: {e}")
+            return None
 
         voiced_frames = []
         silent_chunks = 0
         triggered = False
 
+        start_time = time.time()
+
         while True:
-            data = stream.read(self.chunk, exception_on_overflow=False)
+            # 🔥 Timeout protection
+            if time.time() - start_time > self.max_record_seconds:
+                print("⏱️ Timeout reached.")
+                break
+
+            try:
+                data = stream.read(self.chunk, exception_on_overflow=False)
+            except Exception:
+                continue
+
             voiced_frames.append(data)
 
-            # Convert raw bytes to float32 for Silero
             audio_int16 = np.frombuffer(data, dtype=np.int16)
             audio_float32 = audio_int16.astype(np.float32) / 32768.0
-
             audio_tensor = torch.from_numpy(audio_float32)
+
             speech_prob = self.model(audio_tensor, self.rate).item()
 
-            # Lowered threshold to 0.4 so it's less aggressive at ignoring you
             if speech_prob > 0.4:
                 if not triggered:
                     print("🔊 Speech detected...")
@@ -80,41 +96,31 @@ class VoiceListener:
                 silent_chunks = 0
             elif triggered:
                 silent_chunks += 1
-                
-                # 🟢 FIX 2: Increased from 50 to 80 (~2.5 seconds of silence)
-                # This gives you plenty of time to pause mid-sentence without cutoff!
-                if silent_chunks > 80:
+
+                if silent_chunks > self.silence_limit:
                     print("🔇 Silence detected. Processing...")
                     break
 
         stream.stop_stream()
         stream.close()
-        
-        # Combine all recorded frames
+
+        if not voiced_frames:
+            return None
+
+        # 🔥 Process audio
         audio_data = b''.join(voiced_frames)
-        
-        # Convert full clip to float32
+
         full_audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
         full_audio_float32 = full_audio_int16.astype(np.float32) / 32768.0
-        
-        # 🟢 FIX 3: Clean the noise on the FULL audio clip at once!
+
         cleaned_audio = self.noise_filter.reduce_noise(full_audio_float32)
-        
-        # Convert back to bytes for Whisper
+
         cleaned_int16 = (cleaned_audio * 32767.0).astype(np.int16)
         cleaned_bytes = cleaned_int16.tobytes()
-        
-        text = self.stt.transcribe_raw_bytes(cleaned_bytes)
-        return text
 
-if __name__ == "__main__":
-    listener = VoiceListener()
-    try:
-        while True:
-            command = listener.listen_until_silent()
-            if command:
-                print(f"📡 Dispatched Command: {command}")
-            else:
-                print("🔇 No clear speech understood.")
-    except KeyboardInterrupt:
-        print("\n🛑 Listener stopped.")
+        text = self.stt.transcribe_raw_bytes(cleaned_bytes)
+
+        if text and len(text.strip()) > 1:
+            return text.strip()
+
+        return None
