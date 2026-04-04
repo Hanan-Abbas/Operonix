@@ -2,11 +2,10 @@ import asyncio
 import logging
 import fnmatch
 from datetime import datetime
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 class Event:
-    """Standardized event structure for the entire OS."""
 
     def __init__(self, name: str, data: Any = None, source: str = "system"):
         self.name = name
@@ -23,12 +22,12 @@ class EventBus:
     def __init__(self):
         self.listeners: Dict[str, List[Callable]] = {}
         self.logger = logging.getLogger("EventBus")
-        
-        # 🔄 UPGRADE: Changed to PriorityQueue to handle high-priority safety tasks first.
+
+        # The main thread's loop will be stored here
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue = asyncio.PriorityQueue()
 
     def subscribe(self, event_pattern: str, callback: Callable):
-        """Subscribes to an event pattern. Supports wildcards like 'file_*'."""
         if event_pattern not in self.listeners:
             self.listeners[event_pattern] = []
         if callback not in self.listeners[event_pattern]:
@@ -36,49 +35,65 @@ class EventBus:
             self.logger.info(f"Subscribed to pattern: {event_pattern}")
 
     async def emit(self, event_type: str, data: Any = None, source: str = None):
-        """Pushes an event into the queue dynamically with priority inference."""
+        """Pushes an event into the priority queue."""
         event = Event(event_type, data, source)
-        
-        # 🔄 UPGRADE: Zero-hardcoded priority inference based on words in the event name
-        priority = 50 # Default middle-ground priority
-        
+
+        priority = 50
         event_lower = event_type.lower()
-        if any(x in event_lower for x in ["stop", "abort", "security", "fail", "alert"]):
-            priority = 10 # High priority (Lower number = processed first in asyncio.PriorityQueue)
-        elif any(x in event_lower for x in ["log", "metric", "update", "state"]):
-            priority = 90 # Low priority background noise
-            
-        # Put the event in the queue with its priority
+        if any(
+            x in event_lower
+            for x in ["stop", "abort", "security", "fail", "alert"]
+        ):
+            priority = 10
+        elif any(
+            x in event_lower for x in ["log", "metric", "update", "state"]
+        ):
+            priority = 90
+
         await self._queue.put((priority, event))
 
     def publish(self, event_type: str, data: Any = None, source: str = None):
-        """A synchronous wrapper to emit events from normal, non-async functions."""
+        """🟢 100% Thread-Safe & Non-Blocking!
+
+        Can be called from worker threads OR the main loop.
+        """
+        # If we are already in the main async thread, just use emit
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.emit(event_type, data, source))
+            if loop == self._event_loop:
+                loop.create_task(self.emit(event_type, data, source))
+                return
         except RuntimeError:
+            pass
+
+        # 🚀 If called from openWakeWord's thread, we inject it directly!
+        if self._event_loop is not None and self._event_loop.is_running():
+            self._event_loop.call_soon_threadsafe(
+                # This schedules the coroutine safely without blocking
+                lambda: asyncio.create_task(
+                    self.emit(event_type, data, source)
+                )
+            )
+        else:
             self.logger.warning(
-                "EventBus publish failed: No running event loop."
+                f"Dropped event '{event_type}': Event loop is not running yet."
             )
 
     async def run(self):
-        """The main loop that processes events and notifies listeners."""
+        """The main loop that processes events."""
+        # Capture the main loop right as it starts running
+        self._event_loop = asyncio.get_running_loop()
         self.logger.info("Event Bus is running...")
-        while True:
-            # Wait for an event to be added via emit()
-            priority, event = await self._queue.get()
 
-            # Print for immediate debugging
+        while True:
+            priority, event = await self._queue.get()
             print(f"[Priority {priority}] {event}")
 
-            # 🔄 UPGRADE: Dynamic Pattern Matching! 
-            # Now modules can subscribe to 'file_*' instead of hardcoding exact matches.
             matched_listeners = []
             for pattern, callbacks in self.listeners.items():
                 if fnmatch.fnmatch(event.name, pattern):
                     matched_listeners.extend(callbacks)
 
-            # Fire them off in the background asynchronously
             for callback in matched_listeners:
                 asyncio.create_task(self._execute_callback(callback, event))
 
@@ -94,5 +109,4 @@ class EventBus:
             self.logger.error(f"Error in listener for {event.name}: {e}")
 
 
-# Global instance
 bus = EventBus()
