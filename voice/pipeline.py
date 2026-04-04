@@ -50,45 +50,62 @@ class VoicePipeline:
         # Silero VAD is highly optimized for 512 frame chunks at 16kHz (~30ms)
         self.chunk = 512
 
+    def clear_audio_buffer(rate, chunk, device_index):
+        try:
+            with sd.InputStream(
+                samplerate=rate,
+                channels=1,
+                dtype="int16",
+                device=device_index,
+                blocksize=chunk,
+            ) as stream:
+                for _ in range(5):
+                    stream.read(chunk)
+        except Exception:
+            pass
+
     def run(self):
-        """The main loop that flips between Wake Word and Listening."""
-        while True:
-            # --- 🟢 FIX: PURGE THE LEFTOVER BUFFER ---
-            print("\n🧹 Clearing audio buffer...")
-            try:
-                # We open a stream, pull out whatever is sitting in it, and immediately close it
-                with sd.InputStream(
-                    samplerate=self.rate,
-                    channels=1,
-                    dtype="int16",
-                    device=settings.AUDIO_INPUT_INDEX,
-                    blocksize=self.chunk,
-                ) as stream:
-                    # Read a few chunks to discard any audio from the previous command
-                    for _ in range(5):
-                        stream.read(self.chunk)
-            except Exception:
-                pass  # If it's empty or errors, that's fine!
+        """Main loop using non-blocking wake word detection."""
 
-            # --- STEP 1: WAIT FOR WAKE WORD ---
-            print("💤 Sleeping... Say 'Alexa' to wake me up.")
-            self.wake_detector.listen_for_wake_word()
+        print("🚀 Voice Pipeline Running...")
 
-            # If the line above finishes, it means a wake word was detected!
-            print("🔔 Wake word triggered! Switching to listener...")
+        # ✅ Start wake word stream ONCE
+        self.wake_detector.start()
 
-            # --- STEP 2: LISTEN FOR COMMAND ---
-            command_text = self.listen_for_command()
+        try:
+            while True:
+                # 🔥 STEP 1: Detect wake word continuously
+                score = self.wake_detector.detect()
 
-            if command_text:
-                print(f"📡 Dispatched Command: {command_text}")
-                # Broadcast the text to your Orchestrator/Brain!
-                bus.publish("user_input_received", {"text": command_text})
-            else:
-                print("🔇 No clear speech understood. Going back to sleep.")
+                if score > 0:
+                    print("\n🔔 Wake word detected! Switching to command mode...")
 
-            # Small buffer to prevent instant loop feedback
-            time.sleep(1)
+                    # 🛑 VERY IMPORTANT: Stop wake word BEFORE using mic again
+                    self.wake_detector.pause()
+
+                    # 🧹 Clear leftover audio buffer
+                    self._clear_audio_buffer()
+
+                    # 🎤 STEP 2: Listen for command
+                    command_text = self.listen_for_command()
+
+                    if command_text:
+                        print(f"📡 Dispatched Command: {command_text}")
+                        bus.publish("user_input_received", {"text": command_text})
+                    else:
+                        print("🔇 No clear speech understood.")
+
+                    # ⏳ Small delay to avoid echo retrigger
+                    time.sleep(0.5)
+
+                    # 🔁 Resume wake word detection
+                    self.wake_detector.resume()
+
+                time.sleep(0.01)  # 🔥 Prevent CPU overuse
+
+        except KeyboardInterrupt:
+            print("\n🛑 Pipeline stopped.")
+            self.wake_detector.stop()
 
     def listen_for_command(self):
         """Listens for the actual command right after the wake word using
