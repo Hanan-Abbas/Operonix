@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("Config")
 
@@ -17,7 +17,9 @@ class Settings:
 
     # --- PROJECT PATHS ---
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-    AUDIO_INPUT_INDEX = 2  # 🟢 FIX: Set this to the correct index for your microphone (use pyaudio to list devices)
+    # PyAudio input device index. Run: python -m voice.audio_devices
+    # Use None or -1 for the OS default input device if a fixed index misbehaves.
+    AUDIO_INPUT_INDEX: Optional[int] = None
     LOGS_DIR: Path = BASE_DIR / "logs"
     SANDBOX_DIR: Path = BASE_DIR / "sandbox"
     PLUGINS_DIR: Path = BASE_DIR / "plugins"
