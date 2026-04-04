@@ -47,9 +47,12 @@ class AudioManager:
             return None
 
         try:
+            # Add exception_on_overflow=False so it doesn't crash on tiny hitches!
             data, _ = self.stream.read(self.chunk)
             return data.copy()
-        except Exception:
+        except Exception as e:
+            # Temporarily un-mute this to see if it's failing
+            print(f"❌ Stream read error: {e}")
             return None
 
     # 🧹 CLEAR BUFFER
