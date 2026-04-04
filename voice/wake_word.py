@@ -27,6 +27,33 @@ class WakeWordDetector:
         # Optional callback when wake word is detected
         self.on_wake = None
 
+    def pause(self):
+        """Pauses queue filling so command listener can use the stream."""
+        print("⏸️ WakeWordDetector: Pausing queue...")
+        # Clear the queue so old audio doesn't cause fake triggers later
+        while not self.audio_queue.empty():
+            try:
+                self.audio_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def resume(self):
+        """Resumes wake word detection and clears openWakeWord's memory."""
+        print("▶️ WakeWordDetector: Resuming and wiping model memory...")
+
+        # 1. Reset the internal states of openWakeWord
+        self.model.reset()
+
+        # 🟢 FIX: Set a timestamp to ignore detection for the next 1.5 seconds
+        self.last_trigger_time = time.time() + 1.5
+
+        # Clear the local queue
+        while not self.audio_queue.empty():
+            try:
+                self.audio_queue.get_nowait()
+            except queue.Empty:
+                break
+
     def set_trigger_callback(self, callback):
         self.on_wake = callback
 
@@ -63,7 +90,7 @@ class WakeWordDetector:
         if now - self.last_trigger_time < self.cooldown:
             return 0.0
 
-        if score > 0.9:
+        if score > 0.8:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
