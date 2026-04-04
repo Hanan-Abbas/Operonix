@@ -41,7 +41,7 @@ class SpeechToText:
             input=True,
             frames_per_buffer=self.chunk
         )
-        
+              
         frames = []
         for _ in range(0, int(self.rate / self.chunk * duration)):
             data = stream.read(self.chunk)
@@ -70,7 +70,9 @@ class SpeechToText:
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
         
         # 🟢 FIX: Forcing language='en' so it doesn't hallucinate non-English
-        segments, _ = self.model.transcribe(audio_np, beam_size=5, language="en")
+        segments, _ = self.model.transcribe(
+            audio_np, beam_size=1, language="en"
+        )
         
         text = "".join([segment.text for segment in segments]).strip()
         return text
