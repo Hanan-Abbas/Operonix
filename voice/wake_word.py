@@ -25,6 +25,9 @@ class WakeWordDetector:
         self.last_trigger_time = 0
         self.cooldown = 3  # seconds
 
+    def set_trigger_callback(self, callback):
+        self.on_wake = callback
+
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
             print(f"⚠️ Audio status: {status}", file=sys.stderr)
@@ -91,9 +94,11 @@ class WakeWordDetector:
 
         if score > 0.85:
             self.last_trigger_time = now
-            print(
-                f"\n🔔 Wake Word: Detected '{self.wake_word}' ({score:.2f})"
-            )
+            print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
+
+            if hasattr(self, "on_wake") and self.on_wake:
+                self.on_wake()
+
             return score
 
         return 0.0
