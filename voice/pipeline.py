@@ -41,7 +41,7 @@ class VoicePipeline:
         self.audio_manager = AudioManager(rate=16000, chunk=512)
         self.noise_filter = NoiseFilter(rate=16000)
         self.vad_model = load_silero_vad()
-        self.stt = SpeechToText(model_size="tiny")
+        self.stt = SpeechToText(model_size="base")
         self.wake_detector = WakeWordDetector(
             wake_word="alexa", audio_manager=self.audio_manager
         )
@@ -136,7 +136,7 @@ class VoicePipeline:
                 silent_chunks = 0
             elif triggered:
                 silent_chunks += 1
-                if silent_chunks > 35:  # ~1.2s silence
+                if silent_chunks > 55:  # ~1.2s silence
                     print("🔇 Silence detected. Processing...")
                     break
 
