@@ -142,8 +142,14 @@ class VoicePipeline:
         full_audio_int16 = np.concatenate(voiced_frames, axis=0).flatten()
         full_audio_float32 = full_audio_int16.astype(np.float32) / 32768.0
 
-        # 🟢 Bypassing noise filter so Whisper gets the raw, un-muffled audio
-        cleaned_audio = full_audio_float32
+        # 🟢 UNIVERSAL NOISE REDUCTION APPLIED HERE
+        import noisereduce as nr
+        print("🤫 Reducing background noise dynamically...")
+        cleaned_audio = nr.reduce_noise(
+            y=full_audio_float32, 
+            sr=self.rate, 
+            stationary=True # Targets static noises like fans
+        )
         
         # 🟢 Boost command volume by 1.5x
         cleaned_audio = np.clip(cleaned_audio * 1.5, -1.0, 1.0)
