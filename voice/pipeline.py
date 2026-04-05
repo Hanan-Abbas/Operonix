@@ -46,7 +46,6 @@ class VoicePipeline:
             wake_word="alexa", audio_manager=self.audio_manager
         )
 
-        # 🟢 State flag to prevent callback deadlocks
         self.is_command_active = False
 
         # Optional: callback when wake word triggers
@@ -60,28 +59,22 @@ class VoicePipeline:
         print("\n🔔 Wake word callback triggered! Handing off to main loop...")
         self.is_command_active = True
 
-        # 🟢 Aggressively dump 30 chunks (~1 second) to clear your wake word out
-        # of the microphone buffer before attempting to listen to the command!
+        # Clear buffer to get rid of the "Alexa" audio lingering in the stream
         self.audio_manager.clear_buffer(num_chunks=30)
 
     def run(self):
         """Main loop using AudioManager for wake word detection."""
         print("🚀 Voice Pipeline Running...")
 
-        # Start shared audio stream
         self.audio_manager.start()
 
         try:
             while True:
-                # 🟢 Check if the callback flag was triggered!
                 if self.is_command_active:
                     print("🔄 Swapped to Command Listener state.")
-                    # 1. Stop checking for 'Alexa'
                     self.wake_detector.pause()
-                    # 2. Clear out the buffered audio
                     self.audio_manager.clear_buffer()
 
-                    # 3. Listen to the user
                     command = self.listen_for_command()
 
                     if command:
@@ -90,17 +83,15 @@ class VoicePipeline:
                     else:
                         print("🔇 No clear speech understood.")
 
-                    # 4. Settle down before turning the mic back on
                     time.sleep(0.5)
                     self.is_command_active = False
                     self.wake_detector.resume()
                     print("\n💤 Going back to sleep. Say 'Alexa'...")
 
                 else:
-                    # 🟢 If the callback hasn't fired yet, keep looking for 'Alexa'
                     self.wake_detector.detect()
 
-                time.sleep(0.01)  # prevents maxing out CPU cores
+                time.sleep(0.01)
 
         except KeyboardInterrupt:
             print("\n🛑 Pipeline stopped manually.")
@@ -140,7 +131,6 @@ class VoicePipeline:
                     print("🔇 Silence detected. Processing...")
                     break
 
-            # Timeout if no speech detected (~6s)
             if not triggered and total_chunks > 200:
                 print("⌛ Listening timed out. No speech detected.")
                 break
@@ -148,31 +138,29 @@ class VoicePipeline:
         if not triggered or len(voiced_frames) < 10:
             return None
 
-        # 🟢 FIX APPLIED HERE:
-        # Combine all frames into one big numpy array
+        # 1. Combine all frames into one big numpy array
         full_audio_int16 = np.concatenate(voiced_frames, axis=0).flatten()
         full_audio_float32 = full_audio_int16.astype(np.float32) / 32768.0
 
-        # Run through noise cancellation
+        # 🟢 Bypassing noise filter so Whisper gets the raw, un-muffled audio
         cleaned_audio = full_audio_float32
+        
+        # 🟢 Boost command volume by 1.5x
         cleaned_audio = np.clip(cleaned_audio * 1.5, -1.0, 1.0)
         
         import wave
         try:
-            # Convert back to int16 just for the wav file
             diag_int16 = (cleaned_audio * 32767.0).astype(np.int16)
             
             with wave.open("test_command.wav", "wb") as wf:
                 wf.setnchannels(1)
-                wf.setsampwidth(2)  # 2 bytes = 16 bit
+                wf.setsampwidth(2)
                 wf.setframerate(self.rate)
                 wf.writeframes(diag_int16.tobytes())
             print("💾 DIAGNOSTIC: Saved 'test_command.wav' to your folder!")
         except Exception as e:
             print(f"⚠️ Failed to save debug wav: {e}")
 
-
-        # Call the new numpy array method directly! Skip turning it back into bytes.
         print("⌛ Transcribing audio...")
         return self.stt.transcribe_numpy_array(cleaned_audio)
 
