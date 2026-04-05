@@ -154,7 +154,23 @@ class VoicePipeline:
         full_audio_float32 = full_audio_int16.astype(np.float32) / 32768.0
 
         # Run through noise cancellation
-        cleaned_audio = self.noise_filter.reduce_noise(full_audio_float32)
+        cleaned_audio = full_audio_float32
+        cleaned_audio = np.clip(cleaned_audio * 1.5, -1.0, 1.0)
+        
+        import wave
+        try:
+            # Convert back to int16 just for the wav file
+            diag_int16 = (cleaned_audio * 32767.0).astype(np.int16)
+            
+            with wave.open("test_command.wav", "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 2 bytes = 16 bit
+                wf.setframerate(self.rate)
+                wf.writeframes(diag_int16.tobytes())
+            print("💾 DIAGNOSTIC: Saved 'test_command.wav' to your folder!")
+        except Exception as e:
+            print(f"⚠️ Failed to save debug wav: {e}")
+
 
         # Call the new numpy array method directly! Skip turning it back into bytes.
         print("⌛ Transcribing audio...")
