@@ -77,6 +77,24 @@ class SpeechToText:
         text = "".join([segment.text for segment in segments]).strip()
         return text
 
+    def transcribe_numpy_array(self, audio_np):
+        """
+        🟢 HIGH-SPEED UPGRADE: Accepts a direct float32 numpy array.
+        Zero conversion overhead!
+        """
+        if audio_np is None or len(audio_np) == 0:
+            return ""
+            
+        # Guarantee it's float32 for Faster-Whisper
+        audio_np = audio_np.astype(np.float32)
+        
+        segments, _ = self.model.transcribe(
+            audio_np, beam_size=1, language="en"
+        )
+        
+        text = "".join([segment.text for segment in segments]).strip()
+        return text
+        
 # Simple test execution
 if __name__ == "__main__":
     stt = SpeechToText(model_size="tiny")
