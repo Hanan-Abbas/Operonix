@@ -59,38 +59,34 @@ class WakeWordDetector:
 
     # ✅ SINGLE STEP DETECTION
     def detect(self):
-        """Check one chunk from AudioManager and detect wake word."""
+        """Check audio from AudioManager and detect wake word."""
         if not self.audio_manager.is_running:
             return 0.0
 
-        # Grab a chunk from AudioManager
+        # 1. Grab a chunk from AudioManager (this is exactly 512 samples)
         chunk = self.audio_manager.read_chunk()
         if chunk is None:
             return 0.0
 
-        # Feed to local queue
-        try:
-            self.audio_queue.put_nowait(chunk.flatten())
-        except queue.Full:
-            pass  # drop old data
+        # 2. Get the raw 16-bit integers
+        audio_int16 = chunk.astype(np.int16).flatten()
 
-        if self.audio_queue.empty():
-            return 0.0
-
-        audio_chunk = self.audio_queue.get()
-        audio_list = audio_chunk.tolist()
-
-        prediction = self.model.predict(audio_list)
+        # 3. Predict using openWakeWord
+        # We pass the 512 chunk directly. openWakeWord's predict() method handles 
+        # its own internal buffer and will step forward naturally!
+        prediction = self.model.predict(audio_int16)
         score = prediction.get(self.wake_word, 0)
 
-        print(f"Debug Score: {score:.4f}", end="\r")
+        # Print debug score
+        print(f"Debug Score: {score:.4f}")
 
-        # Cooldown check
+        # 4. Cooldown check
         now = time.time()
         if now - self.last_trigger_time < self.cooldown:
             return 0.0
 
-        if score > 0.75:
+        # 5. Trigger if score crosses the threshold
+        if score > 0.4:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
