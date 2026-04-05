@@ -25,10 +25,10 @@ import torch
 from core.config import settings
 from core.event_bus import bus
 from silero_vad import load_silero_vad
+from voice.audio_manager import AudioManager
 from voice.noise_filter import NoiseFilter
 from voice.stt import SpeechToText
 from voice.wake_word import WakeWordDetector
-from voice.audio_manager import AudioManager
 
 
 class VoicePipeline:
@@ -46,7 +46,7 @@ class VoicePipeline:
             wake_word="alexa", audio_manager=self.audio_manager
         )
 
-        # 🟢 NEW: State flag to prevent callback deadlocks
+        # 🟢 State flag to prevent callback deadlocks
         self.is_command_active = False
 
         # Optional: callback when wake word triggers
@@ -60,7 +60,7 @@ class VoicePipeline:
         print("\n🔔 Wake word callback triggered! Handing off to main loop...")
         self.is_command_active = True
 
-        # 🟢 FIX: Aggressively dump 30 chunks (~1 second) to clear your wake word out 
+        # 🟢 Aggressively dump 30 chunks (~1 second) to clear your wake word out
         # of the microphone buffer before attempting to listen to the command!
         self.audio_manager.clear_buffer(num_chunks=30)
 
@@ -148,14 +148,17 @@ class VoicePipeline:
         if not triggered or len(voiced_frames) < 10:
             return None
 
-        # Combine, reduce noise, and transcribe
+        # 🟢 FIX APPLIED HERE:
+        # Combine all frames into one big numpy array
         full_audio_int16 = np.concatenate(voiced_frames, axis=0).flatten()
         full_audio_float32 = full_audio_int16.astype(np.float32) / 32768.0
-        cleaned_audio = self.noise_filter.reduce_noise(full_audio_float32)
-        cleaned_int16 = (cleaned_audio * 32767.0).astype(np.int16)
-        cleaned_bytes = cleaned_int16.tobytes()
 
-        return self.stt.transcribe_raw_bytes(cleaned_bytes)
+        # Run through noise cancellation
+        cleaned_audio = self.noise_filter.reduce_noise(full_audio_float32)
+
+        # Call the new numpy array method directly! Skip turning it back into bytes.
+        print("⌛ Transcribing audio...")
+        return self.stt.transcribe_numpy_array(cleaned_audio)
 
 
 if __name__ == "__main__":
