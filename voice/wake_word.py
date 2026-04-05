@@ -44,8 +44,8 @@ class WakeWordDetector:
         # 1. Reset the internal states of openWakeWord
         self.model.reset()
 
-        # 🟢 FIX: Set a timestamp to ignore detection for the next 1.5 seconds
-        self.last_trigger_time = time.time() + 1.5
+        # 🟢 FIX: Force a 2-second ignoring window from THIS exact moment
+        self.last_trigger_time = time.time() + 2.0
 
         # Clear the local queue
         while not self.audio_queue.empty():
@@ -86,7 +86,7 @@ class WakeWordDetector:
             return 0.0
 
         # 5. Trigger if score crosses the threshold
-        if score > 0.4:
+        if score > 0.6:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
