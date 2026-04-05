@@ -84,8 +84,8 @@ class WakeWordDetector:
         if now - self.last_trigger_time < self.cooldown:
             return 0.0
 
-        # 🟢 FIX: Lowered threshold to 0.35 because of low mic input
-        if score > 0.35:
+        # 🟢 FIX: Lowered threshold to 0.25 because of low mic input
+        if score > 0.25:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
