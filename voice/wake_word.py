@@ -90,7 +90,7 @@ class WakeWordDetector:
         if now - self.last_trigger_time < self.cooldown:
             return 0.0
 
-        if score > 0.8:
+        if score > 0.75:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
