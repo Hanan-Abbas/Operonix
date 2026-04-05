@@ -18,19 +18,18 @@ class WakeWordDetector:
         self.rate = 16000
 
         self.audio_manager = audio_manager
-        self.audio_queue = queue.Queue(maxsize=10)  # buffer for detection
+        self.audio_queue = queue.Queue(maxsize=10)
 
-        # Cooldown to prevent retrigger
+        # Cooldown to prevent immediate re-trigger
         self.last_trigger_time = 0
-        self.cooldown = 3  # seconds
+        self.cooldown = 3
 
-        # Optional callback when wake word is detected
+        # Callback when wake word is detected
         self.on_wake = None
 
     def pause(self):
         """Pauses queue filling so command listener can use the stream."""
         print("⏸️ WakeWordDetector: Pausing queue...")
-        # Clear the queue so old audio doesn't cause fake triggers later
         while not self.audio_queue.empty():
             try:
                 self.audio_queue.get_nowait()
@@ -41,10 +40,10 @@ class WakeWordDetector:
         """Resumes wake word detection and clears openWakeWord's memory."""
         print("▶️ WakeWordDetector: Resuming and wiping model memory...")
 
-        # 1. Reset the internal states of openWakeWord
+        # Reset the internal states of openWakeWord
         self.model.reset()
 
-        # 🟢 FIX: Force a 2-second ignoring window from THIS exact moment
+        # Hard 2-second ignore window from THIS exact moment to prevent ghost loops
         self.last_trigger_time = time.time() + 2.0
 
         # Clear the local queue
@@ -57,13 +56,12 @@ class WakeWordDetector:
     def set_trigger_callback(self, callback):
         self.on_wake = callback
 
-    # ✅ SINGLE STEP DETECTION
     def detect(self):
         """Check audio from AudioManager and detect wake word."""
         if not self.audio_manager.is_running:
             return 0.0
 
-        # 1. Grab a chunk from AudioManager (this is exactly 512 samples)
+        # 1. Grab a chunk from AudioManager (exactly 512 samples)
         chunk = self.audio_manager.read_chunk()
         if chunk is None:
             return 0.0
@@ -71,9 +69,10 @@ class WakeWordDetector:
         # 2. Get the raw 16-bit integers
         audio_int16 = chunk.astype(np.int16).flatten()
 
+        # 🟢 FIX: Boost the volume by 1.5x for the wake word engine too!
+        audio_int16 = np.clip(audio_int16 * 1.5, -32768, 32767).astype(np.int16)
+
         # 3. Predict using openWakeWord
-        # We pass the 512 chunk directly. openWakeWord's predict() method handles 
-        # its own internal buffer and will step forward naturally!
         prediction = self.model.predict(audio_int16)
         score = prediction.get(self.wake_word, 0)
 
@@ -85,8 +84,8 @@ class WakeWordDetector:
         if now - self.last_trigger_time < self.cooldown:
             return 0.0
 
-        # 5. Trigger if score crosses the threshold
-        if score > 0.6:
+        # 🟢 FIX: Lowered threshold to 0.35 because of low mic input
+        if score > 0.35:
             self.last_trigger_time = now
             print(f"\n🔔 Wake Word Detected: {self.wake_word} ({score:.2f})")
 
