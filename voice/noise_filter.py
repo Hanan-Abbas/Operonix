@@ -6,9 +6,7 @@ import numpy as np
 class NoiseFilter:
 
     def __init__(self, rate=16000):
-        self.rate = rate
-        # 🟢 Generate a 0.5 second profile of static "pink noise"
-        # This acts as a reference baseline for fan/hiss noise!
+        self.rate = rate if rate is not None else 16000
         self.static_noise_profile = self._generate_static_profile()
         print("🎙️ Noise Filter: Initialized (Precision Spectral Gating)")
 
