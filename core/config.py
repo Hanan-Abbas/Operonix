@@ -17,9 +17,16 @@ class Settings:
 
     # --- PROJECT PATHS ---
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-    # PyAudio input device index. Run: python -m voice.audio_devices
-    # Use None or -1 for the OS default input device if a fixed index misbehaves.
-    AUDIO_INPUT_INDEX: Optional[int] = None
+    
+    # --- Voice & Audio Settings ---
+    AUDIO_INPUT_INDEX = 0 
+    AUDIO_RATE = 16000 # Standard for AI models
+    AUDIO_CHUNK = 1280 # Required for openWakeWord to see full words
+    WAKE_WORD = "alexa"
+    WAKE_THRESHOLD = 0.05
+    MIC_VOLUME_BOOST = 1.2
+
+
     LOGS_DIR: Path = BASE_DIR / "logs"
     SANDBOX_DIR: Path = BASE_DIR / "sandbox"
     PLUGINS_DIR: Path = BASE_DIR / "plugins"
