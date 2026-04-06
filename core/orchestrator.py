@@ -9,8 +9,8 @@ from core.config import settings
 # Import your voice modules
 from voice.wake_word import WakeWordDetector
 from voice.listener import VoiceListener
-# 🟢 NEW: Import the AudioManager!
-from voice.audio_manager import AudioManager 
+from voice.audio_manager import AudioManager
+from voice.pipeline import VoicePipeline
 
 class Orchestrator:
     def __init__(self):
@@ -18,83 +18,66 @@ class Orchestrator:
         self.is_running = False
         self.logger = logging.getLogger("Orchestrator")
         
-        # 🟢 NEW: 1. Create the single source of truth for your audio hardware
+        # 🟢 FIX: Create the AudioManager ONLY ONCE
         self.audio_manager = AudioManager(
             rate=getattr(settings, "AUDIO_RATE", 16000),
-            chunk=getattr(settings, "AUDIO_CHUNK", 512)
+            chunk=getattr(settings, "AUDIO_CHUNK", 1280),
+            auto_start=True
         )
         
-        # 🟢 NEW: 2. Pull the wake word dynamically from settings
-        wake_phrase = getattr(settings, "WAKE_WORD", "alexa")
+        # 🟢 FIX: Pass that single manager to all sub-modules
+        self.pipeline = VoicePipeline(audio_manager=self.audio_manager)
         
-        # 🟢 NEW: 3. Pass the audio manager directly to the detector!
+        wake_phrase = getattr(settings, "WAKE_WORD", "alexa")
         self.wake_detector = WakeWordDetector(
             wake_word=wake_phrase, 
             audio_manager=self.audio_manager
         )
         
-        # 🟢 NEW: 4. Pass the shared audio manager to your listener too!
         self.listener = VoiceListener(audio_manager=self.audio_manager)
 
     async def start(self):
         """Initialize the core loop and subscribe to the pipeline events."""
         self.is_running = True
         
-        # 0. Voice Wake-up Pipeline
+        # Subscriptions
         bus.subscribe("wake_word_detected", self.handle_wake_word)
-        bus.subscribe("voice_audio_captured", self.process_voice_to_input)
-        
-        # 1. Entry Point: User speaks or types
         bus.subscribe("user_input_received", self.handle_new_task)
-        
-        # 2. Pipeline Tracking: Monitor the journey from Brain to Hand
         bus.subscribe("intent_parsed", self.route_to_mapper)
         bus.subscribe("capability_mapped", self.route_to_decision_engine)
-        bus.subscribe("request_planning", self.route_to_planner)
         bus.subscribe("task_dispatched", self.route_to_executor)
-        
-        # 3. Lifecycle: Success and Error handling
         bus.subscribe("task_completed", self.finalize_task)
         bus.subscribe("task_failed", self.handle_failure)
         
         self.logger.info("🎛️ Orchestrator: System Backbone Online. Awaiting commands.")
-        
-        # Start background task to listen for the wake word
         asyncio.create_task(self.background_wake_word_listener())
 
     async def background_wake_word_listener(self):
-        """Runs the blocking openWakeWord in a thread so it doesn't freeze the OS."""
+
         self.logger.info("🎙️ Orchestrator: Starting background wake word engine...")
         loop = asyncio.get_running_loop()
-        
+        self.wake_detector.loop = loop
         while self.is_running:
-            # 🟢 NOTE: Since we fixed detect() in wake_word.py to be a clean read,
-            # we can run it safely or keep your run_in_executor depending on your exact wake_word setup!
-            # If your wake_detector.detect() is synchronous, keep it in the executor like this:
+            # Use the shared manager via the detector
             await loop.run_in_executor(None, self.wake_detector.detect)
-            # Short pause before recycling the loop
             await asyncio.sleep(0.1)
 
     async def handle_wake_word(self, event):
         """Fires when the user says the wake word."""
         trigger = event.data.get("trigger")
         self.logger.info(f"\n🔔 Orchestrator: System woken up by '{trigger}'!")
-        
-        # 🟢 Run the voice listener to capture the user's command
-        # Passing down the executor execution strategy since microphone blocking occurs natively!
+
+        # 🟢 FIX: Use the listener to capture command in a thread
         loop = asyncio.get_running_loop()
         command_text = await loop.run_in_executor(None, self.listener.listen_until_silent)
         
-        # Emit the captured text to the event bus
-        await bus.emit("voice_audio_captured", {"text": command_text}, source="orchestrator")
-
-    async def process_voice_to_input(self, event):
-        """Converts transcribed voice into the standard user input event."""
-        text = event.data.get("text")
-        if text:
-            await bus.emit("user_input_received", {"text": text}, source="orchestrator")
+        if command_text:
+            # ONLY emit this. The standard pipeline takes it from here.
+            await bus.emit("user_input_received", {"text": command_text}, source="orchestrator")
         else:
             self.logger.warning("🔇 Orchestrator: No voice command understood.")
+
+    # ... keep handle_new_task and other routing methods as they were ...
 
     async def handle_new_task(self, event):
         """Phase 1: Initialization & Context Gathering."""
