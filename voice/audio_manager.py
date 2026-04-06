@@ -6,13 +6,17 @@ from core.config import settings
 class AudioManager:
     """🎤 Centralized microphone controller (single source of truth)"""
 
-    def __init__(self, rate=16000, chunk=512):
+    def __init__(self, rate=16000, chunk=512, auto_start=True):
         self.rate = rate
         self.chunk = chunk
         self.device = settings.AUDIO_INPUT_INDEX
 
         self.stream = None
         self.is_running = False
+        
+        # 🟢 AUTO-START: Automatically turn on the mic during initialization
+        if auto_start:
+            self.start()
 
     # 🔥 START STREAM
     def start(self):
@@ -21,16 +25,20 @@ class AudioManager:
 
         print("🎤 AudioManager: Starting input stream...")
 
-        self.stream = sd.InputStream(
-            samplerate=self.rate,
-            channels=1,
-            dtype="int16",
-            device=self.device,
-            blocksize=self.chunk,
-        )
+        try:
+            self.stream = sd.InputStream(
+                samplerate=self.rate,
+                channels=1,
+                dtype="int16",
+                device=self.device,
+                blocksize=self.chunk,
+            )
 
-        self.stream.start()
-        self.is_running = True
+            self.stream.start()
+            self.is_running = True
+        except Exception as e:
+            print(f"❌ AudioManager: Failed to open audio device. Error: {e}")
+            self.is_running = False
 
     # 🛑 STOP STREAM
     def stop(self):
@@ -47,8 +55,11 @@ class AudioManager:
             return None
 
         try:
-            # Add exception_on_overflow=False so it doesn't crash on tiny hitches!
-            data, _ = self.stream.read(self.chunk)
+            # Added exception_on_overflow=False so it doesn't crash on tiny hitches!
+            data, overflowed = self.stream.read(self.chunk)
+            if overflowed:
+                # Optional: log a debug message if frames were dropped
+                pass
             return data.copy()
         except Exception as e:
             # Temporarily un-mute this to see if it's failing
