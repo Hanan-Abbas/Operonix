@@ -82,8 +82,8 @@ class VoiceListener:
             voiced_frames.append(data.tobytes())
 
             # Convert numpy array to float32 tensor for Silero VAD
-            audio_float32 = data.astype(np.float32) / 32768.0
-            audio_tensor = torch.from_numpy(audio_float32)
+            audio_float32 = data.flatten().astype(np.float32) / 32768.0
+            audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
 
             speech_prob = self.model(audio_tensor, self.rate).item()
 
