@@ -25,9 +25,6 @@ from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 
-# 🟢 NEW: Import your newly created voice and context dependencies
-from voice.voice_processor import voice_processor
-
 logger = logging.getLogger("LifecycleManager")
 
 class LifecycleManager:
@@ -102,9 +99,6 @@ class LifecycleManager:
         await vector_store.start()
         await confirmation_manager.start()
         await orchestrator.start()
-
-        # 🟢 NEW: Boot the voice processor to connect your completed voice folder!
-        await voice_processor.start()
 
         # 6. Boot the Learning System
         try:
