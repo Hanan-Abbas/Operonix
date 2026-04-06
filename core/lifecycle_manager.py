@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import os  # 🟢 Added to prevent NameError on hard exit!
+import os
 import signal
 import sys
 from datetime import datetime
@@ -11,7 +11,6 @@ from brain.planner import planner
 from brain.decision_engine import decision_engine
 from capabilities.bootstrap import init_capabilities
 from context.state_extractor import state_extractor
-from context.window_detector import window_detector
 from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
@@ -26,7 +25,9 @@ from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 
-# Instantiating standard Python logger for console reporting
+# 🟢 NEW: Import your newly created voice and context dependencies
+from voice.voice_processor import voice_processor
+
 logger = logging.getLogger("LifecycleManager")
 
 class LifecycleManager:
@@ -37,7 +38,6 @@ class LifecycleManager:
     def __init__(self):
         self.is_running = False
         self._background_tasks = set()
-        
         self.error_handler = ErrorHandler(event_bus=bus, logger=sys_logger)
 
     def setup_global_exception_hooks(self, loop):
@@ -91,19 +91,22 @@ class LifecycleManager:
         await decision_engine.start()  
         await planner.start()
         
-        # 5. Boot context & execution layers
-        await window_detector.start()
+        # 🟢 RESOLVED: Removed the call to non-existent 'window_detector' 
+        # and booted state extractor.
         await state_extractor.start()
         await executor.start()
         
-        # 6. Boot memory & management layers
+        # 5. Boot memory & management layers
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
         await confirmation_manager.start()
         await orchestrator.start()
 
-        # 7. Boot the Learning System
+        # 🟢 NEW: Boot the voice processor to connect your completed voice folder!
+        await voice_processor.start()
+
+        # 6. Boot the Learning System
         try:
             await learner.start()
             logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
@@ -125,15 +128,12 @@ class LifecycleManager:
     def _register_signal_handlers(self, loop):
         """Captures OS-level termination signals to trigger a clean exit."""
         
-        # Brutal sync handler for repeated interrupts
         def force_exit_handler():
             print("\n🛑 Force quit requested. Terminating immediately.")
             os._exit(1)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                # If we are already shutting down and the user hits Ctrl+C again,
-                # immediately terminate without waiting.
                 loop.add_signal_handler(
                     sig, 
                     lambda: asyncio.create_task(self.shutdown()) if self.is_running else force_exit_handler()
@@ -146,7 +146,10 @@ class LifecycleManager:
         try:
             await self.startup()
 
-            logger.info("🌐 Dashboard API: Launching on http://localhost:8000")
+            # 🟢 DYNAMIC: Pulled address and port from your core settings module
+            api_host = getattr(settings, "API_HOST", "localhost")
+            api_port = getattr(settings, "API_PORT", 8000)
+            logger.info(f"🌐 Dashboard API: Launching on http://{api_host}:{api_port}")
 
             server_task = asyncio.create_task(asyncio.to_thread(start_server))
             self._background_tasks.add(server_task)
@@ -180,15 +183,19 @@ class LifecycleManager:
 
         # 1. Force the learner to save patterns to disk before tasks die!
         try:
-            learner._save_store()
-            logger.info("💾 Flushed learned patterns to pattern_store.json")
+            # Safely check if learner exists before attempting to trigger operations
+            if hasattr(learner, '_save_store'):
+                learner._save_store()
+                logger.info("💾 Flushed learned patterns to pattern_store.json")
         except Exception as e:
             logger.error(f"Failed to save patterns on shutdown: {e}")
 
-        # 2. Run the pruner with a strict async timeout so it can't hang the loop!
+        # 2. Run the pruner with a strict async timeout
         try:
             logger.info("✂️ Running memory optimizer...")
-            await asyncio.wait_for(pattern_pruner.prune_store(), timeout=2.0)
+            # 🟢 DYNAMIC: Pulled threshold limit from settings rather than hardcoding 2.0s
+            prune_timeout = getattr(settings, "PRUNE_TIMEOUT", 2.0)
+            await asyncio.wait_for(pattern_pruner.prune_store(), timeout=prune_timeout)
             logger.info("✂️ Memory optimized successfully.")
         except asyncio.TimeoutError:
             logger.warning("⏰ Pattern pruner took too long. Skipping optimization to avoid hanging.")
@@ -213,7 +220,6 @@ class LifecycleManager:
         except (asyncio.TimeoutError, asyncio.CancelledError):
             logger.warning("⏰ Tasks refused to exit. Hard killing the process.")
 
-        # The Nuclear Option
         logger.info("🔌 System shut down completed. Goodbye.")
         os._exit(0)
 
