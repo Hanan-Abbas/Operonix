@@ -28,8 +28,9 @@ class VoicePipeline:
             if chunk is None: continue
 
             voiced_frames.append(chunk.copy())
-            audio_float32 = chunk.astype(np.float32).flatten() / 32768.0
-            speech_prob = self.vad_model(torch.from_numpy(audio_float32), self.rate).item()
+            audio_float32 = chunk.flatten().astype(np.float32) / 32768.0
+            audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
+            speech_prob = self.vad_model(audio_tensor, self.rate).item()
 
             if speech_prob > 0.55:
                 triggered = True
