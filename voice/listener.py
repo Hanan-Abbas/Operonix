@@ -45,7 +45,7 @@ class VoiceListener:
         
         # 🟢 DYNAMIC: Pointing to your shared source of truth
         self.audio_manager = audio_manager
-
+        self.rate = getattr(audio_manager, 'rate', 16000) or 16000
         # We pull model size from settings or fallback to 'tiny' (No hardcoding)
         stt_size = getattr(settings, "STT_MODEL_SIZE", "tiny")
         self.stt = SpeechToText(model_size=stt_size)
