@@ -1,11 +1,10 @@
 import asyncio
 import logging
-import os
 import platform
+import json
 
 from capabilities.registry import capability_registry
 from context.context_validator import context_validator
-# --- IMPORT CONFIG AND ERROR HANDLER ---
 from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
@@ -14,56 +13,36 @@ from executor.focus_manager import FocusManager
 from executor.retry_manager import RetryManager
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
+# 🟢 NEW: Use the brain to dynamically classify errors
+from brain.llm_client import llm_client 
 
 logger = logging.getLogger("Executor")
 
-# Initialize error handler for the execution layer
 error_handler = ErrorHandler(event_bus=bus, logger=logger)
 
-# -------------------------
-# Global Managers
-# -------------------------
 retry_manager = RetryManager()
 fallback_manager = FallbackManager()
 focus_manager = FocusManager()
 
 
 class Executor:
-    """⚙️ Central Execution Layer
-
-    - Executes plans step by step
-    - Validates context
-    - Chooses best tool
-    - Handles retries and fallback
-    - Emits events to bus
-    """
 
     def __init__(self):
         self.os_name = platform.system()
         self.is_running = False
         self.restricted_actions = set()
 
-    # -------------------------
-    # Start Executor
-    # -------------------------
     async def start(self):
-        # 🔄 CHANGE 1: Listen ONLY to tasks that have passed the Safety Validator!
         bus.subscribe("task_safety_cleared", self.execute_plan)
-
         self.is_running = True
         logger.info(f"⚙️ Executor Online | OS: {self.os_name}")
         logger.info(f"⚙️ Tools Loaded: {len(tool_registry.list_tools())}")
 
-    # -------------------------
-    # Main Execution Loop
-    # -------------------------
     async def execute_plan(self, event):
         task_data = event.data
         task_id = task_data.get("task_id")
         steps = task_data.get("steps", [])
         context = task_data.get("context", {})
-
-        # 🔄 GRAB INTENT: We need to pull this to pass it to the Learner at the end
         intent = task_data.get("intent")
 
         logger.info(f"🚀 Starting Task [{task_id}] with {len(steps)} steps")
@@ -98,7 +77,6 @@ class Executor:
                 )
                 return
 
-            # Update context dynamically
             context["last_result"] = result
             context["last_action"] = action
 
@@ -113,8 +91,6 @@ class Executor:
             )
             logger.info(f"✅ Step {step_index} completed: {action}")
 
-        # 🔄 CRITICAL UPGRADE FOR LEARNER:
-        # We now pass the 'intent' and 'steps' back up so the learner can memorize them!
         bus.publish(
             "task_completed",
             {"task_id": task_id, "intent": intent, "steps": steps},
@@ -124,9 +100,6 @@ class Executor:
         retry_manager.clear_task(task_id)
         logger.info(f"🏁 Task [{task_id}] completed successfully")
 
-    # -------------------------
-    # Execute step with validation + resilience
-    # -------------------------
     async def _execute_step_safe(self, task_id, step_index, step, context):
         action = step.get("action")
         args = step.get("args", {})
@@ -134,18 +107,12 @@ class Executor:
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}"
 
-        # -------------------------
-        # Window focus (if needed)
-        # -------------------------
         window_title = context.get("window_title")
         if window_title:
             focused = await focus_manager.ensure_focus(window_title)
             if not focused:
                 return False, f"Failed to focus target window: {window_title}"
 
-        # -------------------------
-        # Tool selection & execution
-        # -------------------------
         tried_tools = []
         fallback_attempts = 0
         max_fallbacks = settings.MAX_RETRY_ATTEMPTS
@@ -173,7 +140,6 @@ class Executor:
             )
 
             try:
-                # 1. Execute capability validation
                 success, result = await capability_registry.execute(
                     action, context, args
                 )
@@ -190,35 +156,30 @@ class Executor:
                 )
 
                 if not success:
-                    error_type = self._classify_error(result)
+                    # 🟢 DYNAMIC: Ask Ollama to classify what went wrong
+                    error_type = await self._classify_error_dynamically(result)
                 else:
                     action_data = result if isinstance(result, dict) else {}
                     cap_intent = action_data.get("intent") or action
                     cap_args = action_data.get("args") or args
 
-                    # 2. Resolve to the real tool mapping
-                    resolved = resolve_tool_call(cap_intent, cap_args)
+                    # 🟢 NEW: Clean fallback resolve method
+                    resolved = self._resolve_tool_call(cap_intent, cap_args)
                     if not resolved:
-                        return (
-                            False,
-                            f"No tool mapping for capability: {cap_intent}",
-                        )
+                        return (False, f"No tool mapping for capability: {cap_intent}")
 
                     tool_name, tool_action, tool_args = resolved
                     tool = tool_registry.get_tool(tool_name)
                     if not tool:
                         return False, f"Tool not registered: {tool_name}"
 
-                    # 3. Run the tool!
                     ok, tool_result = await tool.run(tool_action, tool_args)
                     if ok:
-                        logger.debug(
-                            f"Action '{action}' -> {tool_name}.{tool_action} OK"
-                        )
+                        logger.debug(f"Action '{action}' -> {tool_name}.{tool_action} OK")
                         return True, tool_result
 
                     result = tool_result
-                    error_type = self._classify_error(result)
+                    error_type = await self._classify_error_dynamically(result)
 
             except asyncio.TimeoutError:
                 error_type = "timeout"
@@ -227,25 +188,18 @@ class Executor:
                 error_type = "exception"
                 result = str(e)
 
-                # Feed the hard exception to the error handler
                 error_handler.handle_error(
                     e,
                     component="executor",
                     context={"task_id": task_id, "step": step_index},
                 )
 
-            # -------------------------
-            # Retry logic
-            # -------------------------
             if await retry_manager.should_retry(
                 task_id, step_index, error_type=error_type
             ):
                 logger.info(f"Retrying step {step_index} due to {error_type}")
                 continue
 
-            # -------------------------
-            # Fallback logic
-            # -------------------------
             next_tool_type = fallback_manager.get_fallback(tool_type)
             if next_tool_type:
                 logger.info(f"Fallback: {tool_type} → {next_tool_type}")
@@ -270,21 +224,32 @@ class Executor:
 
         return False, f"Max fallback attempts reached for action '{action}'"
 
-    # -------------------------
-    # Helpers
-    # -------------------------
-    def _classify_error(self, result):
-        text = str(result).lower()
-        if "permission" in text:
-            return "permission_denied"
-        if "not found" in text:
-            return "not_found"
-        if "timeout" in text:
-            return "timeout"
-        return "unknown_error"
+    # 🟢 DYNAMIC ERROR CLASSIFIER (No Hardcoding)
+    async def _classify_error_dynamically(self, result) -> str:
+        """Uses Ollama to intelligently bucket error strings instead of hardcoding text checks."""
+        prompt = f"""
+        Classify this error message into one of the following exact categories: 
+        'permission_denied', 'not_found', 'timeout', or 'unknown_error'.
+        
+        Error text: "{str(result)}"
+        
+        Return ONLY a JSON object with a single key 'category' mapping to the string.
+        Example: {{"category": "permission_denied"}}
+        """
+        try:
+            response = await llm_client.generate(prompt, use_json=True)
+            data = json.loads(response)
+            return data.get("category", "unknown_error")
+        except Exception:
+            return "unknown_error"
+
+    # 🟢 NEW: Resolves tool calls mapping directly to the tool registry
+    def _resolve_tool_call(self, intent: str, args: dict):
+        """Maps an abstract intent to registered concrete tools in tool_registry."""
+        for tool_name, tool_obj in tool_registry.list_tools().items():
+            if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
+                return tool_name, intent, args
+        return None
 
 
-# -------------------------
-# Global Executor instance
-# -------------------------
 executor = Executor()
