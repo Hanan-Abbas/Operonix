@@ -1,12 +1,15 @@
 import os
 import sys
+import time
+import logging
+import warnings
 from ctypes import *
 
+# Maintain your NNPACK and ALSA flood suppression tricks
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
 os.environ['TORCH_CPP_LOG_LEVEL'] = 'ERROR' 
 os.environ['JACK_NO_START_SERVER'] = '1'
 
-# Suppress ALSA sound driver flood in the terminal
 ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
 def py_error_handler(filename, line, function, err, fmt):
     pass
@@ -18,51 +21,47 @@ try:
 except OSError:
     pass 
 
-import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
 import numpy as np
 import torch
-import pyaudio
 from silero_vad import load_silero_vad
 from voice.stt import SpeechToText
 from voice.noise_filter import NoiseFilter
 from core.config import settings
-from voice.audio_devices import resolve_input_device_index
 
 class VoiceListener:
-    def __init__(self):
-        print("🎙️ VAD: Loading Silero Voice Activity Detector...")
+    # 🟢 FIX: Added audio_manager=None to resolve the TypeError
+    def __init__(self, audio_manager=None):
+        if audio_manager is None:
+            raise ValueError("VoiceListener requires an AudioManager instance")
+            
+        self.logger = logging.getLogger("VoiceListener")
+        self.logger.info("🎙️ VAD: Loading Silero Voice Activity Detector...")
+        
         torch.set_num_threads(1)
 
         self.model = load_silero_vad()
-        self.audio = pyaudio.PyAudio()
+        
+        # 🟢 DYNAMIC: Pointing to your shared source of truth
+        self.audio_manager = audio_manager
 
-        self.stt = SpeechToText(model_size="tiny")
-        self.noise_filter = NoiseFilter(rate=16000)
+        # We pull model size from settings or fallback to 'tiny' (No hardcoding)
+        stt_size = getattr(settings, "STT_MODEL_SIZE", "tiny")
+        self.stt = SpeechToText(model_size=stt_size)
+        
+        # Pull audio properties directly from audio manager
+        self.rate = getattr(audio_manager, 'rate', 16000)
+        self.chunk = getattr(audio_manager, 'chunk', 512)
+        
+        self.noise_filter = NoiseFilter(rate=self.rate)
 
-        self.rate = 16000
-        self.chunk = 512
-
-        # 🔥 Safety configs
-        self.max_record_seconds = 10
-        self.silence_limit = 80
+        # Safety configs pulled from settings
+        self.max_record_seconds = getattr(settings, "MAX_RECORD_SECONDS", 10)
+        self.silence_limit = getattr(settings, "SILENCE_LIMIT", 80)
 
     def listen_until_silent(self):
-        print("\n🎤 Listening for command...")
-
-        try:
-            stream = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.rate,
-                input=True,
-                frames_per_buffer=self.chunk,
-                input_device_index=resolve_input_device_index(settings.AUDIO_INPUT_INDEX),
-            )
-        except Exception as e:
-            print(f"❌ Mic error: {e}")
-            return None
+        self.logger.info("\n🎤 Listening for command...")
 
         voiced_frames = []
         silent_chunks = 0
@@ -71,43 +70,38 @@ class VoiceListener:
         start_time = time.time()
 
         while True:
-            # 🔥 Timeout protection
             if time.time() - start_time > self.max_record_seconds:
-                print("⏱️ Timeout reached.")
+                self.logger.info("⏱️ Timeout reached.")
                 break
 
-            try:
-                data = stream.read(self.chunk, exception_on_overflow=False)
-            except Exception:
+            # 🟢 FIX: Instead of stream.read() from PyAudio, we pull from AudioManager!
+            data = self.audio_manager.read_chunk()
+            if data is None:
                 continue
 
-            voiced_frames.append(data)
+            voiced_frames.append(data.tobytes())
 
-            audio_int16 = np.frombuffer(data, dtype=np.int16)
-            audio_float32 = audio_int16.astype(np.float32) / 32768.0
+            # Convert numpy array to float32 tensor for Silero VAD
+            audio_float32 = data.astype(np.float32) / 32768.0
             audio_tensor = torch.from_numpy(audio_float32)
 
             speech_prob = self.model(audio_tensor, self.rate).item()
 
             if speech_prob > 0.4:
                 if not triggered:
-                    print("🔊 Speech detected...")
+                    self.logger.info("🔊 Speech detected...")
                     triggered = True
                 silent_chunks = 0
             elif triggered:
                 silent_chunks += 1
 
                 if silent_chunks > self.silence_limit:
-                    print("🔇 Silence detected. Processing...")
+                    self.logger.info("🔇 Silence detected. Processing...")
                     break
-
-        stream.stop_stream()
-        stream.close()
 
         if not voiced_frames:
             return None
 
-        # 🔥 Process audio
         audio_data = b''.join(voiced_frames)
 
         full_audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
