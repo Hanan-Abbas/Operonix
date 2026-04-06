@@ -37,20 +37,27 @@ class Orchestrator:
         self.listener = VoiceListener(audio_manager=self.audio_manager)
 
     async def start(self):
-        """Initialize the core loop and subscribe to the pipeline events."""
+    """Initialize the core loop and background detection."""
         self.is_running = True
         
-        # Subscriptions
+        # 1. FIX: Give the detector the current event loop so it can emit events
+        self.wake_detector.loop = asyncio.get_running_loop()
+
+        # 2. Subscriptions
         bus.subscribe("wake_word_detected", self.handle_wake_word)
-        bus.subscribe("user_input_received", self.handle_new_task)
-        bus.subscribe("intent_parsed", self.route_to_mapper)
-        bus.subscribe("capability_mapped", self.route_to_decision_engine)
-        bus.subscribe("task_dispatched", self.route_to_executor)
-        bus.subscribe("task_completed", self.finalize_task)
-        bus.subscribe("task_failed", self.handle_failure)
-        
-        self.logger.info("🎛️ Orchestrator: System Backbone Online. Awaiting commands.")
-        asyncio.create_task(self.background_wake_word_listener())
+        bus.subscribe("user_input_received", self.handle_user_input)
+
+        # 3. FIX: Start the background thread for continuous listening
+        asyncio.create_task(self._run_wake_word_loop())
+        self.logger.info("👂 Orchestrator: Wake word detection loop started.")
+
+    async def _run_wake_word_loop(self):
+        """Background task that keeps the detector running."""
+        while self.is_running:
+            # detect() reads from AudioManager and emits event if Alexa is heard
+            self.wake_detector.detect()
+            # Small sleep to prevent CPU spiking (AudioManager usually handles timing via blocksize)
+            await asyncio.sleep(0.01)
 
     async def background_wake_word_listener(self):
 
