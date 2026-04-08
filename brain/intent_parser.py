@@ -25,8 +25,8 @@ class IntentParser:
         # Dynamically register supported intents from the capability registry
         try:
             from capabilities.registry import capability_registry
-            supported = capability_registry.get_all_intents()
-        except ImportError:
+            supported = capability_registry.get_all_names()
+        except Exception:
             self.logger.warning("Capability registry not found. Waiting for dynamic registration.")
             supported = []
 
