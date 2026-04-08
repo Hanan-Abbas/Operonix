@@ -100,5 +100,9 @@ def transcribe_audio_hybrid(
         meta["local_confidence"] = local_confidence
         return cloud_text, meta, "openai"
 
-    return local_text, local_meta, "local"
+    meta = dict(local_meta or {})
+    meta["cloud_fallback_used"] = False
+    meta["cloud_fallback_failed"] = True
+    meta["local_confidence"] = local_confidence
+    return local_text, meta, "local"
 
