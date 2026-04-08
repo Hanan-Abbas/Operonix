@@ -2,9 +2,9 @@ import json
 import aiohttp
 import logging
 import re
-from difflib import SequenceMatcher
 from core.event_bus import bus
 from core.config import settings
+from brain.intent_matcher import match_intent_local
 
 class LLMClient:
     def __init__(self):
@@ -299,31 +299,13 @@ class LLMClient:
         if not candidate_text:
             return None
 
-        allowed = self._get_registered_intents()
-        if not allowed:
-            return None
-
-        normalized_text = str(candidate_text).lower().replace("_", " ").strip()
-        text_tokens = set(re.findall(r"[a-z0-9]+", normalized_text))
-
-        best_intent = None
-        best_score = 0.0
-        for intent in allowed:
-            intent_text = intent.lower().replace("_", " ")
-            intent_tokens = set(re.findall(r"[a-z0-9]+", intent_text))
-            overlap = 0.0
-            if text_tokens and intent_tokens:
-                overlap = len(text_tokens & intent_tokens) / float(len(intent_tokens))
-
-            ratio = SequenceMatcher(None, normalized_text, intent_text).ratio()
-            # Blend token overlap and sequence similarity.
-            score = (0.7 * overlap) + (0.3 * ratio)
-            if score > best_score:
-                best_score = score
-                best_intent = intent
-
         threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.30))
-        if best_intent and best_score >= threshold:
+        best_intent, best_score = match_intent_local(
+            candidate_text=candidate_text,
+            allowed_intents=self._get_registered_intents(),
+            threshold=threshold,
+        )
+        if best_intent:
             self.logger.info(
                 "🔎 Local intent fallback matched '%s' -> '%s' (score=%.2f)",
                 candidate_text, best_intent, best_score
