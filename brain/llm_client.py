@@ -2,9 +2,9 @@ import json
 import aiohttp
 import logging
 import re
+from difflib import SequenceMatcher
 from core.event_bus import bus
 from core.config import settings
-from memory.vector_store import vector_store
 
 class LLMClient:
     def __init__(self):
@@ -293,14 +293,42 @@ class LLMClient:
 
     async def _semantic_resolve_registered_intent(self, candidate_text):
         """
-        Resolve free-form candidate text to a registered intent using vector store.
+        Resolve free-form candidate text to a registered intent locally.
+        Avoids network/model downloads during live intent parsing.
         """
         if not candidate_text:
             return None
-        closest_intent, confidence = await vector_store.search_closest_intent(candidate_text)
-        threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.35))
-        if closest_intent and confidence >= threshold:
-            return closest_intent
+
+        allowed = self._get_registered_intents()
+        if not allowed:
+            return None
+
+        normalized_text = str(candidate_text).lower().replace("_", " ").strip()
+        text_tokens = set(re.findall(r"[a-z0-9]+", normalized_text))
+
+        best_intent = None
+        best_score = 0.0
+        for intent in allowed:
+            intent_text = intent.lower().replace("_", " ")
+            intent_tokens = set(re.findall(r"[a-z0-9]+", intent_text))
+            overlap = 0.0
+            if text_tokens and intent_tokens:
+                overlap = len(text_tokens & intent_tokens) / float(len(intent_tokens))
+
+            ratio = SequenceMatcher(None, normalized_text, intent_text).ratio()
+            # Blend token overlap and sequence similarity.
+            score = (0.7 * overlap) + (0.3 * ratio)
+            if score > best_score:
+                best_score = score
+                best_intent = intent
+
+        threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.30))
+        if best_intent and best_score >= threshold:
+            self.logger.info(
+                "🔎 Local intent fallback matched '%s' -> '%s' (score=%.2f)",
+                candidate_text, best_intent, best_score
+            )
+            return best_intent
         return None
 
     async def _normalize_intent_output(self, task_id, user_text, intent_data):
@@ -309,7 +337,11 @@ class LLMClient:
             repaired = await self._repair_intent_with_llm(user_text, intent_data)
             parsed = self._coerce_parsed_intent(repaired)
             if not parsed:
-                return None
+                # LLM unavailable/invalid: fallback to semantic mapping from transcript.
+                resolved = await self._semantic_resolve_registered_intent(user_text)
+                if not resolved:
+                    return None
+                return {"task_id": task_id, "intent": resolved, "parameters": {"text": user_text}}
 
         intent_name = parsed["intent"]
         params = parsed["parameters"] if isinstance(parsed["parameters"], dict) else {}
