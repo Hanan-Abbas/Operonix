@@ -123,7 +123,9 @@ class Orchestrator:
         # 2. Intent Parsing Request (What does the user want to do?)
         await bus.emit("request_intent_parsing", {
             "task_id": task_id,
-            "text": user_text
+            "text": user_text,
+            "stt": event.data.get("stt") or {},
+            "stt_provider": event.data.get("stt_provider"),
         }, source="orchestrator")
 
     async def route_to_mapper(self, event):
