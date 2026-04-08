@@ -3,6 +3,7 @@ import torch
 import noisereduce as nr
 from silero_vad import load_silero_vad
 from voice.stt import SpeechToText
+from voice.cloud_stt import transcribe_audio_hybrid
 from core.config import settings
 
 class VoicePipeline:
@@ -26,48 +27,62 @@ class VoicePipeline:
         # Flush stale buffered audio so STT starts close to user's command.
         self.audio_manager.clear_buffer(num_chunks=3)
         self.vad_model.reset_states()
-        voiced_frames = []
-        pre_roll = []
-        silent_chunks = 0
+        voiced_frames = []  # list[np.ndarray[int16]] of shape (512,)
+        pre_roll = []  # list[np.ndarray[int16]] of shape (512,)
+        silent_frames = 0
         triggered = False
+        pending = np.zeros((0,), dtype=np.int16)
 
-        # Loop for a max of 10 seconds to prevent hanging
-        for _ in range(self.max_chunks):
+        # We operate VAD on 512-sample frames at 16kHz (Silero expectation).
+        # AudioManager may return any chunk size; we re-frame it here.
+        frames_processed = 0
+        while frames_processed < self.max_chunks:
             chunk = self.audio_manager.read_chunk()
-            if chunk is None: continue
-
-            audio_float32 = chunk.flatten().astype(np.float32) / 32768.0
-            if len(audio_float32) != 512:
+            if chunk is None:
                 continue
 
-            audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
-            
-            try:
-                speech_prob = self.vad_model(audio_tensor, self.rate).item()
-            except Exception:
+            chunk_1d = chunk.flatten().astype(np.int16, copy=False)
+            if chunk_1d.size == 0:
                 continue
 
-            if speech_prob > self.speech_threshold:
-                if not triggered:
-                    voiced_frames.extend(pre_roll)
-                triggered = True
-                silent_chunks = 0
-                voiced_frames.append(chunk.copy())
-            elif triggered:
-                silent_chunks += 1
-                voiced_frames.append(chunk.copy())
-                if silent_chunks > self.silence_chunks:
-                    break # Silence detected
-            else:
-                pre_roll.append(chunk.copy())
-                if len(pre_roll) > self.pre_roll_chunks:
-                    pre_roll.pop(0)
+            pending = np.concatenate([pending, chunk_1d])
+            while pending.size >= 512 and frames_processed < self.max_chunks:
+                frame = pending[:512]
+                pending = pending[512:]
+                frames_processed += 1
+
+                audio_float32 = frame.astype(np.float32) / 32768.0
+                audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
+
+                try:
+                    speech_prob = self.vad_model(audio_tensor, self.rate).item()
+                except Exception:
+                    continue
+
+                if speech_prob > self.speech_threshold:
+                    if not triggered:
+                        voiced_frames.extend(pre_roll)
+                    triggered = True
+                    silent_frames = 0
+                    voiced_frames.append(frame.copy())
+                elif triggered:
+                    silent_frames += 1
+                    voiced_frames.append(frame.copy())
+                    if silent_frames > self.silence_chunks:
+                        break
+                else:
+                    pre_roll.append(frame.copy())
+                    if len(pre_roll) > self.pre_roll_chunks:
+                        pre_roll.pop(0)
+
+            if triggered and silent_frames > self.silence_chunks:
+                break
 
         if not triggered or len(voiced_frames) < 10:
             return None
 
         # Process and Transcribe
-        full_audio = np.concatenate(voiced_frames, axis=0).flatten().astype(np.float32) / 32768.0
+        full_audio = np.concatenate(voiced_frames, axis=0).astype(np.float32) / 32768.0
         # Keep denoise conservative to avoid harming consonants.
         cleaned = nr.reduce_noise(
             y=full_audio,
@@ -76,4 +91,17 @@ class VoicePipeline:
             prop_decrease=0.5,
         )
         cleaned = np.clip(cleaned, -1.0, 1.0).astype(np.float32)
-        return self.stt.transcribe_numpy_array(cleaned)
+        text, meta = self.stt.transcribe_numpy_array(cleaned, return_metadata=True)
+        if not text:
+            return None
+        confidence = self.stt.estimate_confidence(meta)
+        final_text, final_meta, provider = transcribe_audio_hybrid(
+            audio_float32=cleaned,
+            sample_rate=self.rate,
+            local_text=text,
+            local_meta=meta,
+            local_confidence=confidence,
+        )
+        final_meta = dict(final_meta or {})
+        final_meta["confidence"] = confidence
+        return {"text": final_text, "stt": final_meta, "provider": provider}
