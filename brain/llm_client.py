@@ -1,6 +1,7 @@
 import json
 import aiohttp
 import logging
+import re
 from core.event_bus import bus
 from core.config import settings
 
@@ -98,9 +99,16 @@ class LLMClient:
                 cleaned = cleaned.split("```json")[1].split("```")[0].strip()
             elif cleaned.startswith("```"):
                 cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                
+
             return json.loads(cleaned)
         except Exception:
+            # Fallback: many models wrap valid JSON with extra text.
+            match = re.search(r"\{[\s\S]*\}", text or "")
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except Exception:
+                    pass
             self.logger.warning("Failed to parse JSON. Returning raw text wrapped in dict.")
             return {"raw": text}
 
@@ -167,15 +175,11 @@ class LLMClient:
         user_text = event.data.get("text")
         
         prompt = self._build_parsing_prompt(user_text)
-        intent_data = await self.ask(prompt, provider="local", use_json=True)
-        
-        if isinstance(intent_data, dict) and "intent" in intent_data:
-            params = intent_data.get("parameters") or {}
-            await bus.emit(
-                "intent_parsed",
-                {"task_id": task_id, "intent": intent_data.get("intent"), "parameters": params},
-                source="llm_client",
-            )
+        intent_data = await self._ask_intent_with_provider_fallback(prompt)
+
+        normalized = await self._normalize_intent_output(task_id, user_text, intent_data)
+        if normalized:
+            await bus.emit("intent_parsed", normalized, source="llm_client")
         else:
             await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
 
@@ -188,7 +192,128 @@ class LLMClient:
         await bus.emit("reasoning_completed", {"task_id": task_id, "response": result}, source="llm_client")
 
     def _build_parsing_prompt(self, text):
-        return f'Analyze the user command: "{text}". Return JSON: {{ "intent": "<capability>", "parameters": {{ ... }} }}'
+        allowed_intents = self._get_registered_intents()
+        return (
+            f'Analyze the user command: "{text}". '
+            'Return ONLY strict JSON with this exact schema: '
+            '{ "intent": "<one_registered_capability_name>", "parameters": { ... } }. '
+            f"Use one of these intents when possible: {json.dumps(allowed_intents)}. "
+            "Do not include markdown or explanation."
+        )
+
+    async def _ask_intent_with_provider_fallback(self, prompt):
+        """
+        Intent parsing must be resilient; try cloud providers first when configured,
+        then local Ollama as final fallback.
+        """
+        if settings.DEEPSEEK_API_KEY:
+            result = await self.ask(prompt, provider="deepseek", use_json=True)
+            if result:
+                return result
+
+        if settings.GEMINI_API_KEY:
+            result = await self.ask(prompt, provider="gemini", use_json=True)
+            if result:
+                return result
+
+        return await self.ask(prompt, provider="local", use_json=True)
+
+    def _get_registered_intents(self):
+        """Fetch current capability names dynamically to avoid hardcoded intent lists."""
+        try:
+            from capabilities.registry import capability_registry
+            return capability_registry.get_all_names()
+        except Exception:
+            return []
+
+    def _coerce_parsed_intent(self, intent_data):
+        """
+        Normalize common model output variants into:
+        {"intent": str, "parameters": dict}
+        """
+        if not isinstance(intent_data, dict):
+            return None
+
+        # Handle variations like "capability", "action", or nested payloads.
+        intent = (
+            intent_data.get("intent")
+            or intent_data.get("capability")
+            or intent_data.get("action")
+        )
+        params = (
+            intent_data.get("parameters")
+            if isinstance(intent_data.get("parameters"), dict)
+            else intent_data.get("args")
+            if isinstance(intent_data.get("args"), dict)
+            else {}
+        )
+
+        if not intent:
+            payload = intent_data.get("result") or intent_data.get("data")
+            if isinstance(payload, dict):
+                intent = (
+                    payload.get("intent")
+                    or payload.get("capability")
+                    or payload.get("action")
+                )
+                if isinstance(payload.get("parameters"), dict):
+                    params = payload.get("parameters")
+                elif isinstance(payload.get("args"), dict):
+                    params = payload.get("args")
+
+        if not intent:
+            return None
+
+        return {"intent": str(intent).strip(), "parameters": params}
+
+    async def _repair_intent_with_llm(self, user_text, intent_data):
+        """
+        Ask the model to repair malformed parser output using the live capability registry.
+        """
+        allowed_intents = self._get_registered_intents()
+        repair_prompt = (
+            "You are repairing malformed intent-parser output.\n"
+            f"User text: {user_text}\n"
+            f"Allowed intents: {json.dumps(allowed_intents)}\n"
+            f"Raw parser output: {json.dumps(intent_data)}\n"
+            'Return ONLY JSON: {"intent": "<allowed_intent>", "parameters": { ... }}\n'
+            "Choose the best matching intent from the allowed list."
+        )
+        return await self._ask_intent_with_provider_fallback(repair_prompt)
+
+    def _fallback_intent_from_user_text(self, user_text):
+        """
+        Last-resort non-hardcoded fallback: pass raw user text as intent token.
+        Downstream semantic matcher can map it to the nearest registered capability.
+        """
+        text = (user_text or "").strip()
+        if not text:
+            return None
+        return {"intent": text, "parameters": {"text": text}}
+
+    async def _normalize_intent_output(self, task_id, user_text, intent_data):
+        parsed = self._coerce_parsed_intent(intent_data)
+        if not parsed:
+            repaired = await self._repair_intent_with_llm(user_text, intent_data)
+            parsed = self._coerce_parsed_intent(repaired)
+            if not parsed:
+                parsed = self._fallback_intent_from_user_text(user_text)
+                if not parsed:
+                    return None
+
+        intent_name = parsed["intent"]
+        params = parsed["parameters"] if isinstance(parsed["parameters"], dict) else {}
+
+        # If the parsed intent is still unusable, fallback to the original text
+        # so downstream semantic resolution can attempt recovery.
+        if not intent_name:
+            fallback = self._fallback_intent_from_user_text(user_text)
+            if not fallback:
+                return None
+            intent_name = fallback["intent"]
+            params = fallback["parameters"]
+
+        return {"task_id": task_id, "intent": intent_name, "parameters": params}
 
 # Global instance
 llm_client = LLMClient()
