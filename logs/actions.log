@@ -76,3 +76,5 @@
 {"timestamp": "2026-04-02 18:54:43", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix", "app_type": "General App", "task_id": "background_poll"}}
 {"timestamp": "2026-04-02 18:54:47", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "retriever.py - Operonix - Visual Studio Code", "app_type": "Code Editor", "task_id": "background_poll"}}
 {"timestamp": "2026-04-02 18:54:55", "source": "window_detector", "event_type": "context_snapshot_ready", "data": {"window_title": "chroma.sqlite3 - Operonix - Visual Studio Code", "app_type": "Code Editor", "task_id": "background_poll"}}
+{"timestamp": "2026-04-08 15:15:38", "source": "orchestrator", "event_type": "request_context_snapshot", "data": {"task_id": "d11074d1"}}
+{"timestamp": "2026-04-08 15:41:03", "source": "orchestrator", "event_type": "request_context_snapshot", "data": {"task_id": "cdfde6d9"}}
