@@ -94,7 +94,7 @@ class VoicePipeline:
         text, meta = self.stt.transcribe_numpy_array(cleaned, return_metadata=True)
         if not text:
             return None
-        confidence = self.stt.estimate_confidence(meta)
+        confidence = self.stt.estimate_confidence_with_text(text, meta)
         final_text, final_meta, provider = transcribe_audio_hybrid(
             audio_float32=cleaned,
             sample_rate=self.rate,
