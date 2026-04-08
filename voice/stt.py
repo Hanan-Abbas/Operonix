@@ -4,6 +4,7 @@ import wave
 import numpy as np
 import pyaudio
 from faster_whisper import WhisperModel
+from core.config import settings
 
 # Suppress annoying background spam before initializing
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
@@ -29,6 +30,56 @@ class SpeechToText:
         self.rate = 16000
         self.chunk = 1024
         self.audio = pyaudio.PyAudio()
+
+        # Keep decoding tunable from settings to avoid rigid behavior.
+        self.beam_size = int(getattr(settings, "STT_BEAM_SIZE", 5))
+        self.best_of = int(getattr(settings, "STT_BEST_OF", 5))
+        self.temperature = float(getattr(settings, "STT_TEMPERATURE", 0.0))
+        self.language = getattr(settings, "STT_LANGUAGE", "en")
+
+    def _build_initial_prompt(self):
+        """
+        Bias decoding toward command-like vocabulary using dynamic capabilities.
+        """
+        try:
+            from capabilities.registry import capability_registry
+            intents = capability_registry.get_all_names()
+        except Exception:
+            intents = []
+
+        if not intents:
+            return None
+
+        hint_words = []
+        for intent in intents[:64]:
+            hint_words.extend(intent.replace("_", " ").split())
+
+        unique_words = []
+        seen = set()
+        for word in hint_words:
+            w = word.strip().lower()
+            if w and w not in seen:
+                seen.add(w)
+                unique_words.append(w)
+
+        if not unique_words:
+            return None
+        return "voice command vocabulary: " + ", ".join(unique_words[:80])
+
+    def _transcribe_audio(self, audio_np):
+        initial_prompt = self._build_initial_prompt()
+        segments, _ = self.model.transcribe(
+            audio_np,
+            beam_size=self.beam_size,
+            best_of=self.best_of,
+            temperature=self.temperature,
+            language=self.language,
+            condition_on_previous_text=False,
+            vad_filter=True,
+            initial_prompt=initial_prompt,
+        )
+        text = " ".join([segment.text.strip() for segment in segments if segment.text]).strip()
+        return text
 
     def listen_and_transcribe(self, duration=5):
         """Records audio from the microphone and returns the transcribed text."""
@@ -69,13 +120,7 @@ class SpeechToText:
         # This is exactly what faster-whisper expects.
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
         
-        # 🟢 FIX: Forcing language='en' so it doesn't hallucinate non-English
-        segments, _ = self.model.transcribe(
-            audio_np, beam_size=1, language="en"
-        )
-        
-        text = "".join([segment.text for segment in segments]).strip()
-        return text
+        return self._transcribe_audio(audio_np)
 
     def transcribe_numpy_array(self, audio_np):
         """
@@ -88,12 +133,7 @@ class SpeechToText:
         # Guarantee it's float32 for Faster-Whisper
         audio_np = audio_np.astype(np.float32)
         
-        segments, _ = self.model.transcribe(
-            audio_np, beam_size=1, language="en"
-        )
-        
-        text = "".join([segment.text for segment in segments]).strip()
-        return text
+        return self._transcribe_audio(audio_np)
         
 # Simple test execution
 if __name__ == "__main__":
