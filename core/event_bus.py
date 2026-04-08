@@ -16,6 +16,10 @@ class Event:
     def __str__(self):
         return f"[{self.timestamp}] {self.source} -> {self.name}: {self.data}"
 
+    def __lt__(self, other):
+        # Tie-breaker: Compare timestamps if priorities are equal
+        return self.timestamp < other.timestamp
+
 
 class EventBus:
 
