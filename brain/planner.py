@@ -76,8 +76,8 @@ class Planner:
         
         try:
             from capabilities.registry import capability_registry
-            available_capabilities = capability_registry.get_all_intents()
-        except ImportError:
+            available_capabilities = capability_registry.get_all_names()
+        except Exception:
             available_capabilities = ["read_file", "write_file", "run_command", "type_text"]
 
         prompt = f"""
