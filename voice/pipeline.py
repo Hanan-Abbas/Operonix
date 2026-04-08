@@ -25,7 +25,9 @@ class VoicePipeline:
         """Listens until silence is detected, using the shared audio_manager."""
         print("🎤 Listening for command...")
         # Flush stale buffered audio so STT starts close to user's command.
-        self.audio_manager.clear_buffer(num_chunks=3)
+        clear_chunks = int(getattr(settings, "VOICE_CLEAR_BUFFER_CHUNKS", 1))
+        if clear_chunks > 0:
+            self.audio_manager.clear_buffer(num_chunks=clear_chunks)
         self.vad_model.reset_states()
         voiced_frames = []  # list[np.ndarray[int16]] of shape (512,)
         pre_roll = []  # list[np.ndarray[int16]] of shape (512,)
