@@ -26,6 +26,9 @@ class Settings:
     WAKE_THRESHOLD = 0.50
     MIC_VOLUME_BOOST = 1.2
 
+    # Capture behavior (post-wake)
+    VOICE_CLEAR_BUFFER_CHUNKS = int(os.getenv("VOICE_CLEAR_BUFFER_CHUNKS", "1"))
+
     # --- STT (Speech-to-Text) Settings ---
     STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
     STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
