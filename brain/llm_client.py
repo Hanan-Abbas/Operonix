@@ -4,6 +4,7 @@ import logging
 import re
 from core.event_bus import bus
 from core.config import settings
+from memory.vector_store import vector_store
 
 class LLMClient:
     def __init__(self):
@@ -283,13 +284,24 @@ class LLMClient:
 
     def _fallback_intent_from_user_text(self, user_text):
         """
-        Last-resort non-hardcoded fallback: pass raw user text as intent token.
-        Downstream semantic matcher can map it to the nearest registered capability.
+        Last-resort fallback if we cannot produce a valid structured intent.
         """
         text = (user_text or "").strip()
         if not text:
             return None
         return {"intent": text, "parameters": {"text": text}}
+
+    async def _semantic_resolve_registered_intent(self, candidate_text):
+        """
+        Resolve free-form candidate text to a registered intent using vector store.
+        """
+        if not candidate_text:
+            return None
+        closest_intent, confidence = await vector_store.search_closest_intent(candidate_text)
+        threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.35))
+        if closest_intent and confidence >= threshold:
+            return closest_intent
+        return None
 
     async def _normalize_intent_output(self, task_id, user_text, intent_data):
         parsed = self._coerce_parsed_intent(intent_data)
@@ -297,21 +309,36 @@ class LLMClient:
             repaired = await self._repair_intent_with_llm(user_text, intent_data)
             parsed = self._coerce_parsed_intent(repaired)
             if not parsed:
-                parsed = self._fallback_intent_from_user_text(user_text)
-                if not parsed:
-                    return None
+                return None
 
         intent_name = parsed["intent"]
         params = parsed["parameters"] if isinstance(parsed["parameters"], dict) else {}
 
-        # If the parsed intent is still unusable, fallback to the original text
-        # so downstream semantic resolution can attempt recovery.
-        if not intent_name:
-            fallback = self._fallback_intent_from_user_text(user_text)
-            if not fallback:
-                return None
-            intent_name = fallback["intent"]
-            params = fallback["parameters"]
+        allowed = set(self._get_registered_intents())
+        if allowed and intent_name not in allowed:
+            resolved = await self._semantic_resolve_registered_intent(intent_name)
+            if not resolved:
+                resolved = await self._semantic_resolve_registered_intent(user_text)
+            if not resolved:
+                repaired = await self._repair_intent_with_llm(
+                    user_text, {"intent": intent_name, "parameters": params}
+                )
+                repaired_parsed = self._coerce_parsed_intent(repaired)
+                if repaired_parsed:
+                    repaired_intent = repaired_parsed.get("intent")
+                    if repaired_intent in allowed:
+                        intent_name = repaired_intent
+                        params = repaired_parsed.get("parameters") or params
+                    else:
+                        resolved = await self._semantic_resolve_registered_intent(repaired_intent)
+                        if resolved:
+                            intent_name = resolved
+                        else:
+                            return None
+                else:
+                    return None
+            else:
+                intent_name = resolved
 
         return {"task_id": task_id, "intent": intent_name, "parameters": params}
 
