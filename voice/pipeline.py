@@ -85,13 +85,35 @@ class VoicePipeline:
 
         # Process and Transcribe
         full_audio = np.concatenate(voiced_frames, axis=0).astype(np.float32) / 32768.0
-        # Keep denoise conservative to avoid harming consonants.
-        cleaned = nr.reduce_noise(
-            y=full_audio,
-            sr=self.rate,
-            stationary=False,
-            prop_decrease=0.5,
-        )
+        denoise_enabled = bool(getattr(settings, "VOICE_DENOISE_ENABLED", True))
+        if denoise_enabled:
+            # Build a live noise profile from pre-roll (fan/room noise) if available.
+            noise_audio = None
+            if pre_roll:
+                noise_audio = np.concatenate(pre_roll, axis=0).astype(np.float32) / 32768.0
+
+            prop_decrease = float(getattr(settings, "VOICE_DENOISE_PROP_DECREASE", 0.65))
+            n_std = float(getattr(settings, "VOICE_DENOISE_N_STD", 1.5))
+
+            if noise_audio is not None and noise_audio.size >= 512:
+                cleaned = nr.reduce_noise(
+                    y=full_audio,
+                    y_noise=noise_audio,
+                    sr=self.rate,
+                    stationary=True,
+                    n_std_thresh_stationary=n_std,
+                    prop_decrease=prop_decrease,
+                )
+            else:
+                # Fallback when we couldn't capture noise profile
+                cleaned = nr.reduce_noise(
+                    y=full_audio,
+                    sr=self.rate,
+                    stationary=False,
+                    prop_decrease=min(0.55, prop_decrease),
+                )
+        else:
+            cleaned = full_audio
         cleaned = np.clip(cleaned, -1.0, 1.0).astype(np.float32)
         text, meta = self.stt.transcribe_numpy_array(cleaned, return_metadata=True)
         if not text:
