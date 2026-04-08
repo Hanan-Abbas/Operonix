@@ -166,7 +166,25 @@ class SpeechToText:
         if len(t) < 6:
             short_penalty = 0.25
 
-        adjusted = base - repetition_penalty - short_penalty
+        # Penalize if transcript doesn't contain any capability vocabulary.
+        vocab_penalty = 0.0
+        try:
+            from capabilities.registry import capability_registry
+            intents = capability_registry.get_all_names()
+        except Exception:
+            intents = []
+
+        if intents:
+            vocab = set()
+            for intent in intents:
+                for w in intent.replace("_", " ").split():
+                    if w:
+                        vocab.add(w.lower())
+            hit = any(tok in vocab for tok in tokens)
+            if not hit:
+                vocab_penalty = 0.25
+
+        adjusted = base - repetition_penalty - short_penalty - vocab_penalty
         return max(0.0, min(1.0, adjusted))
 
     def listen_and_transcribe(self, duration=5):
