@@ -35,4 +35,7 @@ chromadb
 
 # --- UTILITIES ---
 python-dotenv    # For managing API keys and local configs in core/config.py
+# --- TESTING ---
+pytest
+pytest-asyncio
 # (Removed 'logging' as it is a native Python built-in and cannot be pip installed!)
