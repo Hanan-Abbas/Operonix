@@ -75,9 +75,20 @@ class Orchestrator:
         # We use pipeline.capture_command() here as it handles VAD and STT transcription
         command_text = await loop.run_in_executor(None, self.pipeline.capture_command)
         
-        if command_text:
-            self.logger.info(f"🎤 Captured Command: '{command_text}'")
+        if isinstance(command_text, dict) and command_text.get("text"):
+            text = command_text["text"]
+            stt_meta = command_text.get("stt") or {}
+            self.logger.info(f"🎤 Captured Command: '{text}'")
+            if stt_meta:
+                self.logger.info(f"🎙️ STT Meta: {stt_meta}")
             # This triggers handle_user_input and kicks off Phase 1
+            await bus.emit(
+                "user_input_received",
+                {"text": text, "stt": stt_meta, "stt_provider": command_text.get("provider")},
+                source="orchestrator",
+            )
+        elif isinstance(command_text, str) and command_text.strip():
+            self.logger.info(f"🎤 Captured Command: '{command_text}'")
             await bus.emit("user_input_received", {"text": command_text}, source="orchestrator")
         else:
             self.logger.warning("🔇 Orchestrator: No voice command understood after wake word.")
