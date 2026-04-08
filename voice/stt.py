@@ -10,7 +10,7 @@ os.environ['PyTorch_NNPACK_ENABLED'] = '0'
 os.environ['JACK_NO_START_SERVER'] = '1'
 
 class SpeechToText:
-    def __init__(self, model_size="tiny"):
+    def __init__(self, model_size="base"):
         """
         Initializes the local Whisper model.
         Model sizes: 'tiny', 'base', 'small', 'medium'
