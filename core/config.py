@@ -21,9 +21,9 @@ class Settings:
     # --- Voice & Audio Settings ---
     AUDIO_INPUT_INDEX = None  # Default to system default mic, can be overridden by env var or config file 
     AUDIO_RATE = 16000 # Standard for AI models
-    AUDIO_CHUNK = 1280 # Required for openWakeWord to see full words
+    AUDIO_CHUNK = 512 # Required for openWakeWord to see full words
     WAKE_WORD = "alexa"
-    WAKE_THRESHOLD = 0.05
+    WAKE_THRESHOLD = 0.50
     MIC_VOLUME_BOOST = 1.2
 
 
