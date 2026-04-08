@@ -29,10 +29,17 @@ class VoicePipeline:
 
             voiced_frames.append(chunk.copy())
             audio_float32 = chunk.flatten().astype(np.float32) / 32768.0
-            audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
-            speech_prob = self.vad_model(audio_tensor, self.rate).item()
+            if len(audio_float32) != 512:
+                continue
 
-            if speech_prob > 0.55:
+            audio_tensor = torch.from_numpy(audio_float32).unsqueeze(0)
+            
+            try:
+                speech_prob = self.vad_model(audio_tensor, self.rate).item()
+            except Exception:
+                continue
+
+            if speech_prob > 0.50:
                 triggered = True
                 silent_chunks = 0
             elif triggered:
