@@ -1,14 +1,18 @@
 import asyncio
 import logging
 import json
+from pathlib import Path
 from core.config import settings
 from core.event_bus import bus
 from memory.vector_store import vector_store
-# 🟢 NEW: Assuming you are using an LLM client to talk to Ollama
 from brain.llm_client import llm_client 
 
-
 class IntentParser:
+    """
+    🔍 The Validation Layer.
+    Ensures that the LLM's interpreted intent exists in our capability registry
+    and evaluates the risk level before allowing execution.
+    """
 
     def __init__(self):
         self.logger = logging.getLogger("IntentParser")
@@ -16,9 +20,9 @@ class IntentParser:
     async def start(self):
         """Subscribe to the output of the LLM Client."""
         bus.subscribe("intent_parsed", self.validate_and_route)
-        self.logger.info("Intent Parser active and monitoring LLM output...")
+        self.logger.info("🛡️ Intent Parser active: Monitoring LLM output...")
 
-        # 🟢 DYNAMIC: We query the registry directly. No hardcoded fallback lists!
+        # Dynamically register supported intents from the capability registry
         try:
             from capabilities.registry import capability_registry
             supported = capability_registry.get_all_intents()
@@ -26,7 +30,6 @@ class IntentParser:
             self.logger.warning("Capability registry not found. Waiting for dynamic registration.")
             supported = []
 
-        # We teach the vector DB what our current capabilities are dynamically!
         if supported:
             await vector_store.add_intents(supported)
 
@@ -36,63 +39,72 @@ class IntentParser:
         raw_intent = event.data.get("intent")
         params = event.data.get("parameters", {})
 
-        self.logger.info(f"🔍 Searching VectorDB for closest match to: '{raw_intent}'")
+        self.logger.info(f"🔍 Validating intent: '{raw_intent}' for task {task_id}")
+
+        # 1. Check for exact matches or high-confidence vector matches
+        match = await vector_store.search_intent(raw_intent)
         
-        # Search the database for semantic matching
-        matched_intent, confidence = await vector_store.search_closest_intent(raw_intent)
-
-        if matched_intent and confidence > 0.75:
-            self.logger.info(
-                f"🎯 Vector Match: '{raw_intent}' -> '{matched_intent}' (Conf: {confidence:.2f})"
-            )
-            intent = matched_intent
-        else:
-            intent = raw_intent
-
-        # Validation Check against whatever is currently in the registry
-        try:
-            from capabilities.registry import capability_registry
-            supported = capability_registry.get_all_intents()
-        except ImportError:
-            supported = []
-
-        if intent not in supported:
-            bus.publish(
-                "task_failed",
-                data={
-                    "task_id": task_id,
-                    "error": f"Unsupported Intent: '{intent}'. Unregistered capability.",
-                },
-                source="intent_parser",
-            )
+        if not match:
+            self.logger.error(f"❌ Unknown intent: {raw_intent}. Aborting task.")
+            await bus.emit("task_failed", {"task_id": task_id, "error": f"Unsupported intent: {raw_intent}"})
             return
 
-        print(f"🎯 Intent Parser: Validated [{intent}] for Task [{task_id}]")
+        resolved_intent = match['intent']
+        
+        # 2. Risk Assessment (Crucial for source code changes!)
+        requires_confirmation = await self._is_risky(resolved_intent, params)
 
-        # 🟢 DYNAMIC RISK CHECK: No hardcoded lists. We let Ollama grade the safety!
-        is_high_risk = await self._check_risk_dynamically(intent, params)
-
-        if is_high_risk and settings.SAFE_MODE:
-            bus.publish(
-                "request_user_confirmation",
-                data={
-                    "task_id": task_id,
-                    "intent": intent,
-                    "message": f"I evaluated this request as high risk. Are you sure you want to {intent}?",
-                },
-                source="intent_parser",
-            )
+        if requires_confirmation:
+            self.logger.warning(f"⚠️ High-risk operation detected: {resolved_intent}. Escalating to Confirmation Manager.")
+            await bus.emit("request_confirmation", {
+                "task_id": task_id,
+                "intent": resolved_intent,
+                "parameters": params,
+                "risk_level": "high"
+            })
         else:
-            # Trigger the Planner
-            bus.publish(
-                "intent_validated",
-                data={
-                    "task_id": task_id,
-                    "intent": intent,
-                    "parameters": params,
-                },
-                source="intent_parser",
-            )
+            # 3. Route to Orchestrator for final mapping
+            await bus.emit("intent_validated", {
+                "task_id": task_id,
+                "intent": resolved_intent,
+                "parameters": params
+            })
+
+    async def _is_risky(self, intent: str, params: dict) -> bool:
+        """
+        🛡️ Evaluates if an action could damage the system or compromise security.
+        """
+        # Static check against dynamic settings
+        if intent in getattr(settings, "RISKY_INTENTS", []):
+            return True
+
+        # Specific path protection for code modification
+        if intent == "modify_code":
+            target_file = params.get("file_path", "")
+            restricted_dirs = ["core/", "safety/", "brain/"]
+            if any(target_file.startswith(rd) for rd in restricted_dirs):
+                self.logger.warning(f"🛡️ Core modification attempt blocked: {target_file}")
+                return True
+
+        # Dynamic LLM-based risk evaluation
+        prompt = f"""
+        Rate the security risk of this AI operation (1-10):
+        Operation: {intent}
+        Parameters: {json.dumps(params)}
+        
+        Rule: File deletions, code modifications, or shell commands are 8-10.
+        Rule: Reading files or checking system status are 1-3.
+        
+        Return ONLY JSON: {{"risk_score": <int>}}
+        """
+
+        try:
+            response = await llm_client.generate(prompt, use_json=True)
+            risk_score = response.get("risk_score", 1)
+            return risk_score >= 7
+        except Exception as e:
+            self.logger.error(f"Risk evaluation failed: {e}. Defaulting to SAFE/Locked mode.")
+            return True
 
     async def _check_risk_dynamically(self, intent, params):
         """
