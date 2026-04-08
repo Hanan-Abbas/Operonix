@@ -174,7 +174,20 @@ class LLMClient:
     async def process_intent(self, event):
         task_id = event.data.get("task_id")
         user_text = event.data.get("text")
+        stt_meta = event.data.get("stt") or {}
         
+        # If STT confidence is extremely low, avoid hard failing; route to a safe text capability.
+        stt_conf = stt_meta.get("confidence")
+        if isinstance(stt_conf, (int, float)) and float(stt_conf) < 0.25:
+            safe_intent = self._choose_safe_text_intent()
+            if safe_intent:
+                await bus.emit(
+                    "intent_parsed",
+                    {"task_id": task_id, "intent": safe_intent, "parameters": {"text": user_text, "stt": stt_meta}},
+                    source="llm_client",
+                )
+                return
+
         prompt = self._build_parsing_prompt(user_text)
         intent_data = await self._ask_intent_with_provider_fallback(prompt)
 
@@ -182,7 +195,27 @@ class LLMClient:
         if normalized:
             await bus.emit("intent_parsed", normalized, source="llm_client")
         else:
-            await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
+            # If we couldn't parse, avoid loops: route to safe text capability when available.
+            safe_intent = self._choose_safe_text_intent()
+            if safe_intent:
+                await bus.emit(
+                    "intent_parsed",
+                    {"task_id": task_id, "intent": safe_intent, "parameters": {"text": user_text, "stt": stt_meta}},
+                    source="llm_client",
+                )
+            else:
+                await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
+
+    def _choose_safe_text_intent(self):
+        """
+        Pick a non-destructive intent dynamically from the registered capabilities.
+        Preference order is based on capability names, but only if they exist.
+        """
+        intents = set(self._get_registered_intents())
+        for preferred in ("generate_text", "summarize_text", "correct_grammar", "translate_text"):
+            if preferred in intents:
+                return preferred
+        return None
 
     async def process_reasoning(self, event):
         task_id = event.data.get("task_id")
