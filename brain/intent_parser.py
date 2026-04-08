@@ -41,15 +41,12 @@ class IntentParser:
 
         self.logger.info(f"🔍 Validating intent: '{raw_intent}' for task {task_id}")
 
-        # 1. Check for exact matches or high-confidence vector matches
-        match = await vector_store.search_intent(raw_intent)
-        
-        if not match:
+        # 1. Resolve intent by exact registry match first, then semantic vector match.
+        resolved_intent = await self._resolve_intent(raw_intent)
+        if not resolved_intent:
             self.logger.error(f"❌ Unknown intent: {raw_intent}. Aborting task.")
             await bus.emit("task_failed", {"task_id": task_id, "error": f"Unsupported intent: {raw_intent}"})
             return
-
-        resolved_intent = match['intent']
         
         # 2. Risk Assessment (Crucial for source code changes!)
         requires_confirmation = await self._is_risky(resolved_intent, params)
@@ -69,6 +66,33 @@ class IntentParser:
                 "intent": resolved_intent,
                 "parameters": params
             })
+
+    async def _resolve_intent(self, raw_intent: str):
+        """
+        Resolve an intent without hardcoded alias dictionaries:
+        1) exact capability registry hit
+        2) semantic nearest intent from vector store
+        """
+        if not raw_intent:
+            return None
+
+        try:
+            from capabilities.registry import capability_registry
+            if capability_registry.get(raw_intent) is not None:
+                return raw_intent
+        except Exception:
+            pass
+
+        closest_intent, confidence = await vector_store.search_closest_intent(raw_intent)
+        threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.35))
+        if closest_intent and confidence >= threshold:
+            self.logger.info(
+                "🔎 Resolved raw intent '%s' -> '%s' (confidence=%.2f)",
+                raw_intent, closest_intent, confidence
+            )
+            return closest_intent
+
+        return None
 
     async def _is_risky(self, intent: str, params: dict) -> bool:
         """
