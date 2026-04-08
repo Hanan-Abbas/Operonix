@@ -1,7 +1,9 @@
 {
     "risky_intents": [
         "file_delete",
-        "shell_command"
+        "shell_command",
+        "modify_code",
+        "system_update"
     ],
     "complex_intents": [
         "write_code",
@@ -10,6 +12,7 @@
         "complex_workflow",
         "code_generate",
         "code_analyze",
-        "generate_text"
+        "generate_text",
+        "get_system_info"
     ]
 }
