@@ -29,6 +29,11 @@ class Settings:
     # Capture behavior (post-wake)
     VOICE_CLEAR_BUFFER_CHUNKS = int(os.getenv("VOICE_CLEAR_BUFFER_CHUNKS", "1"))
 
+    # Noise reduction (fan/room noise)
+    VOICE_DENOISE_ENABLED = os.getenv("VOICE_DENOISE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    VOICE_DENOISE_PROP_DECREASE = float(os.getenv("VOICE_DENOISE_PROP_DECREASE", "0.65"))
+    VOICE_DENOISE_N_STD = float(os.getenv("VOICE_DENOISE_N_STD", "1.5"))
+
     # --- STT (Speech-to-Text) Settings ---
     STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
     STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
