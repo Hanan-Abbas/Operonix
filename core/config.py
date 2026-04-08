@@ -26,6 +26,24 @@ class Settings:
     WAKE_THRESHOLD = 0.50
     MIC_VOLUME_BOOST = 1.2
 
+    # --- STT (Speech-to-Text) Settings ---
+    STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
+    STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
+    STT_BEST_OF = int(os.getenv("STT_BEST_OF", "5"))
+    STT_TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))
+    STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en")
+
+    # STT provider mode: local | hybrid | cloud
+    STT_PROVIDER = os.getenv("STT_PROVIDER", "local")
+    STT_MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
+    CLOUD_STT_PROVIDER = os.getenv("CLOUD_STT_PROVIDER", "openai")
+    CLOUD_STT_TIMEOUT_SECONDS = float(os.getenv("CLOUD_STT_TIMEOUT_SECONDS", "15"))
+
+    # Optional OpenAI STT config (used only when STT_PROVIDER enables cloud)
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    OPENAI_STT_MODEL: str = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
+
 
     LOGS_DIR: Path = BASE_DIR / "logs"
     SANDBOX_DIR: Path = BASE_DIR / "sandbox"
