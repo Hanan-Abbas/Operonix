@@ -25,8 +25,8 @@ class ErrorHandler:
     """
 
     def __init__(self, event_bus=None, logger=None):
-        # Fallback to standard logging if core/logger.py isn't loaded yet
-        self.logger = logger or logging.getLogger("core.error_handler")
+
+        self.internal_logger = logging.getLogger("core.error_handler")
         self.event_bus = event_bus
 
         # Resolve log paths based on your project structure
@@ -64,7 +64,7 @@ class ErrorHandler:
         }
 
         # 2. Log it specifically where the AI or dashboard can read it
-        self.logger.error(
+        self.internal_logger.error(
             f"[{component.upper()}] Crash in {func_name}: {error_type} - {error}"
         )
         self._write_to_error_log(error_data)
