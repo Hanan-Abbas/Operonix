@@ -3,6 +3,7 @@ import io
 import wave
 import numpy as np
 import pyaudio
+import re
 from faster_whisper import WhisperModel
 from core.config import settings
 
@@ -135,6 +136,38 @@ class SpeechToText:
 
         score = (0.65 * lp_score) + (0.35 * ns_score)
         return max(0.0, min(1.0, score))
+
+    def estimate_confidence_with_text(self, text: str, meta: dict) -> float:
+        """
+        Combines acoustic confidence with transcript “information content”.
+        This reduces confidence for repetitive/low-signal outputs like:
+        'name, name, name, name'.
+        """
+        base = self.estimate_confidence(meta)
+        t = (text or "").strip().lower()
+        if not t:
+            return 0.0
+
+        tokens = re.findall(r"[a-z0-9]+", t)
+        if not tokens:
+            return max(0.0, base - 0.25)
+
+        unique = len(set(tokens))
+        total = len(tokens)
+        unique_ratio = unique / float(total) if total else 0.0
+
+        # Penalize heavy repetition / low information.
+        repetition_penalty = 0.0
+        if unique_ratio < 0.4 and total >= 4:
+            repetition_penalty = (0.4 - unique_ratio) * 0.9
+
+        # Penalize very short transcripts (often partial / mis-detected).
+        short_penalty = 0.0
+        if len(t) < 6:
+            short_penalty = 0.25
+
+        adjusted = base - repetition_penalty - short_penalty
+        return max(0.0, min(1.0, adjusted))
 
     def listen_and_transcribe(self, duration=5):
         """Records audio from the microphone and returns the transcribed text."""
