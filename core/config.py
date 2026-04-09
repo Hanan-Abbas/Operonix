@@ -35,18 +35,27 @@ class Settings:
     VOICE_DENOISE_N_STD = float(os.getenv("VOICE_DENOISE_N_STD", "1.5"))
 
     # --- STT (Speech-to-Text) Settings ---
-    STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
-    STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
-    STT_BEST_OF = int(os.getenv("STT_BEST_OF", "5"))
+    # ⚠️ Using 'medium' - best accuracy for local STT (large models require GPU)
+    # Available sizes: 'tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'
+    STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "medium")
+    # ⚠️ Increased beam_size from 5 to 10 - maximum accuracy
+    STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "10"))
+    STT_BEST_OF = int(os.getenv("STT_BEST_OF", "10"))
     STT_TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))
     STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en")
-    STT_USE_INITIAL_PROMPT = os.getenv("STT_USE_INITIAL_PROMPT", "false").lower() in ("1", "true", "yes", "on")
+    # ⚠️ Enabled initial prompt for better context understanding
+    STT_USE_INITIAL_PROMPT = os.getenv("STT_USE_INITIAL_PROMPT", "true").lower() in ("1", "true", "yes", "on")
     STT_INITIAL_PROMPT_MAX_WORDS = int(os.getenv("STT_INITIAL_PROMPT_MAX_WORDS", "40"))
-    STT_INITIAL_PROMPT_MODE = os.getenv("STT_INITIAL_PROMPT_MODE", "minimal")  # minimal | capabilities
+    STT_INITIAL_PROMPT_MODE = os.getenv("STT_INITIAL_PROMPT_MODE", "capabilities")  # minimal | capabilities
+
+    # ⚠️ Enable audio normalization for consistent volume levels
+    STT_NORMALIZE_AUDIO = os.getenv("STT_NORMALIZE_AUDIO", "true").lower() in ("1", "true", "yes", "on")
 
     # STT provider mode: local | hybrid | cloud
-    STT_PROVIDER = os.getenv("STT_PROVIDER", "local")
-    STT_MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
+    # ⚠️ Changed to 'hybrid' - uses local STT, falls back to cloud when confidence is low
+    STT_PROVIDER = os.getenv("STT_PROVIDER", "hybrid")
+    # ⚠️ Lowered threshold from 0.45 to 0.35 - more aggressive cloud fallback
+    STT_MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.35"))
     CLOUD_STT_PROVIDER = os.getenv("CLOUD_STT_PROVIDER", "openai")
     CLOUD_STT_TIMEOUT_SECONDS = float(os.getenv("CLOUD_STT_TIMEOUT_SECONDS", "15"))
 
