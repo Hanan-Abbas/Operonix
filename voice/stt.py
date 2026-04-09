@@ -40,8 +40,21 @@ class SpeechToText:
 
     def _build_initial_prompt(self):
         """
-        Bias decoding toward command-like vocabulary using dynamic capabilities.
+        Optional biasing prompt. Keep it minimal to avoid overpowering audio.
         """
+        if not bool(getattr(settings, "STT_USE_INITIAL_PROMPT", False)):
+            return None
+
+        mode = getattr(settings, "STT_INITIAL_PROMPT_MODE", "minimal")
+        max_words = int(getattr(settings, "STT_INITIAL_PROMPT_MAX_WORDS", 40))
+
+        # Minimal, safe hint (doesn't inject capability verbs directly).
+        if mode == "minimal":
+            return (
+                "Transcribe the user's spoken command in plain English. "
+                "Do not invent extra words."
+            )
+
         try:
             from capabilities.registry import capability_registry
             intents = capability_registry.get_all_names()
@@ -65,7 +78,7 @@ class SpeechToText:
 
         if not unique_words:
             return None
-        return "voice command vocabulary: " + ", ".join(unique_words[:80])
+        return "voice command vocabulary: " + ", ".join(unique_words[:max_words])
 
     def _transcribe_audio(self, audio_np, return_metadata: bool = False):
         initial_prompt = self._build_initial_prompt()
@@ -243,7 +256,7 @@ class SpeechToText:
         
 # Simple test execution
 if __name__ == "__main__":
-    stt = SpeechToText(model_size="tiny")
+    stt = SpeechToText(model_size="small")
     try:
         while True:
             text = stt.listen_and_transcribe(duration=4)
