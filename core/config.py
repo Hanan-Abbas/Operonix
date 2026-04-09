@@ -40,6 +40,9 @@ class Settings:
     STT_BEST_OF = int(os.getenv("STT_BEST_OF", "5"))
     STT_TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))
     STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en")
+    STT_USE_INITIAL_PROMPT = os.getenv("STT_USE_INITIAL_PROMPT", "false").lower() in ("1", "true", "yes", "on")
+    STT_INITIAL_PROMPT_MAX_WORDS = int(os.getenv("STT_INITIAL_PROMPT_MAX_WORDS", "40"))
+    STT_INITIAL_PROMPT_MODE = os.getenv("STT_INITIAL_PROMPT_MODE", "minimal")  # minimal | capabilities
 
     # STT provider mode: local | hybrid | cloud
     STT_PROVIDER = os.getenv("STT_PROVIDER", "local")
