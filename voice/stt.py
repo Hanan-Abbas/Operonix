@@ -7,17 +7,32 @@ import re
 from faster_whisper import WhisperModel
 from core.config import settings
 
-# Suppress annoying background spam before initializing
 os.environ['PyTorch_NNPACK_ENABLED'] = '0'
 os.environ['JACK_NO_START_SERVER'] = '1'
 
+
+def _normalize_audio(audio: np.ndarray, target_level: float = -20.0) -> np.ndarray:
+    """Normalize audio to target dB level for consistent transcription accuracy."""
+    if not bool(getattr(settings, "STT_NORMALIZE_AUDIO", True)):
+        return audio
+    
+    rms = np.sqrt(np.mean(audio ** 2))
+    if rms < 1e-6:
+        return audio
+    
+    current_db = 20 * np.log10(rms)
+    gain_db = target_level - current_db
+    gain_linear = 10 ** (gain_db / 20.0)
+    
+    normalized = audio * gain_linear
+    return np.clip(normalized, -1.0, 1.0)
+
+
 class SpeechToText:
-    def __init__(self, model_size="base"):
-        """
-        Initializes the local Whisper model.
-        Model sizes: 'tiny', 'base', 'small', 'medium'
-        'tiny' is the fastest and perfect for short command parsing!
-        """
+    def __init__(self, model_size=None):
+        if model_size is None:
+            model_size = getattr(settings, "STT_MODEL_SIZE", "small")
+        print(f"🎙️ STT: Loading Faster-Whisper model ({model_size})...")
         print(f"🎙️ STT: Loading Faster-Whisper model ({model_size})...")
         
         # Running on CPU. Change device to "cuda" if you have a dedicated Nvidia GPU.
@@ -39,48 +54,42 @@ class SpeechToText:
         self.language = getattr(settings, "STT_LANGUAGE", "en")
 
     def _build_initial_prompt(self):
-        """
-        Optional biasing prompt. Keep it minimal to avoid overpowering audio.
-        """
-        if not bool(getattr(settings, "STT_USE_INITIAL_PROMPT", False)):
+        if not bool(getattr(settings, "STT_USE_INITIAL_PROMPT", True)):
             return None
 
-        mode = getattr(settings, "STT_INITIAL_PROMPT_MODE", "minimal")
+        mode = getattr(settings, "STT_INITIAL_PROMPT_MODE", "capabilities")
         max_words = int(getattr(settings, "STT_INITIAL_PROMPT_MAX_WORDS", 40))
 
-        # Minimal, safe hint (doesn't inject capability verbs directly).
         if mode == "minimal":
-            return (
-                "Transcribe the user's spoken command in plain English. "
-                "Do not invent extra words."
-            )
+            return "Transcribe the user's spoken command in plain English. Do not invent extra words."
+
+        core_commands = [
+            "create", "delete", "file", "folder", "directory", "named", "name",
+            "write", "read", "move", "copy", "list", "show", "open", "close",
+            "make", "remove", "new", "save", "edit", "search", "find", "run",
+            "execute", "command", "script", "install", "git", "commit", "push"
+        ]
 
         try:
             from capabilities.registry import capability_registry
             intents = capability_registry.get_all_names()
+            for intent in intents[:64]:
+                core_commands.extend(intent.replace("_", " ").split())
         except Exception:
-            intents = []
-
-        if not intents:
-            return None
-
-        hint_words = []
-        for intent in intents[:64]:
-            hint_words.extend(intent.replace("_", " ").split())
+            pass
 
         unique_words = []
         seen = set()
-        for word in hint_words:
+        for word in core_commands:
             w = word.strip().lower()
             if w and w not in seen:
                 seen.add(w)
                 unique_words.append(w)
 
-        if not unique_words:
-            return None
-        return "voice command vocabulary: " + ", ".join(unique_words[:max_words])
+        return "Common commands: " + ", ".join(unique_words[:max_words])
 
     def _transcribe_audio(self, audio_np, return_metadata: bool = False):
+        audio_np = _normalize_audio(audio_np)
         initial_prompt = self._build_initial_prompt()
         segments_iter, info = self.model.transcribe(
             audio_np,
