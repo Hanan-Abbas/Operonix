@@ -3,7 +3,6 @@ asyncio          # Asynchronous I/O for the Event Bus and Orchestrator
 aiohttp          # Async HTTP client for Ollama/LLM communication
 fastapi          # Backend for the Dashboard
 uvicorn          # High-performance ASGI server to run the API
-pydantic          # Data validation for the API and Settings
 
 # --- OS & WINDOW DETECTION ---
 psutil           # System process and memory monitoring
@@ -39,3 +38,8 @@ python-dotenv    # For managing API keys and local configs in core/config.py
 pytest
 pytest-asyncio
 # (Removed 'logging' as it is a native Python built-in and cannot be pip installed!)
+
+# Add to requirements.txt
+pydantic>=2.0.0
+python-dotenv  # (already there)
+psutil  # For health checks
