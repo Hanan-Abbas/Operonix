@@ -56,6 +56,7 @@ def setup_event_bridge():
 @app.on_event("startup")
 async def startup_event():
     setup_event_bridge()
+    system_state.event_bus_running = True
     print("🌐 API Server: Bridge to Event Bus is LIVE.")
 
 # --- ROUTES (Aligned with your api/routes/ structure) ---
