@@ -33,7 +33,6 @@ class SpeechToText:
         if model_size is None:
             model_size = getattr(settings, "STT_MODEL_SIZE", "small")
         print(f"🎙️ STT: Loading Faster-Whisper model ({model_size})...")
-        print(f"🎙️ STT: Loading Faster-Whisper model ({model_size})...")
         
         # Running on CPU. Change device to "cuda" if you have a dedicated Nvidia GPU.
         # compute_type="int8" keeps RAM usage low and inference fast.
