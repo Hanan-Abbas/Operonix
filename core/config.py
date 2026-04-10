@@ -37,7 +37,7 @@ class Settings:
     # --- STT (Speech-to-Text) Settings ---
     # ⚠️ Using 'medium' - best accuracy for local STT (large models require GPU)
     # Available sizes: 'tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'
-    STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "medium")
+    STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "small")
     # ⚠️ Increased beam_size from 5 to 10 - maximum accuracy
     STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "10"))
     STT_BEST_OF = int(os.getenv("STT_BEST_OF", "10"))
