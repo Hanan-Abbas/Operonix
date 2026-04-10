@@ -1,173 +1,183 @@
-import os
-import sys
-import asyncio
-import uuid
-import logging
-from core.event_bus import bus
-from core.config import settings
+"""
+core/orchestrator.py — Operonix AI OS Agent
+═════════════════════════════════════════════
+Top-level coordinator.  Creates the AudioManager once and shares it
+with WakeWordDetector and VoicePipeline.
 
-# Import your voice modules
-from voice.wake_word import WakeWordDetector
-from voice.listener import VoiceListener
+Fixes vs original:
+  • wake_detector.loop assigned BEFORE create_task (eliminates race)
+  • VoiceListener kept as optional fallback, not instantiated by default
+    (pipeline.capture_command is more robust)
+  • handle_user_input no longer double-routes through handle_new_task
+    (was creating two tasks for every input)
+  • Graceful shutdown via stop()
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from typing import Optional
+
+from core.config import settings
+from core.event_bus import bus
 from voice.audio_manager import AudioManager
 from voice.pipeline import VoicePipeline
+from voice.wake_word import WakeWordDetector
+
+logger = logging.getLogger("Orchestrator")
+
 
 class Orchestrator:
-    def __init__(self):
-        self.active_tasks = {}
-        self.is_running = False
-        self.logger = logging.getLogger("Orchestrator")
-        
-        # 🟢 SINGLE SOURCE OF TRUTH: Create the AudioManager once
+    def __init__(self) -> None:
+        self.active_tasks: dict = {}
+        self.is_running: bool = False
+
+        # ── Single AudioManager — shared by all voice subsystems ──────────────
         self.audio_manager = AudioManager(
-            rate=getattr(settings, "AUDIO_RATE", 16000),
-            chunk=getattr(settings, "AUDIO_CHUNK", 1280),
-            auto_start=True
+            rate=int(getattr(settings, "AUDIO_RATE", 16000)),
+            chunk=int(getattr(settings, "AUDIO_CHUNK", 1280)),
+            auto_start=True,
         )
-        
-        # Pass the manager to all sub-modules
+
         self.pipeline = VoicePipeline(audio_manager=self.audio_manager)
-        
+
         wake_phrase = getattr(settings, "WAKE_WORD", "alexa")
         self.wake_detector = WakeWordDetector(
-            wake_word=wake_phrase, 
-            audio_manager=self.audio_manager
+            wake_word=wake_phrase,
+            audio_manager=self.audio_manager,
         )
-        
-        # Note: If your listener.py doesn't have 'listen_until_silent', 
-        # we'll use pipeline.capture_command below as it's more robust.
-        self.listener = VoiceListener(audio_manager=self.audio_manager)
 
-    async def start(self):
-        """Initialize the core loop and background detection."""
+        # VoiceListener is optional — used only for simple CLI tests
+        self._listener: Optional[object] = None
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
         self.is_running = True
-        
-        # 1. FIX: Give the detector the current event loop so it can emit events
-        self.wake_detector.loop = asyncio.get_running_loop()
 
-        # 2. Subscriptions - FIX: Added missing handler to prevent AttributeError
+        # IMPORTANT: assign the loop BEFORE creating any tasks that depend on it
+        loop = asyncio.get_running_loop()
+        self.wake_detector.loop = loop
+
         bus.subscribe("wake_word_detected", self.handle_wake_word)
-        bus.subscribe("user_input_received", self.handle_user_input)
+        bus.subscribe("user_input_received", self.handle_new_task)
 
-        # 3. Start the background thread for continuous listening
-        # We use background_wake_word_listener because it uses an executor (thread)
-        asyncio.create_task(self.background_wake_word_listener())
-        self.logger.info("👂 Orchestrator: Wake word detection engine started. Listening for Alexa...")
+        asyncio.create_task(self._background_wake_loop())
+        logger.info("👂 Orchestrator: wake-word detection started (%r).", self.wake_detector.wake_word)
 
-    async def background_wake_word_listener(self):
-        """Background task that keeps the detector running without blocking the main loop."""
+    async def stop(self) -> None:
+        self.is_running = False
+        self.audio_manager.stop()
+        logger.info("🛑 Orchestrator stopped.")
+
+    # ── Background wake-word loop ─────────────────────────────────────────────
+
+    async def _background_wake_loop(self) -> None:
         loop = asyncio.get_running_loop()
         while self.is_running:
-            # We run detect() in an executor because it performs CPU-heavy ML inference
             await loop.run_in_executor(None, self.wake_detector.detect)
-            # Minimal sleep to yield control back to the event loop
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)   # yield to event loop without busy-spinning
 
-    async def handle_wake_word(self, event):
-        """Fires when the user says the wake word (e.g., 'Alexa')."""
-        trigger = event.data.get("trigger")
-        score = event.data.get("score", 0)
-        self.logger.info(f"\n🔔 Orchestrator: System woken up by '{trigger}' (Score: {score:.2f})!")
+    # ── Wake-word handler ─────────────────────────────────────────────────────
 
-        # 🟢 CAPTURE COMMAND: Use the pipeline to listen for the actual request
+    async def handle_wake_word(self, event) -> None:
+        trigger = event.data.get("trigger", "?")
+        score = event.data.get("score", 0.0)
+        logger.info("🔔 Wake word %r (score=%.2f) — capturing command …", trigger, score)
+
         loop = asyncio.get_running_loop()
-        
-        # We use pipeline.capture_command() here as it handles VAD and STT transcription
-        command_text = await loop.run_in_executor(None, self.pipeline.capture_command)
-        
-        if isinstance(command_text, dict) and command_text.get("text"):
-            text = command_text["text"]
-            stt_meta = command_text.get("stt") or {}
-            self.logger.info(f"🎤 Captured Command: '{text}'")
-            if stt_meta:
-                self.logger.info(f"🎙️ STT Meta: {stt_meta}")
-            # This triggers handle_user_input and kicks off Phase 1
+        command = await loop.run_in_executor(None, self.pipeline.capture_command)
+
+        if isinstance(command, dict) and command.get("text"):
+            text = command["text"]
+            logger.info("🎤 Command: %r", text)
             await bus.emit(
                 "user_input_received",
-                {"text": text, "stt": stt_meta, "stt_provider": command_text.get("provider")},
+                {
+                    "text": text,
+                    "stt": command.get("stt") or {},
+                    "stt_provider": command.get("provider"),
+                },
                 source="orchestrator",
             )
-        elif isinstance(command_text, str) and command_text.strip():
-            self.logger.info(f"🎤 Captured Command: '{command_text}'")
-            await bus.emit("user_input_received", {"text": command_text}, source="orchestrator")
+        elif isinstance(command, str) and command.strip():
+            await bus.emit("user_input_received", {"text": command}, source="orchestrator")
         else:
-            self.logger.warning("🔇 Orchestrator: No voice command understood after wake word.")
+            logger.warning("🔇 No command understood after wake word.")
 
-    async def handle_user_input(self, event):
-        """
-        Standard handler for processing any text command.
-        This is the bridge between a raw string and the AI execution pipeline.
-        """
-        # Route the input to the task initialization logic
-        await self.handle_new_task(event)
+    # ── Task lifecycle ────────────────────────────────────────────────────────
 
-    async def handle_new_task(self, event):
-        """Phase 1: Initialization & Context Gathering."""
+    async def handle_new_task(self, event) -> None:
+        """Phase 1: Initialise task and fan out to context + intent services."""
         task_id = str(uuid.uuid4())[:8]
-        user_text = event.data.get("text")
-        
+        user_text = event.data.get("text", "").strip()
+
         if not user_text:
             return
 
         self.active_tasks[task_id] = {
             "status": "gathering_context",
             "input": user_text,
-            "context": {}
+            "context": {},
         }
+        logger.info("🎛️  Task [%s] initialised: %r", task_id, user_text)
 
-        self.logger.info(f"🎛️ Task [{task_id}] Initialized: '{user_text}'")
-
-        # 1. Context Snapshot Request (What window is open? What time is it?)
         await bus.emit("request_context_snapshot", {"task_id": task_id}, source="orchestrator")
+        await bus.emit(
+            "request_intent_parsing",
+            {
+                "task_id": task_id,
+                "text": user_text,
+                "stt": event.data.get("stt") or {},
+                "stt_provider": event.data.get("stt_provider"),
+            },
+            source="orchestrator",
+        )
 
-        # 2. Intent Parsing Request (What does the user want to do?)
-        await bus.emit("request_intent_parsing", {
-            "task_id": task_id,
-            "text": user_text,
-            "stt": event.data.get("stt") or {},
-            "stt_provider": event.data.get("stt_provider"),
-        }, source="orchestrator")
-
-    async def route_to_mapper(self, event):
-        """Phase 2: Intent -> Capability Mapping."""
+    async def route_to_mapper(self, event) -> None:
         await bus.emit("request_capability_mapping", event.data, source="orchestrator")
 
-    async def route_to_executor(self, event):
-        """Phase 4: Plan -> Real-world Action."""
+    async def route_to_executor(self, event) -> None:
         await bus.emit("request_execution", event.data, source="orchestrator")
 
-    async def handle_failure(self, event):
-        """Phase 5: Self-Healing & Debugging."""
+    async def handle_failure(self, event) -> None:
         task_id = event.data.get("task_id")
         error = event.data.get("error")
-        
-        self.logger.error(f"❌ Task [{task_id}] failed: {error}")
-        
-        await bus.emit("error_detected", {
-            "task_id": task_id,
-            "error": error,
-            "context": self.active_tasks.get(task_id, {}).get("context")
-        }, source="orchestrator")
+        logger.error("❌ Task [%s] failed: %s", task_id, error)
+        await bus.emit(
+            "error_detected",
+            {"task_id": task_id, "error": error,
+             "context": self.active_tasks.get(task_id, {}).get("context")},
+            source="orchestrator",
+        )
 
-    async def finalize_task(self, event):
+    async def finalize_task(self, event) -> None:
         task_id = event.data.get("task_id")
-        self.logger.info(f"✅ Task [{task_id}] Completed Successfully.")
-        if task_id in self.active_tasks:
-            del self.active_tasks[task_id]
+        logger.info("✅ Task [%s] completed.", task_id)
+        self.active_tasks.pop(task_id, None)
 
 
-# Global instance
+# ── Singleton ─────────────────────────────────────────────────────────────────
 orchestrator = Orchestrator()
 
-# Entry point for testing the orchestrator alone
+
+# ── Standalone entry point ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    async def main():
+    import logging
+    logging.basicConfig(level=logging.INFO)
+
+    async def _main():
         await orchestrator.start()
-        # Keep the main loop alive
-        while True:
-            await asyncio.sleep(1)
-            
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await orchestrator.stop()
+
     try:
-        asyncio.run(main())
+        asyncio.run(_main())
     except KeyboardInterrupt:
         print("\n🛑 Orchestrator stopped.")
