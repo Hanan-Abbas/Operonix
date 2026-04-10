@@ -24,6 +24,7 @@ from memory.vector_store import vector_store
 from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
+from api.routes.health import system_state
 
 logger = logging.getLogger("LifecycleManager")
 
@@ -64,6 +65,15 @@ class LifecycleManager:
     async def startup(self):
         """Initializes and boots all core system components in the correct order."""
         logger.info("🚀 Operonix Agent: Starting engine...")
+
+        try:
+            from core.config_validator import validated_config
+            validated_config.validate_audio_device()
+            logger.info("✅ Configuration validation PASSED")
+        except Exception as e:
+            logger.critical(f"💥 Configuration invalid: {e}")
+            raise RuntimeError(f"Invalid configuration: {e}") from e
+
         self.is_running = True
 
         loop = asyncio.get_running_loop()
@@ -76,6 +86,8 @@ class LifecycleManager:
         bus_task = asyncio.create_task(bus.run())
         self._background_tasks.add(bus_task)
         bus_task.add_done_callback(self._background_tasks.discard)
+        system_state.event_bus_running = True
+
         await error_listener.start()
         
         await sys_logger.start()
@@ -92,6 +104,7 @@ class LifecycleManager:
         # and booted state extractor.
         await state_extractor.start()
         await executor.start()
+        system_state.executor_running = True
         
         # 5. Boot memory & management layers
         await session_memory.start()
@@ -99,7 +112,16 @@ class LifecycleManager:
         await vector_store.start()
         await confirmation_manager.start()
         await orchestrator.start()
+        system_state.orchestrator_running = True
 
+        # Boot STT
+        system_state.stt_model = stt  # ← ADD
+        
+        # Boot LLM
+        system_state.llm_client = llm_client  # ← ADD
+        
+        # Boot AudioManager
+        system_state.audio_manager = audio_manager  # ← ADD
         # 6. Boot the Learning System
         try:
             await learner.start()
