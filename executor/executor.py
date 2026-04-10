@@ -13,7 +13,8 @@ from executor.focus_manager import FocusManager
 from executor.retry_manager import RetryManager
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
-# 🟢 NEW: Use the brain to dynamically classify errors
+from executor.error_classifier import error_classifier
+from core.metrics import metrics
 from brain.llm_client import llm_client 
 
 logger = logging.getLogger("Executor")
@@ -39,6 +40,10 @@ class Executor:
         logger.info(f"⚙️ Tools Loaded: {len(tool_registry.list_tools())}")
 
     async def execute_plan(self, event):
+
+        metrics.total_tasks += 1
+        start = time.time()
+
         task_data = event.data
         task_id = task_data.get("task_id")
         steps = task_data.get("steps", [])
@@ -91,6 +96,14 @@ class Executor:
             )
             logger.info(f"✅ Step {step_index} completed: {action}")
 
+        metrics.total_duration_seconds += time.time() - start
+        metrics.successful_tasks += 1
+        
+        logger.info(
+            f"📊 Success rate: {metrics.success_rate():.1f}% "
+            f"| Avg duration: {metrics.avg_task_duration():.2f}s"
+        )
+        
         bus.publish(
             "task_completed",
             {"task_id": task_id, "intent": intent, "steps": steps},
@@ -224,24 +237,20 @@ class Executor:
 
         return False, f"Max fallback attempts reached for action '{action}'"
 
-    # 🟢 DYNAMIC ERROR CLASSIFIER (No Hardcoding)
     async def _classify_error_dynamically(self, result) -> str:
-        """Uses Ollama to intelligently bucket error strings instead of hardcoding text checks."""
-        prompt = f"""
-        Classify this error message into one of the following exact categories: 
-        'permission_denied', 'not_found', 'timeout', or 'unknown_error'.
+        """Smart error classification with fallback patterns."""
+        # Uses regex first, LLM second, default last
+        category = await error_classifier.classify(str(result))
         
-        Error text: "{str(result)}"
+        # Get retry strategy
+        strategy = await error_classifier.get_retry_strategy(category)
         
-        Return ONLY a JSON object with a single key 'category' mapping to the string.
-        Example: {{"category": "permission_denied"}}
-        """
-        try:
-            response = await llm_client.generate(prompt, use_json=True)
-            data = json.loads(response)
-            return data.get("category", "unknown_error")
-        except Exception:
-            return "unknown_error"
+        if strategy["should_retry"]:
+            backoff = strategy.get("backoff_ms", 1000)
+            logger.info(f"Will retry in {backoff}ms: {strategy['reason']}")
+            await asyncio.sleep(backoff / 1000.0)
+        
+        return category
 
     # 🟢 NEW: Resolves tool calls mapping directly to the tool registry
     def _resolve_tool_call(self, intent: str, args: dict):
