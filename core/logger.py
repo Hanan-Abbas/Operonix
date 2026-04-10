@@ -55,7 +55,7 @@ class SystemLogger:
 
     def _write_to_file(self, file_path, entry):
         """Appends a JSON entry to the specified log file, forcing it into the logs directory."""
-         try:
+        try:
             # 🟢 UPGRADE: Extract just the filename and force it into the log_dir
             filename = os.path.basename(file_path)
             safe_path = os.path.join(self.log_dir, filename)
