@@ -111,16 +111,11 @@ class SpeechToText:
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
         return self._transcribe_audio(audio_np, return_metadata=return_metadata)
 
-    def transcribe_numpy_array(
-        self,
-        audio_np: np.ndarray,
-        return_metadata: bool = False,
-    ) -> Union[str, Tuple[str, dict]]:
-        """Accept a float32 NumPy array directly (zero-copy path)."""
-        if audio_np is None or len(audio_np) == 0:
-            return ("", {}) if return_metadata else ""
-        audio_np = audio_np.astype(np.float32)
-        return self._transcribe_audio(audio_np, return_metadata=return_metadata)
+    def transcribe_numpy_array(self, audio_np, return_metadata=False):
+        # Pure signal processing - no I/O
+        audio_np = _normalize_audio(audio_np)
+        segments, info = self.model.transcribe(audio_np, ...)
+        return text, metadata
 
     # ── Core inference ────────────────────────────────────────────────────────
 
