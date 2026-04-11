@@ -25,6 +25,8 @@ from safety.confirmation import confirmation_manager
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 from api.routes.health import system_state
+from core.config_validator import validated_config
+
 
 logger = logging.getLogger("LifecycleManager")
 
