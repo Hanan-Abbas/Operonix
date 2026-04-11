@@ -39,8 +39,8 @@ class Settings:
     # Available sizes: 'tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'
     STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "small")
     # ⚠️ Increased beam_size from 5 to 10 - maximum accuracy
-    STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "10"))
     STT_BEST_OF = int(os.getenv("STT_BEST_OF", "10"))
+    STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
     STT_TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))
     STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en")
     # ⚠️ Enabled initial prompt for better context understanding
