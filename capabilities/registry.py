@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import pkgutil
+import threading
 import logging
 
 logger = logging.getLogger("CapabilityRegistry")
@@ -17,7 +18,8 @@ class CapabilityRegistry:
     def __init__(self):
         self.registry = {}  # intent_name -> async function
         self.validation_rules = []  # legacy global rules (avoid heavy use)
-        self.intent_validation_rules = {}  # intent_name -> list of rule funcs
+        self.intent_validation_rules = {}
+        self._lock = threading.RLock()  # intent_name -> list of rule funcs
 
     # -------------------------
     # Registration Methods
