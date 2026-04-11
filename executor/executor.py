@@ -103,7 +103,7 @@ class Executor:
             f"📊 Success rate: {metrics.success_rate():.1f}% "
             f"| Avg duration: {metrics.avg_task_duration():.2f}s"
         )
-        
+
         bus.publish(
             "task_completed",
             {"task_id": task_id, "intent": intent, "steps": steps},
@@ -156,6 +156,9 @@ class Executor:
                 success, result = await capability_registry.execute(
                     action, context, args
                 )
+                # ✅ Use classifier
+                category = await error_classifier.classify(error_str)
+                strategy = await error_classifier.get_retry_strategy(category)
 
                 bus.publish(
                     "execution_strategy_used",
@@ -206,6 +209,22 @@ class Executor:
                     component="executor",
                     context={"task_id": task_id, "step": step_index},
                 )
+
+            category = await error_classifier.classify(error_str)
+            strategy = await error_classifier.get_retry_strategy(category)
+            
+            self.logger.warning(
+                f"Step {step_index} failed ({category}): {strategy['suggestion']}"
+            )
+            
+            # ✅ Decide whether to retry
+            if strategy["should_retry"]:
+                backoff_ms = strategy.get("backoff_ms", 1000)
+                await asyncio.sleep(backoff_ms / 1000.0)
+                # Try again...
+            else:
+                # Give up
+                return False, error_str
 
             if await retry_manager.should_retry(
                 task_id, step_index, error_type=error_type
