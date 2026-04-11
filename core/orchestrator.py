@@ -22,8 +22,8 @@ from typing import Optional
 from core.config import settings
 from core.event_bus import bus
 from voice.audio_manager import AudioManager
-from voice.pipeline import VoicePipeline
 from voice.wake_word import WakeWordDetector
+from voice.pipeline_improved import VoicePipelineImproved
 
 logger = logging.getLogger("Orchestrator")
 
@@ -84,27 +84,43 @@ class Orchestrator:
     async def handle_wake_word(self, event) -> None:
         trigger = event.data.get("trigger", "?")
         score = event.data.get("score", 0.0)
-        logger.info("🔔 Wake word %r (score=%.2f) — capturing command …", trigger, score)
+        logger.info("🔔 Wake word detected (score=%.2f) — capturing command", score)
 
         loop = asyncio.get_running_loop()
-        command = await loop.run_in_executor(None, self.pipeline.capture_command)
-
-        if isinstance(command, dict) and command.get("text"):
-            text = command["text"]
-            logger.info("🎤 Command: %r", text)
-            await bus.emit(
-                "user_input_received",
-                {
-                    "text": text,
-                    "stt": command.get("stt") or {},
-                    "stt_provider": command.get("provider"),
-                },
-                source="orchestrator",
+        
+        try:
+            command = await loop.run_in_executor(
+                None, 
+                self.pipeline.capture_command
             )
-        elif isinstance(command, str) and command.strip():
-            await bus.emit("user_input_received", {"text": command}, source="orchestrator")
-        else:
-            logger.warning("🔇 No command understood after wake word.")
+
+            if command and command.get("text"):
+                text = command["text"]
+                confidence = command.get("confidence", 0.0)
+                
+                logger.info("🎤 Command (conf=%.2f): '%s'", confidence, text)
+                
+                await bus.emit(
+                    "user_input_received",
+                    {
+                        "text": text,
+                        "stt": command.get("stt", {}),
+                        "stt_provider": command.get("provider"),
+                        "confidence": confidence,
+                        "duration": command.get("duration_seconds", 0)
+                    },
+                    source="orchestrator",
+                )
+            else:
+                logger.info("🔇 Command capture returned None (likely silence)")
+                
+        except Exception as e:
+            logger.error("❌ Voice capture failed: %s", e)
+            await bus.emit(
+                "voice_capture_error",
+                {"error": str(e)},
+                source="orchestrator"
+            )
 
     # ── Task lifecycle ────────────────────────────────────────────────────────
 
