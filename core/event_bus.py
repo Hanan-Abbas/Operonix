@@ -57,31 +57,43 @@ class EventBus:
         await self._queue.put((priority, event))
 
     def publish(self, event_type: str, data: Any = None, source: str = None):
-        """🟢 100% Thread-Safe & Non-Blocking!
-
-        Can be called from worker threads OR the main loop.
-        """
-        # If we are already in the main async thread, just use emit
+        """100% Thread-safe event publishing."""
+        
+        # Guard against None event loop
+        if self._event_loop is None:
+            self.logger.warning(f"Event loop not initialized yet. Dropping event '{event_type}'")
+            return
+        
+        if not self._event_loop.is_running():
+            self.logger.warning(f"Event loop not running. Dropping event '{event_type}'")
+            return
+        
         try:
-            loop = asyncio.get_running_loop()
-            if loop == self._event_loop:
-                loop.create_task(self.emit(event_type, data, source))
+            # Check if we're already in the event loop thread
+            current_loop = asyncio.get_running_loop()
+            if current_loop == self._event_loop:
+                # Same thread - direct task creation
+                current_loop.create_task(self.emit(event_type, data, source))
                 return
         except RuntimeError:
+            # We're in a different thread
             pass
-
-        # 🚀 If called from openWakeWord's thread, we inject it directly!
-        if self._event_loop is not None and self._event_loop.is_running():
+        
+        # Different thread - use thread-safe method
+        try:
             self._event_loop.call_soon_threadsafe(
-                # This schedules the coroutine safely without blocking
-                lambda: asyncio.create_task(
-                    self.emit(event_type, data, source)
-                )
+                self._schedule_event,
+                event_type, data, source
             )
-        else:
-            self.logger.warning(
-                f"Dropped event '{event_type}': Event loop is not running yet."
-            )
+        except RuntimeError as e:
+            self.logger.error(f"Failed to schedule event '{event_type}': {e}")
+
+    def _schedule_event(self, event_type, data, source):
+        """Helper to schedule event from foreign thread."""
+        try:
+            asyncio.create_task(self.emit(event_type, data, source))
+        except Exception as e:
+            self.logger.error(f"Failed to emit event '{event_type}': {e}")
 
     async def run(self):
         """The main loop that processes events."""
