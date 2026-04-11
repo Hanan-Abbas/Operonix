@@ -93,6 +93,24 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
+@app.get("/api/health")
+async def health_check():
+    """System health status."""
+    return {
+        "status": "healthy",
+        "components": {
+            "event_bus": "running" if bus._event_loop and bus._event_loop.is_running() else "down",
+            "orchestrator": "running" if orchestrator.is_running else "down",
+            "audio_manager": "running" if audio_manager.is_running else "down",
+            "stt_model": "loaded" if stt.model is not None else "not_loaded",
+        }
+    }
+
+@app.get("/api/diagnostics/audio")
+async def audio_diagnostics():
+    """Audio device info."""
+    return audio_manager.device_info()
+
 def start_server():
     """Main entry point called by main.py"""
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", loop="asyncio")
