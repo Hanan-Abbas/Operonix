@@ -330,7 +330,21 @@ class ValidatedConfig:
             logger.error("❌ Failed to verify audio device: %s", e)
             return False
 
+class VoiceSettings(BaseSettings):
+    """✅ Type-safe voice configuration with validation."""
+    
+    stt_model_size: str = Field(default="small", 
+                                regex="^(tiny|base|small|medium|large-v2|large-v3)$")
+    stt_beam_size: int = Field(default=5, ge=1, le=100)
+    stt_normalize_target_db: float = Field(default=-20.0, ge=-100, le=0)
+    wake_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
+    vad_speech_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
+    
+    class Config:
+        env_prefix = "VOICE_"
+        env_file = ".env"
 
+        
 # Global validated config instance
 try:
     validated_config = ValidatedConfig()
