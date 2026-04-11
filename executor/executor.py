@@ -257,19 +257,36 @@ class Executor:
         return False, f"Max fallback attempts reached for action '{action}'"
 
     async def _classify_error_dynamically(self, result) -> str:
-        """Smart error classification with fallback patterns."""
-        # Uses regex first, LLM second, default last
-        category = await error_classifier.classify(str(result))
+        """Classify error with fallback patterns."""
         
-        # Get retry strategy
-        strategy = await error_classifier.get_retry_strategy(category)
+        result_str = str(result).lower()
         
-        if strategy["should_retry"]:
-            backoff = strategy.get("backoff_ms", 1000)
-            logger.info(f"Will retry in {backoff}ms: {strategy['reason']}")
-            await asyncio.sleep(backoff / 1000.0)
+        # ✅ FAST PATH: Regex fallback (no LLM)
+        fallback_patterns = {
+            "permission_denied": r"(permission|denied|access|forbidden|not allowed)",
+            "not_found": r"(not found|no such|does not exist|404)",
+            "timeout": r"(timeout|timed out|deadline|took too long)",
+            "network": r"(connection|network|unreachable|offline)",
+        }
         
-        return category
+        for category, pattern in fallback_patterns.items():
+            if re.search(pattern, result_str):
+                self.logger.info(f"Error classified as '{category}' (regex)")
+                return category
+        
+        # ✅ SLOW PATH: Try LLM if available
+        try:
+            response = await asyncio.wait_for(
+                llm_client.generate(prompt, use_json=True),
+                timeout=2.0  # Quick timeout
+            )
+            data = json.loads(response)
+            category = data.get("category", "unknown_error")
+            self.logger.info(f"Error classified as '{category}' (LLM)")
+            return category
+        except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
+            self.logger.warning(f"LLM classification failed: {e}. Defaulting to 'unknown_error'")
+            return "unknown_error"
 
     # 🟢 NEW: Resolves tool calls mapping directly to the tool registry
     def _resolve_tool_call(self, intent: str, args: dict):
