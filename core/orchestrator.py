@@ -40,7 +40,7 @@ class Orchestrator:
             auto_start=True,
         )
 
-        self.pipeline = VoicePipeline(audio_manager=self.audio_manager)
+        self.pipeline = VoicePipelineImproved(audio_manager=self.audio_manager)
 
         wake_phrase = getattr(settings, "WAKE_WORD", "alexa")
         self.wake_detector = WakeWordDetector(
