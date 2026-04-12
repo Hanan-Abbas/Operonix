@@ -26,6 +26,7 @@ from learning.learner import learner
 from learning.pruning import pattern_pruner
 from api.routes.health import system_state
 from core.config_validator import validated_config
+from voice.stt import SpeechToText
 
 
 logger = logging.getLogger("LifecycleManager")
@@ -119,7 +120,7 @@ class LifecycleManager:
 
         stt_instance = SpeechToText() 
         system_state.stt_model = stt_instance  # ← ADD
-        
+
         system_state.llm_client = llm_client  # ← ADD
         
         # Boot AudioManager
