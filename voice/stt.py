@@ -78,7 +78,7 @@ class SpeechToText:
 
     def __init__(self, model_size: Optional[str] = None) -> None:
         if model_size is None:
-            model_size = getattr(settings, "STT_MODEL_SIZE", "small")
+            model_size = getattr(settings, "STT_MODEL_SIZE", "base")
 
         device, compute_type = _resolve_compute_device()
         logger.info(
@@ -112,6 +112,9 @@ class SpeechToText:
         return self._transcribe_audio(audio_np, return_metadata=return_metadata)
 
     def transcribe_numpy_array(self, audio_np, return_metadata=False):
+        lang = getattr(settings, "STT_LANGUAGE", "en")
+        if lang is Ellipsis or lang is None:
+            lang = "en"
         # Pure signal processing - no I/O
         audio_np = _normalize_audio(audio_np)
         segments, info = self.model.transcribe(audio_np, ...)
