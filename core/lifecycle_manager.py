@@ -124,7 +124,7 @@ class LifecycleManager:
         system_state.llm_client = llm_client  # ← ADD
         
         # Boot AudioManager
-        system_state.audio_manager = audio_manager  # ← ADD
+        system_state.audio_manager = orchestrator.audio_manager  # ← ADD
         # 6. Boot the Learning System
         try:
             await learner.start()
