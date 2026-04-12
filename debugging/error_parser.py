@@ -14,6 +14,29 @@ class ErrorParser:
     def __init__(self):
         self.logger = logging.getLogger("ErrorParser")
 
+    def _extract_from_traceback_string(self, report: Dict[str, Any]):
+        """
+        Uses Regex to scan a raw traceback string and pull out the 
+        exact file, line number, and function where the crash happened.
+        """
+        traceback_str = report.get("traceback", "")
+        if not traceback_str:
+            return
+
+        # Regex to find: File "path/to/file.py", line 123, in function_name
+        pattern = r'File "(.*?)", line (\d+), in (.*)'
+        matches = re.findall(pattern, traceback_str)
+
+        if matches:
+            # We take the LAST match because that is usually the actual point of failure
+            file_path, line_num, func_name = matches[-1]
+            
+            report["file"] = file_path
+            report["line"] = int(line_num)
+            report["function"] = func_name
+            
+            self.logger.debug(f"Successfully extracted location: {file_path}:{line_num}")
+            
     def parse(self, error_payload: Any) -> Dict[str, Any]:
         """Analyzes the incoming error and extracts structured data.
 
