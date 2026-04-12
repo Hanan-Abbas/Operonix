@@ -116,10 +116,10 @@ class LifecycleManager:
         await orchestrator.start()
         system_state.orchestrator_running = True
 
-        # Boot STT
-        system_state.stt_model = stt  # ← ADD
+
+        stt_instance = SpeechToText() 
+        system_state.stt_model = stt_instance  # ← ADD
         
-        # Boot LLM
         system_state.llm_client = llm_client  # ← ADD
         
         # Boot AudioManager
