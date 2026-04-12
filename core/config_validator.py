@@ -4,7 +4,8 @@ Prevents runtime crashes from bad environment variables.
 """
 
 from typing import Optional, List
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, validator
+from pydantic_settings import BaseSettings
 import logging
 
 logger = logging.getLogger("ConfigValidator")
@@ -40,23 +41,22 @@ class AudioSettings(BaseSettings):
         env_prefix = "AUDIO_"
         case_sensitive = False
 
-
 class SpeechToTextSettings(BaseSettings):
     """✅ Type-validated STT configuration."""
     
     model_size: str = Field(
         default="small",
-        regex="^(tiny|base|small|medium|large-v2|large-v3)$",
+        pattern="^(tiny|base|small|medium|large-v2|large-v3)$",
         description="Whisper model size"
     )
     device: str = Field(
         default="auto",
-        regex="^(auto|cpu|cuda)$",
+        pattern="^(auto|cpu|cuda)$",
         description="Compute device"
     )
     compute_type: str = Field(
         default="int8",
-        regex="^(int8|int16|float16|float32)$",
+        pattern="^(int8|int16|float16|float32)$",
         description="Quantization type"
     )
     beam_size: int = Field(
@@ -157,7 +157,7 @@ class NoiseFilterSettings(BaseSettings):
     )
     backend: str = Field(
         default="dfn",
-        regex="^(dfn|noisereduce|none)$",
+        pattern="^(dfn|noisereduce|none)$",
         description="Noise filter backend"
     )
     prop_decrease: float = Field(
@@ -205,7 +205,7 @@ class LLMSettings(BaseSettings):
     )
     provider: str = Field(
         default="local",
-        regex="^(local|deepseek|gemini|openai)$",
+        pattern="^(local|deepseek|gemini|openai)$",
         description="Primary LLM provider"
     )
     timeout_seconds: float = Field(
@@ -334,7 +334,7 @@ class VoiceSettings(BaseSettings):
     """✅ Type-safe voice configuration with validation."""
     
     stt_model_size: str = Field(default="small", 
-                                regex="^(tiny|base|small|medium|large-v2|large-v3)$")
+                                pattern="^(tiny|base|small|medium|large-v2|large-v3)$")
     stt_beam_size: int = Field(default=5, ge=1, le=100)
     stt_normalize_target_db: float = Field(default=-20.0, ge=-100, le=0)
     wake_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
