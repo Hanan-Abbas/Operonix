@@ -117,7 +117,7 @@ class SpeechToText:
             lang = "en"
         # Pure signal processing - no I/O
         audio_np = _normalize_audio(audio_np)
-        segments, info = self.model.transcribe(audio_np, ...)
+        segments, info = self.model.transcribe(audio_np, language=lang)
         return text, metadata
 
     # ── Core inference ────────────────────────────────────────────────────────
