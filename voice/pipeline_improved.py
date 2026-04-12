@@ -8,6 +8,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Optional
+import os
+
+os.environ.setdefault("PyTorch_NNPACK_ENABLED", "0")
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+os.environ.setdefault("JACK_NO_START_SERVER", "1")
 
 import numpy as np
 import torch
