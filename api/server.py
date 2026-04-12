@@ -5,6 +5,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from core.event_bus import bus
 from api.routes.actions import router as actions_router
+from api.routes.health import system_state
 
 app = FastAPI(title="i_os Agent Dashboard API")
 app.include_router(actions_router, prefix="/api")
