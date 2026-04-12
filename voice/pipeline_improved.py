@@ -1,4 +1,3 @@
-# voice/pipeline_improved.py
 """
 🎙️ Improved Voice Pipeline with better error handling.
 Distinguishes between silence and STT errors.
@@ -93,7 +92,8 @@ class VoicePipelineImproved:
         while frames_processed < self.max_chunks:
             chunk = self.audio_manager.read_chunk()
             if chunk is None:
-                await asyncio.sleep(0.01)  # Prevent busy-waiting
+                # ✅ FIXED: Removed await - this is NOT an async function
+                time.sleep(0.01)  # Prevent busy-waiting (use time.sleep, not await)
                 continue
 
             chunk_1d = chunk.flatten().astype(np.int16)
@@ -115,7 +115,8 @@ class VoicePipelineImproved:
                         voiced_frames.extend(pre_roll)
                         pre_roll.clear()
                         logger.info("🔊 Speech detected (prob=%.3f)", speech_prob)
-                        await bus.emit(
+                        # ✅ FIXED: Use publish (thread-safe) not await emit
+                        bus.publish(
                             "speech_detected",
                             {"probability": speech_prob},
                             source="pipeline"
@@ -146,7 +147,8 @@ class VoicePipelineImproved:
         if not triggered or len(voiced_frames) < 10:
             logger.info("🔇 No speech detected (duration=%.1fs)", duration)
             
-            await bus.emit(
+            # ✅ FIXED: Use publish, not emit
+            bus.publish(
                 "silence_detected",
                 {
                     "duration": duration,
@@ -189,7 +191,7 @@ class VoicePipelineImproved:
             
             if confidence < 0.15:
                 # Likely just silence/noise
-                await bus.emit(
+                bus.publish(
                     "silence_detected",
                     {
                         "duration": duration,
@@ -200,7 +202,7 @@ class VoicePipelineImproved:
                 )
             else:
                 # Confidence decent but no text = STT failure
-                await bus.emit(
+                bus.publish(
                     "stt_error",
                     {
                         "confidence": confidence,
@@ -242,7 +244,7 @@ class VoicePipelineImproved:
                 confidence, final_text
             )
             
-            await bus.emit(
+            bus.publish(
                 "low_confidence_warning",
                 {
                     "text": final_text,
@@ -258,7 +260,7 @@ class VoicePipelineImproved:
             provider, confidence, duration, final_text
         )
 
-        await bus.emit(
+        bus.publish(
             "transcription_complete",
             {
                 "text": final_text,
@@ -298,4 +300,3 @@ class VoicePipelineImproved:
             return 20.0 * np.log10(rms)
         except Exception:
             return 0.0
-
