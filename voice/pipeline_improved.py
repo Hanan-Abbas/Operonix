@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 import os
+import time
 
 os.environ.setdefault("PyTorch_NNPACK_ENABLED", "0")
 os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
@@ -63,21 +64,18 @@ class VoicePipelineImproved:
     def capture_command(self) -> Optional[dict]:
         """
         Capture voice command with comprehensive error handling.
-        
-        Returns:
-            {
-                "text": str,              # Transcribed text
-                "stt": dict,              # STT metadata
-                "provider": str,          # "local", "openai", etc
-                "confidence": float,      # Confidence score 0-1
-                "duration_seconds": float # Recording duration
-            }
-            or None if capture failed
         """
         logger.info("🎤 Listening for command …")
         
-        import time
         start_time = time.time()
+
+        # ✅ FIX: Initialize variables at the top to prevent NameError
+        text = ""
+        meta = {}
+        confidence = 0.0
+        final_text = ""
+        final_meta = {}
+        provider = "local"
 
         # Discard stale audio
         clear_n = int(getattr(settings, "VOICE_CLEAR_BUFFER_CHUNKS", 1))
@@ -97,8 +95,7 @@ class VoicePipelineImproved:
         while frames_processed < self.max_chunks:
             chunk = self.audio_manager.read_chunk()
             if chunk is None:
-                # ✅ FIXED: Removed await - this is NOT an async function
-                time.sleep(0.01)  # Prevent busy-waiting (use time.sleep, not await)
+                time.sleep(0.01) 
                 continue
 
             chunk_1d = chunk.flatten().astype(np.int16)
@@ -120,7 +117,6 @@ class VoicePipelineImproved:
                         voiced_frames.extend(pre_roll)
                         pre_roll.clear()
                         logger.info("🔊 Speech detected (prob=%.3f)", speech_prob)
-                        # ✅ FIXED: Use publish (thread-safe) not await emit
                         bus.publish(
                             "speech_detected",
                             {"probability": speech_prob},
@@ -138,7 +134,6 @@ class VoicePipelineImproved:
                         break
 
                 else:
-                    # Pre-speech: rolling window for noise profile
                     pre_roll.append(frame)
                     if len(pre_roll) > self.pre_roll_chunks:
                         pre_roll.pop(0)
@@ -151,8 +146,6 @@ class VoicePipelineImproved:
         
         if not triggered or len(voiced_frames) < 10:
             logger.info("🔇 No speech detected (duration=%.1fs)", duration)
-            
-            # ✅ FIXED: Use publish, not emit
             bus.publish(
                 "silence_detected",
                 {
@@ -178,14 +171,19 @@ class VoicePipelineImproved:
                    duration, len(voiced_frames), self._estimate_rms_db(cleaned))
 
         # ── Transcribe ────────────────────────────────────────────────────────
-        result = self.stt.transcribe_numpy_array(cleaned, return_metadata=True)
-        
-        if isinstance(result, tuple):
-            text, meta = result
-        else:
-            text, meta = result, {}
+        # ✅ FIX: Wrap STT in a try-except to handle crashes gracefully
+        try:
+            result = self.stt.transcribe_numpy_array(cleaned, return_metadata=True)
+            
+            if isinstance(result, tuple):
+                text, meta = result
+            else:
+                text, meta = result, {}
 
-        confidence = self.stt.estimate_confidence_with_text(text, meta)
+            confidence = self.stt.estimate_confidence_with_text(text, meta)
+        except Exception as e:
+            logger.error("❌ Local STT failed: %s", e)
+            text = "" # Ensure text is defined even on failure
 
         # ✅ IMPROVED: Distinguish between silence and STT error
         if not text:
@@ -195,7 +193,6 @@ class VoicePipelineImproved:
             )
             
             if confidence < 0.15:
-                # Likely just silence/noise
                 bus.publish(
                     "silence_detected",
                     {
@@ -206,7 +203,6 @@ class VoicePipelineImproved:
                     source="pipeline"
                 )
             else:
-                # Confidence decent but no text = STT failure
                 bus.publish(
                     "stt_error",
                     {
@@ -217,7 +213,6 @@ class VoicePipelineImproved:
                     },
                     source="pipeline"
                 )
-            
             return None
 
         # ✅ IMPROVED: Cloud fallback with hybrid mode
@@ -248,7 +243,6 @@ class VoicePipelineImproved:
                 "⚠️ Low confidence (%.2f). Result may be inaccurate: '%s'",
                 confidence, final_text
             )
-            
             bus.publish(
                 "low_confidence_warning",
                 {
@@ -301,7 +295,7 @@ class VoicePipelineImproved:
         try:
             rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
             if rms < 1e-8:
-                return -np.inf
+                return -100.0 # ✅ Safe floor instead of -inf
             return 20.0 * np.log10(rms)
         except Exception:
-            return 0.0
+            return -100.0
