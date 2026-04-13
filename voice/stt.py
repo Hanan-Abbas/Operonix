@@ -113,8 +113,6 @@ class SpeechToText:
 
     def transcribe_numpy_array(self, audio_np, return_metadata=False):
         lang = getattr(settings, "STT_LANGUAGE", "en")
-        if lang is Ellipsis or lang is None:
-            lang = "en"
         # Pure signal processing - no I/O
         audio_np = _normalize_audio(audio_np)
         segments, info = self.model.transcribe(audio_np, language=lang)
