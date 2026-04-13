@@ -23,7 +23,7 @@ from core.config import settings
 from core.event_bus import bus
 from voice.audio_manager import AudioManager
 from voice.wake_word import WakeWordDetector
-from voice.pipeline_improved import VoicePipelineImproved
+from voice.pipeline_improved import VoicePipeline
 
 logger = logging.getLogger("Orchestrator")
 
@@ -40,7 +40,7 @@ class Orchestrator:
             auto_start=True,
         )
 
-        self.pipeline = VoicePipelineImproved(audio_manager=self.audio_manager)
+        self.pipeline = VoicePipeline(audio_manager=self.audio_manager)
 
         wake_phrase = getattr(settings, "WAKE_WORD", "alexa")
         self.wake_detector = WakeWordDetector(
