@@ -80,7 +80,10 @@ class Settings:
     # --- BRAIN & LLM SETTINGS ---
     # Removed gpt-4o variables. Your LLMClient is now provider-routed!
     OLLAMA_EMBED_MODEL: str = "all-minilm"
-
+    OLLAMA_ENABLED   = True                       # set False to disable entirely
+    OLLAMA_MODEL     = "llama3"                   # any model you have pulled
+    OLLAMA_BASE_URL  = "http://localhost:11434"   # default Ollama port
+    OLLAMA_TIMEOUT   = 30 
     # --- SYSTEM GUARDRAILS ---
     MAX_RETRY_ATTEMPTS: int = 3
     SAFE_MODE: bool = True
