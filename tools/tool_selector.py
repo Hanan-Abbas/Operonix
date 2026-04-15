@@ -1,107 +1,84 @@
+from __future__ import annotations
+ 
 import logging
-from tools.tool_registry import tool_registry
-# from plugins.plugin_registry import plugin_registry
-
+from typing import Any, Optional, Tuple
+ 
+from tools.tool_registry import tool_registry, ToolEntry
+ 
+logger = logging.getLogger("ToolSelector")
+ 
+ 
 class ToolSelector:
-    def __init__(self):
-        self.logger = logging.getLogger("ToolSelector")
-
-        self.PRIORITY_MAP = {
-            "plugin": 100,
-            "api_tool": 90,
-            "file_tool": 80,
-            "shell_tool": 70,
-            "ui_tool": 50
-        }
-
-    async def select_best_tool(self, intent_data, active_context, exclude=None, forced_type=None):
-        exclude = exclude or []
-        intent = intent_data.get("intent")
-        target_app = active_context.get("active_window")
-
-        candidates = []
-
-        # # --- 1. Plugins ---
-        # plugins = plugin_registry.get_all_plugins_for_app(target_app)
-
-        # for plugin in plugins:
-        #     if plugin.name in exclude:
-        #         continue
-        #     if forced_type and forced_type != "plugin":
-        #         continue
-        #     if plugin.supports_action(intent):
-        #         candidates.append((self.PRIORITY_MAP["plugin"], "plugin", plugin))
-
-        # --- 2. Tools ---
-        for tool_name in tool_registry.list_tools():
-            if tool_name in exclude:
-                continue
-
-            tool = tool_registry.get_tool(tool_name)
-
-            if forced_type and tool_name != forced_type:
-                continue
-
-            if hasattr(tool, "can_handle"):
-                if not tool.can_handle(intent_data):
-                    continue
-            else:
-                if not self._tool_matches_intent(tool_name, intent):
-                    continue
-
-            score = self.PRIORITY_MAP.get(tool.type, 0)
-
-            # Context boost
-            if target_app in getattr(tool, "supported_apps", []):
-                score += 20
-
-            candidates.append((score, tool_name, tool))
-
+    """
+    Consults tool_registry and returns the best tool for a given intent,
+    respecting the plugin>api>commands>ui priority ladder.
+ 
+    Self-evolving hook
+    ──────────────────
+    If the learning system publishes `tool_affinity_update` events, the
+    ToolRegistry's per-tool priorities can be patched at runtime; this
+    selector will automatically reflect those changes on the next call.
+    """
+ 
+    async def select_best_tool(
+        self,
+        intent_data: dict,
+        active_context: dict,
+        exclude: Optional[list[str]] = None,
+        forced_type: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[Any]]:
+        """
+        Returns (tool_type_str, tool_instance) for the highest-priority
+        capable tool, or (None, None) if nothing can handle the intent.
+ 
+        Parameters
+        ──────────
+        intent_data    : dict with at least {"intent": str}
+        active_context : dict with at least {"active_window": str}
+        exclude        : tool names to skip (used by FallbackManager)
+        forced_type    : if set, only tools of this type are considered
+        """
+        intent: str = intent_data.get("intent", "")
+        active_app: str = active_context.get("active_window", "")
+ 
+        candidates: list[ToolEntry] = tool_registry.get_tools_for_intent(
+            intent=intent,
+            active_app=active_app,
+            exclude=exclude,
+            forced_type=forced_type,
+        )
+ 
         if not candidates:
+            logger.warning(f"⚠️  No tool found for intent='{intent}' app='{active_app}'")
             return None, None
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-
-        score, tool_type, tool_instance = candidates[0]
-
-        self.logger.info(f"✅ Selected {tool_type} ({tool_instance.name}) | Score: {score}")
-
-        return tool_type, tool_instance
-
-    def _tool_matches_intent(self, tool_name, intent):
-        file_intents = {
-            "write_file",
-            "append_file",
-            "read_file",
-            "delete_file",
-            "move_file",
-            "list_dir",
-            "create_dir",
-            "delete_dir",
-        }
-        shell_intents = {
-            "run_command",
-            "install_package",
-            "check_status",
-            "git_op",
-            "execute_script",
-            "open_url",
-            "search_web",
-            "navigate",
-        }
-        ui_intents = {"type_text", "click", "double_click", "move_cursor", "scroll"}
-        api_intents = {"extract_text", "fill_form", "submit_form", "click_link"}
-
-        if tool_name == "file_tool" and intent in file_intents:
-            return True
-        if tool_name == "shell_tool" and intent in shell_intents:
-            return True
-        if tool_name == "ui_tool" and intent in ui_intents:
-            return True
-        if tool_name == "api_tool" and intent in api_intents:
-            return True
-
-        return False
-
-
+ 
+        best = candidates[0]
+        logger.info(
+            f"✅ Selected '{best.name}' (type={best.tool_type} | "
+            f"priority={best.priority}) for intent='{intent}'"
+        )
+        return best.tool_type, best.instance
+ 
+    async def select_fallback_chain(
+        self,
+        intent_data: dict,
+        active_context: dict,
+        exclude: Optional[list[str]] = None,
+    ) -> list[Tuple[str, Any]]:
+        """
+        Returns the full ordered chain of tools that can handle this intent.
+        FallbackManager iterates this list and tries each one in sequence.
+        """
+        intent: str = intent_data.get("intent", "")
+        active_app: str = active_context.get("active_window", "")
+ 
+        candidates = tool_registry.get_tools_for_intent(
+            intent=intent,
+            active_app=active_app,
+            exclude=exclude,
+        )
+        return [(e.tool_type, e.instance) for e in candidates]
+ 
+ 
+# ── Global singleton ──────────────────────────────────────────────────── #
 tool_selector = ToolSelector()
