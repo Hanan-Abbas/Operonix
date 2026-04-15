@@ -23,7 +23,7 @@ from core.config import settings
 from core.event_bus import bus
 from voice.audio_manager import AudioManager
 from voice.wake_word import WakeWordDetector
-from voice.pipeline_improved import VoicePipeline
+from voice.pipeline import VoicePipeline
 
 logger = logging.getLogger("Orchestrator")
 
