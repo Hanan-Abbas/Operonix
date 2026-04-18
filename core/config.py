@@ -17,73 +17,57 @@ class Settings:
 
     # --- PROJECT PATHS ---
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-    
+
     # --- Voice & Audio Settings ---
-    AUDIO_INPUT_INDEX = None  # Default to system default mic, can be overridden by env var or config file 
-    AUDIO_RATE = 16000 # Standard for AI models
-    AUDIO_CHUNK = 512 # Required for openWakeWord to see full words
+    AUDIO_INPUT_INDEX = None
+    AUDIO_RATE = 16000
+    AUDIO_CHUNK = 512
     WAKE_WORD = "alexa"
     WAKE_THRESHOLD = 0.50
     MIC_VOLUME_BOOST = 1.2
 
-    # Capture behavior (post-wake)
     VOICE_CLEAR_BUFFER_CHUNKS = int(os.getenv("VOICE_CLEAR_BUFFER_CHUNKS", "1"))
 
-    # Noise reduction (fan/room noise)
     VOICE_DENOISE_ENABLED = os.getenv("VOICE_DENOISE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     VOICE_DENOISE_PROP_DECREASE = float(os.getenv("VOICE_DENOISE_PROP_DECREASE", "0.65"))
     VOICE_DENOISE_N_STD = float(os.getenv("VOICE_DENOISE_N_STD", "1.5"))
 
-    # --- STT (Speech-to-Text) Settings ---
-    # ⚠️ Using 'medium' - best accuracy for local STT (large models require GPU)
-    # Available sizes: 'tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'
+    # --- STT Settings ---
     STT_MODEL_SIZE = os.getenv("STT_MODEL_SIZE", "base")
-    # ⚠️ Increased beam_size from 5 to 10 - maximum accuracy
     STT_BEST_OF = int(os.getenv("STT_BEST_OF", "10"))
     STT_BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
     STT_TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))
     STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en")
-    # ⚠️ Enabled initial prompt for better context understanding
     STT_USE_INITIAL_PROMPT = os.getenv("STT_USE_INITIAL_PROMPT", "true").lower() in ("1", "true", "yes", "on")
     STT_INITIAL_PROMPT_MAX_WORDS = int(os.getenv("STT_INITIAL_PROMPT_MAX_WORDS", "40"))
-    STT_INITIAL_PROMPT_MODE = os.getenv("STT_INITIAL_PROMPT_MODE", "capabilities")  # minimal | capabilities
-
-    # ⚠️ Enable audio normalization for consistent volume levels
+    STT_INITIAL_PROMPT_MODE = os.getenv("STT_INITIAL_PROMPT_MODE", "capabilities")
     STT_NORMALIZE_AUDIO = os.getenv("STT_NORMALIZE_AUDIO", "true").lower() in ("1", "true", "yes", "on")
-
-    # STT provider mode: local | hybrid | cloud
-    # ⚠️ Changed to 'hybrid' - uses local STT, falls back to cloud when confidence is low
     STT_PROVIDER = os.getenv("STT_PROVIDER", "hybrid")
-    # ⚠️ Lowered threshold from 0.45 to 0.35 - more aggressive cloud fallback
     STT_MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.35"))
     CLOUD_STT_PROVIDER = os.getenv("CLOUD_STT_PROVIDER", "openai")
     CLOUD_STT_TIMEOUT_SECONDS = float(os.getenv("CLOUD_STT_TIMEOUT_SECONDS", "15"))
 
-    # Optional OpenAI STT config (used only when STT_PROVIDER enables cloud)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     OPENAI_STT_MODEL: str = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
-
 
     LOGS_DIR: Path = BASE_DIR / "logs"
     SANDBOX_DIR: Path = BASE_DIR / "sandbox"
     PLUGINS_DIR: Path = BASE_DIR / "plugins"
 
-    # File where the AI is allowed to save new learned categories safely
     DYNAMIC_SETTINGS_FILE: Path = BASE_DIR / "core" / "dynamic_settings.json"
 
-    # --- 🔄 API KEYS & EXTERNAL SERVICES ---
-    # Swapped OpenAI/Anthropic out for the ones your LLMClient actually calls!
+    # --- API KEYS & EXTERNAL SERVICES ---
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
     # --- BRAIN & LLM SETTINGS ---
-    # Removed gpt-4o variables. Your LLMClient is now provider-routed!
     OLLAMA_EMBED_MODEL: str = "all-minilm"
-    OLLAMA_ENABLED   = True                       # set False to disable entirely
-    OLLAMA_MODEL     = "llama3"                   # any model you have pulled
-    OLLAMA_BASE_URL  = "http://localhost:11434"   # default Ollama port
-    OLLAMA_TIMEOUT   = 30 
+    OLLAMA_ENABLED   = True
+    OLLAMA_MODEL     = "llama3"
+    OLLAMA_BASE_URL  = "http://localhost:11434"
+    OLLAMA_TIMEOUT   = 30
+
     # --- SYSTEM GUARDRAILS ---
     MAX_RETRY_ATTEMPTS: int = 3
     SAFE_MODE: bool = True
@@ -93,53 +77,54 @@ class Settings:
         str(BASE_DIR / "safety"),
     ]
 
-    # --- 🔄 SERVER & DASHBOARD ---
-    # Pointing to full localhost is standard for FastAPI + WebSocket setups
+    # --- SERVER & DASHBOARD ---
     API_HOST: str = "localhost"
     API_PORT: int = 8000
 
+    # ── Panel Settings ────────────────────────────────────────────────────────
+    # Set PANEL_ENABLED=false in environment to run headless (server / CI).
+    PANEL_ENABLED: bool = os.getenv("PANEL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+    # Seconds the orchestrator waits for the Qt thread to signal ready.
+    PANEL_START_TIMEOUT: float = float(os.getenv("PANEL_START_TIMEOUT", "5.0"))
+
+    # How often (seconds) the orchestrator polls the active window and fires
+    # app_context_changed. Keep ≥ 1.0 to avoid hammering the OS window API.
+    APP_CONTEXT_POLL_INTERVAL: float = float(os.getenv("APP_CONTEXT_POLL_INTERVAL", "2.0"))
+
+    # Intent-confidence threshold below which the suggestion engine shows the
+    # next tier in the waterfall as the recommended strategy.
+    INTENT_MATCH_MIN_CONFIDENCE: float = float(os.getenv("INTENT_MATCH_MIN_CONFIDENCE", "0.35"))
+
+    # Seconds the pattern pruner is allowed to run at shutdown.
+    PRUNE_TIMEOUT: float = float(os.getenv("PRUNE_TIMEOUT", "2.0"))
+    # ─────────────────────────────────────────────────────────────────────────
+
     def __init__(self):
-        # 1. Automatically ensure required system directories exist on startup
         for path in [self.LOGS_DIR, self.SANDBOX_DIR]:
             path.mkdir(parents=True, exist_ok=True)
 
-        # 2. 🔄 Zero-Hardcoded Fallback Defaults
-        # Notice we are using prefix concepts rather than exact rigid matches!
         self.RISKY_INTENTS: List[str] = ["file_delete", "shell_command", "run_command"]
         self.COMPLEX_INTENTS: List[str] = ["write_", "debug_", "complex_"]
 
-        # 3. Load dynamic settings from JSON if the file exists!
         self._load_dynamic_settings()
 
     def _load_dynamic_settings(self):
-        """Safely loads dynamic intent configurations from JSON.
-
-        If the file is corrupted or missing, it falls back to system defaults.
-        """
+        """Safely loads dynamic intent configurations from JSON."""
         if not self.DYNAMIC_SETTINGS_FILE.exists():
-            logger.info(
-                "No dynamic_settings.json found. Using hardcoded fallback defaults."
-            )
+            logger.info("No dynamic_settings.json found. Using hardcoded fallback defaults.")
             return
 
         try:
             with open(self.DYNAMIC_SETTINGS_FILE, "r") as f:
                 data = json.load(f)
-                self.RISKY_INTENTS = data.get(
-                    "risky_intents", self.RISKY_INTENTS
-                )
-                self.COMPLEX_INTENTS = data.get(
-                    "complex_intents", self.COMPLEX_INTENTS
-                )
+                self.RISKY_INTENTS = data.get("risky_intents", self.RISKY_INTENTS)
+                self.COMPLEX_INTENTS = data.get("complex_intents", self.COMPLEX_INTENTS)
                 logger.info("Successfully loaded dynamic intent configurations.")
         except json.JSONDecodeError:
-            logger.error(
-                "🚨 Corrupted dynamic_settings.json detected! Safe defaults used."
-            )
+            logger.error("🚨 Corrupted dynamic_settings.json detected! Safe defaults used.")
         except Exception as e:
-            logger.error(
-                f"Failed to load dynamic settings: {e}. Using defaults."
-            )
+            logger.error(f"Failed to load dynamic settings: {e}. Using defaults.")
 
 
 # Global instance
