@@ -1,119 +1,144 @@
-import asyncio
-import json
+"""
+api/server.py
+
+FastAPI application factory and server entry point.
+
+Responsibilities:
+  - Build the FastAPI app
+  - Register all routers (actions, health, logs, plugins, system)
+  - Mount the WebSocket endpoint
+  - Bridge the internal EventBus → WebSocket clients on startup
+  - Expose start_server() for main.py
+
+Design principles:
+  - Zero hardcoded config: every setting comes from core.config.settings
+  - No inline route logic: all routes live in api/routes/
+  - WebSocket logic lives in api/websocket.py
+  - Graceful: starts even if optional components (audio, STT) aren't ready yet
+"""
+
+import logging
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+
 from core.event_bus import bus
+from core.config import settings
+
+# ── Routers ─────────────────────────────────────────────────────────────────
 from api.routes.actions import router as actions_router
-from api.routes.health import system_state
+from api.routes.health  import router as health_router,  system_state
+from api.routes.logs    import router as logs_router
+from api.routes.plugins import router as plugins_router
+from api.routes.system  import router as system_router
 
-app = FastAPI(title="i_os Agent Dashboard API")
-app.include_router(actions_router, prefix="/api")
+# ── WebSocket manager ────────────────────────────────────────────────────────
+from api.websocket import manager as ws_manager, websocket_handler
 
-# Enable CORS for the Frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+logger = logging.getLogger("APIServer")
 
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
+# ─────────────────────────────────────────────────────────────────────────────
+# App factory
+# ─────────────────────────────────────────────────────────────────────────────
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+def create_app() -> FastAPI:
+    """
+    Build and return the FastAPI application.
 
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                pass
+    Called once at startup. Kept as a factory so it can be used in tests
+    without actually starting the server.
+    """
+    app = FastAPI(
+        title=getattr(settings, "PROJECT_NAME", "i_os Agent API"),
+        version=getattr(settings, "VERSION",      "1.0.0"),
+        description="Real-time control plane for the i_os autonomous agent.",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
 
-manager = ConnectionManager()
+    # ── CORS ──────────────────────────────────────────────────────────────
+    allowed_origins = getattr(settings, "CORS_ORIGINS", ["*"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# --- THE EVENT BRIDGE ---
-# This connects the internal system logic to the external Web UI
-def setup_event_bridge():
+    # ── Routers ───────────────────────────────────────────────────────────
+    # Each router already carries its own prefix (e.g. /api/health, /api/logs …)
+    app.include_router(actions_router)
+    app.include_router(health_router)
+    app.include_router(logs_router)
+    app.include_router(plugins_router)
+    app.include_router(system_router)
 
-    async def forward_to_dashboard(event):
-        payload = {
-            "source": event.source,
-            "event_type": event.name,
-            "data": event.data
-        }
-        await manager.broadcast(payload)
+    # ── WebSocket ─────────────────────────────────────────────────────────
+    @app.websocket("/ws/dashboard")
+    async def ws_endpoint(websocket: WebSocket):
+        await websocket_handler(websocket)
 
-    bus.subscribe("*", forward_to_dashboard)
-    print("🛰️ Event Bridge: Successfully linked to Event Bus.")
+    # ── Lifecycle hooks ───────────────────────────────────────────────────
+    @app.on_event("startup")
+    async def on_startup():
+        _setup_event_bridge()
+        system_state.event_bus_running = True
+        logger.info("API Server online.")
 
-@app.on_event("startup")
-async def startup_event():
-    setup_event_bridge()
-    system_state.event_bus_running = True
-    print("🌐 API Server: Bridge to Event Bus is LIVE.")
+    @app.on_event("shutdown")
+    async def on_shutdown():
+        logger.info("API Server shutting down.")
 
-# --- ROUTES (Aligned with your api/routes/ structure) ---
+    return app
 
-@app.get("/api/system/status")
-async def get_status():
-    """Matches api/routes/system.py logic"""
-    import platform
-    return {
-        "status": "online",
-        "os": platform.system(),
-        "version": "1.0.0",
-        "engine": "i_os_core"
-    }
 
-@app.get("/api/logs/recent")
-async def get_recent_logs():
-    """Matches api/routes/logs.py logic"""
-    # This would eventually read from your /logs/ directory
-    return {"logs": ["System started...", "Event bus initialized..."]}
+# ─────────────────────────────────────────────────────────────────────────────
+# Event bridge
+# ─────────────────────────────────────────────────────────────────────────────
 
-@app.websocket("/ws/dashboard")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
-    try:
-        while True:
-            # Receive commands from the Dashboard (e.g., "STOP", "RETRY")
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            # Emit back to the system so Orchestrator/Executor can react
-            await bus.emit("dashboard_command", message, source="api_server")
-            
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
+def _setup_event_bridge() -> None:
+    """
+    Subscribe the WebSocket manager to all internal EventBus events so that
+    every system event is forwarded to connected dashboard clients in real time.
 
-@app.get("/api/health")
-async def health_check():
-    """System health status."""
-    return {
-        "status": "healthy",
-        "components": {
-            "event_bus": "running" if bus._event_loop and bus._event_loop.is_running() else "down",
-            "orchestrator": "running" if orchestrator.is_running else "down",
-            "audio_manager": "running" if audio_manager.is_running else "down",
-            "stt_model": "loaded" if stt.model is not None else "not_loaded",
-        }
-    }
+    The manager decides per-connection which events to deliver based on each
+    client's active subscriptions.
+    """
+    ws_manager.attach_bus(bus)
+    logger.info("Event bridge: EventBus → WebSocket clients linked.")
 
-@app.get("/api/diagnostics/audio")
-async def audio_diagnostics():
-    """Audio device info."""
-    return audio_manager.device_info()
 
-def start_server():
-    """Main entry point called by main.py"""
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", loop="asyncio")
+# ─────────────────────────────────────────────────────────────────────────────
+# Server entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def start_server() -> None:
+    """
+    Called by core/main.py to start the API server.
+
+    All parameters are read from settings — no hardcoded host/port/workers.
+    """
+    app = create_app()
+
+    host    = getattr(settings, "API_HOST",    "0.0.0.0")
+    port    = getattr(settings, "API_PORT",    8000)
+    workers = getattr(settings, "API_WORKERS", 1)
+    reload  = getattr(settings, "DEBUG",       False)
+    log_lvl = getattr(settings, "LOG_LEVEL",   "info").lower()
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        workers=workers if not reload else 1,   # uvicorn reload requires workers=1
+        reload=reload,
+        log_level=log_lvl,
+        loop="asyncio",
+    )
+
+    logger.info("Starting API server on %s:%d", host, port)
     server = uvicorn.Server(config)
-    return server.run()
+    server.run()
