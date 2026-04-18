@@ -19,7 +19,7 @@ import os
 from typing import Any
 
 
-class PatternRetriever:
+class Retriever:
     """🔎 The memory recall unit of the AI OS.
 
     Fetches saved task patterns from the store and hydrates them with the
@@ -106,4 +106,4 @@ class PatternRetriever:
 
 
 # Global instance
-retriever = PatternRetriever()
+retriever = Retriever()
