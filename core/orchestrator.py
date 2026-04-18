@@ -183,24 +183,31 @@ class Orchestrator:
     def _panel_thread_target(self) -> None:
         """
         Runs in the panel daemon thread.
-        Creates the QApplication, builds the PanelController, and enters
-        the Qt event loop.  Signals _panel_ready once the window is shown.
+        Creates a dedicated event loop, initializes QApplication, and runs the Qt loop.
         """
         try:
             from PyQt6.QtWidgets import QApplication
             import sys
+            import asyncio
 
+            # 1. FIX: Create and set a NEW event loop for this specific thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # 2. Initialize Qt Application
             qt_app = QApplication.instance() or QApplication(sys.argv)
 
+            # 3. Build the controller
             self._panel_controller = _build_panel_controller()
 
-            # Pass the asyncio loop so the controller can schedule coroutines
-            # back onto it from the Qt thread.
-            main_loop = asyncio.get_event_loop()
-            self._panel_controller.start(loop=main_loop)
+            # 4. Pass the loop we just created to the controller
+            # This allows the GUI to communicate with the rest of Operonix
+            self._panel_controller.start(loop=loop)
 
             self._panel_ready.set()
-            logger.info("Orchestrator: panel thread ready.")
+            logger.info("Orchestrator: panel thread ready with dedicated event loop.")
+
+            # 5. Execute the Qt Event Loop
             qt_app.exec()
 
         except ImportError as exc:
@@ -211,6 +218,10 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.error("Orchestrator: panel thread crashed — %s", exc, exc_info=True)
             self._panel_ready.set()
+        finally:
+            # Clean up the loop when the window is closed
+            if 'loop' in locals():
+                loop.close()
 
     # ── Background loops ──────────────────────────────────────────────────────
 
