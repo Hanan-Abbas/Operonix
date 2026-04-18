@@ -34,7 +34,8 @@ class Orchestrator:
         self.is_running: bool = False
 
         # ── Single AudioManager — shared by all voice subsystems ──────────────
-        self.audio_manager = AudioManager(
+        self.audio_manager
+    async def start(self) -> None: = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
             chunk=int(getattr(settings, "AUDIO_CHUNK", 1280)),
             auto_start=True,
@@ -53,7 +54,6 @@ class Orchestrator:
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    async def start(self) -> None:
         self.is_running = True
 
         # IMPORTANT: assign the loop BEFORE creating any tasks that depend on it
