@@ -378,3 +378,19 @@ async def evolution_history(limit: int = 20) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("Could not fetch evolution history: %s", exc)
         return {"history": [], "count": 0, "message": str(exc)}
+
+_active_input_mode = "none"
+
+@router.post("/input-mode")
+async def set_input_mode(payload: Dict[str, Any] = Body(...)):
+    global _active_input_mode
+    mode = payload.get("mode", "none")
+    if mode not in ("voice", "panel", "none"):
+        raise HTTPException(status_code=422, detail="mode must be 'voice', 'panel', or 'none'")
+    _active_input_mode = mode
+    await _bus().emit("input_mode_changed", {"mode": mode}, source="api_system")
+    return {"mode": mode}
+
+@router.get("/input-mode")
+async def get_input_mode():
+    return {"mode": _active_input_mode}
