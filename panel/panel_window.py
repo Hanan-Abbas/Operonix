@@ -130,6 +130,19 @@ if _HAS_QT:
 
         def apply_tokens(self, tokens: ThemeTokens) -> None:
             self._tokens = tokens
+            # Strip the existing layout before rebuilding to avoid Qt's
+            # "widget already has a layout" warning.
+            old = self.layout()
+            if old is not None:
+                while old.count():
+                    item = old.takeAt(0)
+                    w = item.widget()
+                    if w:
+                        w.setParent(None)   # type: ignore[arg-type]
+                        w.deleteLater()
+                from PyQt6.QtWidgets import QWidget as _QW
+                _dummy = _QW()
+                _dummy.setLayout(old)
             self._build()
 
     # -----------------------------------------------------------------------
