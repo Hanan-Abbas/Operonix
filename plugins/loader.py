@@ -192,9 +192,116 @@ class PluginLoader:
 
     async def _on_reload_requested(self, event):
         """Event bus handler for hot-reload requests."""
-        name = event.data.get("name")
+        name = event.data.get("name") if hasattr(event, "data") and isinstance(event.data, dict) else None
         if name:
             await self.hot_reload(name)
+
+    # ── API-facing methods ────────────────────────────────────────────────────
+
+    def list_plugins(self) -> list[dict]:
+        """
+        Return a serialisable list of all registered plugins and their status.
+        Called by GET /api/plugins.
+        """
+        result = []
+        for name, entry in plugin_registry.entries.items():
+            m = entry.manifest
+            result.append({
+                "name":         m.name,
+                "version":      m.version,
+                "description":  getattr(m, "description", ""),
+                "status":       m.status.value if hasattr(m.status, "value") else str(m.status),
+                "enabled":      m.status.value not in ("untrusted", "retired", "disabled")
+                                if hasattr(m.status, "value") else True,
+                "loaded":       True,
+                "capabilities": getattr(m, "capabilities", []),
+                "plugin_dir":   entry.plugin_dir,
+            })
+        return result
+
+    def get_plugin(self, name: str) -> dict | None:
+        """Return manifest dict for a single plugin, or None if not found."""
+        entry = plugin_registry.entries.get(name)
+        if entry is None:
+            return None
+        m = entry.manifest
+        return {
+            "name":         m.name,
+            "version":      m.version,
+            "description":  getattr(m, "description", ""),
+            "status":       m.status.value if hasattr(m.status, "value") else str(m.status),
+            "enabled":      m.status.value not in ("untrusted", "retired", "disabled")
+                            if hasattr(m.status, "value") else True,
+            "loaded":       True,
+            "capabilities": getattr(m, "capabilities", []),
+            "plugin_dir":   entry.plugin_dir,
+        }
+
+    async def enable(self, name: str) -> str:
+        """Enable a registered plugin (set status to active)."""
+        entry = plugin_registry.entries.get(name)
+        if entry is None:
+            raise FileNotFoundError(f"Plugin '{name}' not found.")
+        entry.manifest.status = PluginStatus.ACTIVE
+        self.logger.info("Plugin '%s' enabled.", name)
+        return f"Plugin '{name}' enabled."
+
+    async def disable(self, name: str) -> str:
+        """Disable a registered plugin without removing it."""
+        entry = plugin_registry.entries.get(name)
+        if entry is None:
+            raise FileNotFoundError(f"Plugin '{name}' not found.")
+        entry.manifest.status = PluginStatus.RETIRED
+        self.logger.info("Plugin '%s' disabled.", name)
+        return f"Plugin '{name}' disabled."
+
+    async def reload(self, name: str) -> str:
+        """Hot-reload a single plugin by name."""
+        success = await self.hot_reload(name)
+        if not success:
+            raise FileNotFoundError(f"Plugin '{name}' could not be reloaded.")
+        return f"Plugin '{name}' reloaded."
+
+    async def reload_all(self) -> dict:
+        """Hot-reload all currently registered plugins."""
+        results = {}
+        for name in list(plugin_registry.entries.keys()):
+            try:
+                ok = await self.hot_reload(name)
+                results[name] = "reloaded" if ok else "failed"
+            except Exception as exc:  # noqa: BLE001
+                results[name] = f"error: {exc}"
+        return results
+
+    async def remove(self, name: str) -> str:
+        """Unload a plugin and delete its directory from disk."""
+        import shutil
+        entry = plugin_registry.entries.get(name)
+        if entry is None:
+            raise FileNotFoundError(f"Plugin '{name}' not found.")
+        plugin_dir = entry.plugin_dir
+        plugin_registry.unregister(name)
+        if os.path.isdir(plugin_dir):
+            shutil.rmtree(plugin_dir, ignore_errors=True)
+            self.logger.info("Plugin '%s' removed from disk (%s).", name, plugin_dir)
+        return f"Plugin '{name}' removed."
+
+    def find(self, app: str = "", intent: str = "") -> list[dict]:
+        """
+        Return plugins whose capabilities loosely match the given intent/app.
+        Used by PanelController's plugin_registry callable.
+        """
+        matches = []
+        for entry in plugin_registry.entries.values():
+            caps = getattr(entry.manifest, "capabilities", [])
+            if not intent or any(intent.lower() in str(c).lower() for c in caps):
+                m = entry.manifest
+                matches.append({
+                    "name":        m.name,
+                    "description": getattr(m, "description", ""),
+                    "capabilities": caps,
+                })
+        return matches
 
 
 # Global instance
