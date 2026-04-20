@@ -1,8 +1,11 @@
 # --- CORE & NETWORKING ---
-asyncio          # Asynchronous I/O for the Event Bus and Orchestrator
+# asyncio is a Python built-in — do NOT pip install it
 aiohttp          # Async HTTP client for Ollama/LLM communication
 fastapi          # Backend for the Dashboard
 uvicorn          # High-performance ASGI server to run the API
+
+# --- DATABASE ---
+aiosqlite        # Async SQLite driver (required for panel/history_store.py)
 
 # --- OS & WINDOW DETECTION ---
 psutil           # System process and memory monitoring
@@ -19,27 +22,28 @@ pyautogui        # Cross-platform UI automation (Click/Type)
 mouse            # Fine-grained mouse control fallback
 keyboard         # Global hotkey listening and simulation
 pillow           # Image processing for screenshots and vision fallback
-fast-whisper
+faster-whisper   # STT (was 'fast-whisper' — correct package name is faster-whisper)
 pyaudio
-silero_vad       # Add the pytorch dependency with his cpu only version
+silero-vad       # VAD (correct PyPI name is silero-vad, not silero_vad)
 pyttsx3
 openwakeword
-noicereduce
+noisereduce      # Spectral noise gating (was misspelled 'noicereduce')
 
-# --- 🔄 NEW: BRAIN, VECTOR DB & MATH ---
-# These are strictly required for CapabilityMapper's numpy math and vector store!
+# --- NEURAL NOISE SUPPRESSION (Optional, CPU-only) ---
+# Uncomment to enable DeepFilterNet neural noise reduction:
+# deepfilternet
+# torch            # Required by deepfilternet; install CPU-only build:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# --- BRAIN, VECTOR DB & MATH ---
 numpy            # Fast matrix math for cosine similarity calculations
-scikit-learn     # Optional but great for heavy vector distance checks
-chromadb
+scikit-learn     # Vector distance calculations
+chromadb         # Vector store for memory/capability mapping
 
 # --- UTILITIES ---
 python-dotenv    # For managing API keys and local configs in core/config.py
+pydantic>=2.0.0  # Data validation (FastAPI dependency)
+
 # --- TESTING ---
 pytest
 pytest-asyncio
-# (Removed 'logging' as it is a native Python built-in and cannot be pip installed!)
-
-# Add to requirements.txt
-pydantic>=2.0.0
-python-dotenv  # (already there)
-psutil  # For health checks
