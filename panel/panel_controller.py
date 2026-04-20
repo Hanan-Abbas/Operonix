@@ -148,7 +148,17 @@ class PanelController:
         """Persist state and tear down."""
         self._hotkey.stop()
         self._state.save()
-        self._loop.run_until_complete(self._history.close())
+        # history.close() is a coroutine — run it on our dedicated loop.
+        # Guard against the case where the loop is already closed or running.
+        try:
+            if not self._loop.is_closed():
+                if self._loop.is_running():
+                    # Schedule it as a future; don't block — we're shutting down.
+                    asyncio.run_coroutine_threadsafe(self._history.close(), self._loop)
+                else:
+                    self._loop.run_until_complete(self._history.close())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("panel_controller: history close error — %s", exc)
         if self._window:
             try:
                 self._window.hide()
@@ -181,7 +191,11 @@ class PanelController:
         if self._window:
             self._window.toggle()
 
-    def _on_action_completed(self, payload: dict[str, Any]) -> None:
+    def _on_action_completed(self, event: Any) -> None:
+        # Accept both an Event object and a plain dict for resilience.
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            payload = {}
         success = bool(payload.get("success", False))
         duration = int(payload.get("duration_ms", 0))
         method = payload.get("method", "unknown")
@@ -211,12 +225,18 @@ class PanelController:
 
         log.debug("panel_controller: action_completed success=%s method=%s", success, method)
 
-    def _on_app_context_changed(self, payload: dict[str, Any]) -> None:
+    def _on_app_context_changed(self, event: Any) -> None:
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            payload = {}
         app = payload.get("app_name", "unknown")
         self._engine.set_app_context(app)
         log.debug("panel_controller: app context → %s", app)
 
-    def _on_config_changed(self, payload: dict[str, Any]) -> None:
+    def _on_config_changed(self, event: Any) -> None:
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            payload = {}
         if payload.get("source") == "panel":
             return  # Ignore changes we ourselves fired.
         # Re-read tokens in case an external config change affects the theme.
