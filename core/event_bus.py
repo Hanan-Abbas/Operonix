@@ -20,6 +20,27 @@ class Event:
         # Tie-breaker: Compare timestamps if priorities are equal
         return self.timestamp < other.timestamp
 
+    # ── Dict-compatibility shims ──────────────────────────────────────────────
+    # Many listeners were written to call event.get("key") or event["key"]
+    # as if the event were a plain dict.  These shims delegate to self.data
+    # so those callers work without modification.
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Delegate .get() to the event's data dict (or return default)."""
+        if isinstance(self.data, dict):
+            return self.data.get(key, default)
+        return default
+
+    def __getitem__(self, key: str) -> Any:
+        if isinstance(self.data, dict):
+            return self.data[key]
+        raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        if isinstance(self.data, dict):
+            return key in self.data
+        return False
+
 
 class EventBus:
 
