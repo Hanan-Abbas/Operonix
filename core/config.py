@@ -77,6 +77,14 @@ class Settings:
         str(BASE_DIR / "safety"),
     ]
 
+    # --- PLUGIN SETTINGS ---
+    SANDBOX_TIMEOUT = 30
+    SANDBOX_MEMORY_MB = 256
+    GAP_CONSECUTIVE_THRESHOLD = 3
+    GAP_WINDOW_THRESHOLD = 5
+    PLUGIN_REVOKE_CONSECUTIVE = 5
+    PLUGIN_EVOLVE_THRESHOLD = 0.75
+    
     # --- SERVER & DASHBOARD ---
     API_HOST: str = "localhost"
     API_PORT: int = 8000
