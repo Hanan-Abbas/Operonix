@@ -470,14 +470,21 @@ if _HAS_QT:
         def set_tokens(self, tokens: ThemeTokens) -> None:
             """Swap in a new theme; rebuilds the stylesheet."""
             self._tokens = tokens
-            # Rebuild entire UI with new tokens.
+            # Remove the old top-level layout and all its children safely.
             old_layout = self.layout()
-            if old_layout:
-                # Clear all children.
+            if old_layout is not None:
+                # Drain widgets from the old layout before deleting it.
                 while old_layout.count():
                     item = old_layout.takeAt(0)
-                    if item.widget():
-                        item.widget().deleteLater()
+                    w = item.widget()
+                    if w:
+                        w.setParent(None)  # type: ignore[arg-type]
+                        w.deleteLater()
+                # Qt requires the layout to be re-parented to a throw-away
+                # widget before we can assign a new one to self.
+                import PyQt6.QtWidgets as _qw
+                _dummy = _qw.QWidget()
+                _dummy.setLayout(old_layout)
             self._build()
             log.info("panel_renderer: theme applied")
 
