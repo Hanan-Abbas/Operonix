@@ -1,0 +1,214 @@
+"""
+plugins/sandbox_runner.py
+
+Orchestrates the full pre-deployment test cycle for a new plugin:
+
+1. LLM validation (plugin_validator) — code audit before any execution
+2. Sandbox execution test (safety.sandbox) — isolated subprocess run
+3. Pytest test suite (safety.sandbox.run_test_suite) — automated tests
+
+Returns a structured report used by generator.py to decide whether to
+deploy the plugin or retry.
+"""
+from __future__ import annotations
+
+import logging
+import os
+
+from core.event_bus import bus
+from plugins.plugin_validator import plugin_validator
+from safety.sandbox import sandbox
+
+logger = logging.getLogger("SandboxRunner")
+
+
+class SandboxRunner:
+    """
+    Full pre-deployment validation pipeline for generated plugins.
+
+    Used by:
+        generator.py — before writing the plugin to installed/
+        plugin_evolver.py — before deploying an evolved version
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger("SandboxRunner")
+
+    async def run_full_pipeline(
+        self,
+        plugin_name: str,
+        plugin_code: str,
+        test_code: str,
+        plugin_dir: str,
+        intent: str,
+        failure_summary: dict | None = None,
+    ) -> dict:
+        """
+        Runs the complete validation pipeline.
+
+        Returns:
+        {
+            "passed": bool,
+            "stage_failed": "llm_audit" | "sandbox_run" | "pytest" | None,
+            "llm_audit": {...},
+            "sandbox_run": {...},
+            "pytest": {...},
+            "ready_for_approval": bool,
+        }
+        """
+        report = {
+            "passed": False,
+            "stage_failed": None,
+            "llm_audit": {},
+            "sandbox_run": {},
+            "pytest": {},
+            "ready_for_approval": False,
+        }
+
+        # ── Stage 1: LLM Code Audit ───────────────────────────────────────────
+        self.logger.info(f"🔍 [Stage 1] LLM audit for '{plugin_name}'...")
+        audit = await plugin_validator.validate_plugin(
+            plugin_name=plugin_name,
+            plugin_code=plugin_code,
+            intent=intent,
+            failure_summary=failure_summary,
+        )
+        report["llm_audit"] = audit
+
+        if not audit.get("valid", False):
+            self.logger.warning(
+                f"❌ [Stage 1] LLM audit rejected '{plugin_name}': {audit.get('reason')}"
+            )
+            report["stage_failed"] = "llm_audit"
+            bus.publish(
+                "plugin_validation_failed",
+                {
+                    "name": plugin_name,
+                    "stage": "llm_audit",
+                    "reason": audit.get("reason"),
+                    "tweaks": audit.get("suggested_tweaks"),
+                },
+                source="sandbox_runner",
+            )
+            return report
+
+        self.logger.info(f"✅ [Stage 1] LLM audit passed for '{plugin_name}'.")
+
+        # Write plugin files to disk for sandbox execution
+        plugin_file = os.path.join(plugin_dir, "plugin.py")
+        test_dir    = os.path.join(plugin_dir, "tests")
+        test_file   = os.path.join(test_dir, "test_plugin.py")
+
+        os.makedirs(test_dir, exist_ok=True)
+        with open(plugin_file, "w") as f:
+            f.write(plugin_code)
+        with open(test_file, "w") as f:
+            f.write(test_code)
+
+        # ── Stage 2: Sandbox Execution Test ───────────────────────────────────
+        self.logger.info(f"🏗️ [Stage 2] Sandbox execution test for '{plugin_name}'...")
+        sandbox_result = await sandbox.run_plugin(
+            plugin_path=plugin_file,
+            context={"active_window": "test", "app_type": "sandbox_test"},
+            args={},
+            timeout=30,
+        )
+        report["sandbox_run"] = sandbox_result.to_dict()
+
+        if not sandbox_result.success:
+            if sandbox_result.timed_out:
+                self.logger.error(
+                    f"⏱️ [Stage 2] Sandbox timeout for '{plugin_name}'."
+                )
+            else:
+                self.logger.warning(
+                    f"❌ [Stage 2] Sandbox execution failed for '{plugin_name}': "
+                    f"{sandbox_result.error}"
+                )
+            report["stage_failed"] = "sandbox_run"
+            bus.publish(
+                "plugin_validation_failed",
+                {
+                    "name": plugin_name,
+                    "stage": "sandbox_run",
+                    "reason": sandbox_result.error,
+                    "timed_out": sandbox_result.timed_out,
+                },
+                source="sandbox_runner",
+            )
+            return report
+
+        self.logger.info(
+            f"✅ [Stage 2] Sandbox execution passed "
+            f"({sandbox_result.elapsed_ms}ms) for '{plugin_name}'."
+        )
+
+        # ── Stage 3: Pytest Test Suite ────────────────────────────────────────
+        self.logger.info(f"🧪 [Stage 3] Running pytest for '{plugin_name}'...")
+        test_result = await sandbox.run_test_suite(
+            plugin_path=plugin_file,
+            test_path=test_file,
+            timeout=60,
+        )
+        report["pytest"] = test_result
+
+        if not test_result.get("passed", False):
+            self.logger.warning(
+                f"❌ [Stage 3] Pytest failed for '{plugin_name}':\n"
+                f"{test_result.get('output', '')[:500]}"
+            )
+            report["stage_failed"] = "pytest"
+            bus.publish(
+                "plugin_validation_failed",
+                {
+                    "name": plugin_name,
+                    "stage": "pytest",
+                    "reason": test_result.get("output", "")[:300],
+                },
+                source="sandbox_runner",
+            )
+            return report
+
+        self.logger.info(f"✅ [Stage 3] All tests passed for '{plugin_name}'.")
+
+        # ── All stages passed ─────────────────────────────────────────────────
+        report["passed"] = True
+        report["ready_for_approval"] = True
+
+        bus.publish(
+            "plugin_ready_for_approval",
+            {
+                "name": plugin_name,
+                "intent": intent,
+                "plugin_dir": plugin_dir,
+                "sandbox_elapsed_ms": sandbox_result.elapsed_ms,
+            },
+            source="sandbox_runner",
+        )
+        self.logger.info(
+            f"🎉 Plugin '{plugin_name}' passed all validation stages. "
+            f"Awaiting user approval."
+        )
+        return report
+
+    async def quick_sandbox_test(
+        self,
+        plugin_path: str,
+        context: dict | None = None,
+        args: dict | None = None,
+    ) -> dict:
+        """
+        Lightweight sandbox test without LLM audit or pytest.
+        Used by plugin_evolver for quick iteration checks.
+        """
+        result = await sandbox.run_plugin(
+            plugin_path=plugin_path,
+            context=context or {},
+            args=args or {},
+            timeout=20,
+        )
+        return result.to_dict()
+
+
+# Global instance
+sandbox_runner = SandboxRunner()
