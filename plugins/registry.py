@@ -48,7 +48,7 @@ class PluginEntry:
     @property
     def is_active(self) -> bool:
         return self.manifest.status == PluginStatus.TRUSTED
-
+  
     def to_dict(self) -> dict:
         return {
             "name": self.name,
@@ -78,6 +78,12 @@ class PluginRegistry:
         self._entries: dict[str, PluginEntry] = {}
         self._lock = threading.RLock()
 
+    @property
+    def entries(self) -> dict[str, "PluginEntry"]:
+        """Public read access to the entries dict (thread-safe snapshot)."""
+        with self._lock:
+            return dict(self._entries)
+            
     # ── Registration ──────────────────────────────────────────────────────────
 
     def register(self, entry: PluginEntry) -> bool:
