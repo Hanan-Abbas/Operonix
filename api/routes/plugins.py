@@ -33,8 +33,8 @@ router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _loader():
-    from plugins.loader import loader
-    return loader
+    from plugins.loader import PluginLoader
+    return PluginLoader()
 
 
 def _generator():
