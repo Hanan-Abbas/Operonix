@@ -46,6 +46,7 @@ from learning.pruning import pattern_pruner
 from api.routes.health import system_state
 from core.config_validator import validated_config
 from voice.stt import SpeechToText
+from plugins import start_plugin_system
 
 logger = logging.getLogger("LifecycleManager")
 
@@ -134,6 +135,9 @@ class LifecycleManager:
         # 9. Orchestrator — boots the panel Qt thread internally when PANEL_ENABLED=true
         await orchestrator.start()
         system_state.orchestrator_running = True
+
+        # 10. Plugin system
+        await start_plugin_system()
 
         # 10. STT health reference
         stt_instance = SpeechToText()
