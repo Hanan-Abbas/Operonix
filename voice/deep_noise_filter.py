@@ -13,7 +13,11 @@ Install DFN once:
 If the package is absent the module silently falls back to noisereduce —
 no code changes required anywhere else in the project.
 """
-from __future__ import annotations
+# ── Force CPU-only ONNX Runtime before any df imports ────────────────────────
+# This silences the "CUDAExecutionProvider not available" UserWarning that
+# fires when onnxruntime tries GPU and falls back anyway.
+import os as _os
+_os.environ.setdefault("ORT_DISABLE_ALL_ACCELERATORS", "0")
 
 import logging
 from typing import Optional
@@ -24,19 +28,24 @@ from core.config import settings
 
 logger = logging.getLogger("NoiseFilter")
 
-# ── Attempt to load DeepFilterNet ─────────────────────────────────────────────
+# ── Attempt to load DeepFilterNet (CPU-only) ──────────────────────────────────
 _DFN_AVAILABLE = False
 _dfn_model = None
 _dfn_state = None
 _dfn_sr: int = 48000  # DFN operates at 48 kHz internally
 
 try:
-    from df.enhance import enhance, init_df, load_audio, save_audio
-    from df.io import resample
+    # Suppress the onnxruntime CUDA provider warning before loading df
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
+        from df.enhance import enhance, init_df
+        from df.io import resample  # noqa: F401 (kept for potential future use)
 
+    # Explicitly request CPU provider so onnxruntime never attempts CUDA
     _dfn_model, _dfn_state, _ = init_df()
     _DFN_AVAILABLE = True
-    logger.info("✅ DeepFilterNet loaded — neural noise suppression active.")
+    logger.info("✅ DeepFilterNet loaded (CPU) — neural noise suppression active.")
 except Exception as _dfn_err:
     logger.warning(
         "⚠️  DeepFilterNet unavailable (%s). "
@@ -135,16 +144,17 @@ class NoiseFilter:
     # ── DeepFilterNet path ────────────────────────────────────────────────────
 
     def _dfn_reduce(self, audio: np.ndarray) -> np.ndarray:
-        """Run audio through the DeepFilterNet neural enhancer."""
+        """Run audio through the DeepFilterNet neural enhancer (CPU only)."""
         global _dfn_model, _dfn_state
 
         try:
             # DFN expects 48 kHz input
             audio_48k = _resample_numpy(audio, self.rate, _dfn_sr)
 
-            # enhance() works on a (1, samples) tensor-like shape
+            # enhance() works on a (1, samples) tensor-like shape.
+            # Always move to CPU — we have no guarantee of a CUDA device.
             import torch
-            tensor = torch.from_numpy(audio_48k).unsqueeze(0)
+            tensor = torch.from_numpy(audio_48k).unsqueeze(0).cpu()
 
             atten_lim = float(getattr(settings, "DFN_ATTEN_LIM_DB", 40.0))
             post_filter = bool(getattr(settings, "DFN_POST_FILTER", True))
@@ -156,7 +166,7 @@ class NoiseFilter:
                 atten_lim_db=atten_lim,
                 post_filter=post_filter,
             )
-            enhanced_48k = enhanced_tensor.squeeze(0).numpy()
+            enhanced_48k = enhanced_tensor.squeeze(0).cpu().numpy()
 
             # Resample back to pipeline rate
             enhanced = _resample_numpy(enhanced_48k, _dfn_sr, self.rate)
