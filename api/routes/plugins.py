@@ -33,8 +33,8 @@ router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _loader():
-    from plugins.loader import PluginLoader
-    return PluginLoader()
+    from plugins.loader import plugin_loader
+    return plugin_loader
 
 
 def _generator():
@@ -138,7 +138,7 @@ async def reload_all_plugins() -> Dict[str, Any]:
 async def generate_plugin(
     spec: Dict[str, Any] = Body(
         ...,
-        example={
+        examples={
             "name":        "weather_lookup",
             "description": "Fetches real-time weather for a given city",
             "capabilities": ["web", "api"],
