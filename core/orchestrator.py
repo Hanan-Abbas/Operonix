@@ -155,7 +155,11 @@ class Orchestrator:
 
         if self._panel_controller is not None:
             try:
-                self._panel_controller.stop()
+                # panel_controller.stop() may call loop.run_until_complete()
+                # internally; running it from a thread avoids the
+                # "loop already running" RuntimeError.
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._panel_controller.stop)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Orchestrator: panel stop error — %s", exc)
 
@@ -176,7 +180,7 @@ class Orchestrator:
         )
         self._panel_thread.start()
         # Give the panel up to 5 s to initialise before the rest of start() continues.
-        ready = self._panel_ready.wait(timeout=float(getattr(settings, "PANEL_START_TIMEOUT", 5.0)))
+        ready = self._panel_ready.wait(timeout=float(getattr(settings, "PANEL_START_TIMEOUT", 10.0)))
         if not ready:
             logger.warning("Orchestrator: panel did not signal ready within timeout.")
 
