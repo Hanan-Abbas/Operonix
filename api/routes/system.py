@@ -332,7 +332,7 @@ async def trigger_learning(
 async def inject_goal(
     goal: Dict[str, Any] = Body(
         ...,
-        example={"goal": "Improve web search success rate by 20%", "priority": "high"},
+        examples=[{"goal": "Improve web search success rate by 20%", "priority": "high"}],
     )
 ) -> Dict[str, Any]:
     """
