@@ -553,6 +553,19 @@ if _HAS_QT:
                 intent_part = current[current.index("  ·  "):]
             self._app_badge.setText(f"App: {app_name or '—'}{intent_part}")
 
+        def set_resolved_intent(self, intent: str) -> None:
+            """
+            Update the Intent portion of the App badge with the fully resolved
+            intent string returned by action_completed.  This fills in the
+            badge even when the suggestion engine showed None at typing time
+            (e.g. because the LLM hadn't resolved the intent yet).
+            Called directly by panel_controller._on_action_completed.
+            """
+            current = self._app_badge.text()
+            # Strip any existing intent suffix then re-append the resolved one.
+            app_part = current.split("  ·  ")[0] if "  ·  " in current else current
+            self._app_badge.setText(f"{app_part}  ·  Intent: {intent}")
+
         def set_theme_selection(self, theme_key: str) -> None:
             """Programmatically select a theme in the combo box."""
             for i in range(self._theme_combo.count()):
