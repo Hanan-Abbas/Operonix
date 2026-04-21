@@ -539,6 +539,20 @@ if _HAS_QT:
             """Register the async suggestion trigger (wired by panel_controller)."""
             self._suggest_callback = cb
 
+        def set_app_context(self, app_name: str) -> None:
+            """
+            Update the App badge immediately when the focused window changes.
+            Preserves any intent text that is already displayed so the badge
+            never regresses to a stale value between suggestion refreshes.
+            Called directly by panel_controller._on_app_context_changed.
+            """
+            current = self._app_badge.text()
+            # Keep the intent portion (everything from " · " onward) if present.
+            intent_part = ""
+            if "  ·  " in current:
+                intent_part = current[current.index("  ·  "):]
+            self._app_badge.setText(f"App: {app_name or '—'}{intent_part}")
+
         def set_theme_selection(self, theme_key: str) -> None:
             """Programmatically select a theme in the combo box."""
             for i in range(self._theme_combo.count()):
