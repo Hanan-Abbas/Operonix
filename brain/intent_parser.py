@@ -194,12 +194,18 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
 
     async def _resolve_intent(self, raw_intent: str) -> str | None:
         """
-        1) Exact capability registry hit
-        2) Semantic nearest intent from vector store
+        Resolution tiers (first hit wins):
+          1. Exact match in capability registry
+          2. Semantic nearest-neighbour from vector store
+          3. Local token/sequence matcher (match_intent_local) — used when the
+             vector store is unavailable or returns nothing above threshold.
+             This ensures the panel always shows a resolved intent even if the
+             LLM or vector DB is unreachable.
         """
         if not raw_intent:
             return None
 
+        # Tier 1 — exact registry hit
         try:
             from capabilities.registry import capability_registry
             if capability_registry.get(raw_intent) is not None:
@@ -207,6 +213,15 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
         except Exception:
             pass
 
+        # Collect all known intents for tiers 2 & 3
+        known_intents: list[str] = []
+        try:
+            from capabilities.registry import capability_registry
+            known_intents = capability_registry.get_all_names() or []
+        except Exception:
+            pass
+
+        # Tier 2 — vector store semantic search
         try:
             closest_intent, confidence = await vector_store.search_closest_intent(raw_intent)
             threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.35))
@@ -218,6 +233,18 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
                 return closest_intent
         except Exception as exc:  # noqa: BLE001
             self.logger.debug("_resolve_intent: vector search failed — %s", exc)
+
+        # Tier 3 — local token/sequence matcher (no external dependencies)
+        if known_intents:
+            from brain.intent_matcher import match_intent_local
+            local_threshold = float(getattr(settings, "INTENT_LOCAL_MATCH_THRESHOLD", 0.30))
+            matched, score = match_intent_local(raw_intent, known_intents, threshold=local_threshold)
+            if matched:
+                self.logger.info(
+                    "🔎 Local-matched '%s' → '%s' (score=%.2f)",
+                    raw_intent, matched, score,
+                )
+                return matched
 
         return None
 
