@@ -231,6 +231,11 @@ class PanelController:
             payload = {}
         app = payload.get("app_name", "unknown")
         self._engine.set_app_context(app)
+        # Immediately reflect the new active window in the panel badge.
+        # Previously this was never called here, so the badge only updated
+        # when update_suggestions() ran (i.e. when the user typed something).
+        if self._renderer:
+            self._renderer.set_app_context(app)
         log.debug("panel_controller: app context → %s", app)
 
     def _on_config_changed(self, event: Any) -> None:
