@@ -100,10 +100,26 @@ class PanelController:
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         """Initialise all subsystems. Call from the main Qt thread."""
+        import threading
         self._loop = loop or asyncio.new_event_loop()
 
-        # Open history DB
-        self._loop.run_until_complete(self._history.open())
+        # The asyncio loop must be RUNNING (via run_forever) so that
+        # asyncio.run_coroutine_threadsafe can submit coroutines from Qt
+        # signal handlers.  We spin it in a daemon thread so it doesn't
+        # block Qt's exec().  If the caller already passed in a running loop
+        # (e.g. the orchestrator's panel thread), we skip this step.
+        self._loop_thread: threading.Thread | None = None
+        if not self._loop.is_running():
+            self._loop_thread = threading.Thread(
+                target=self._loop.run_forever,
+                name="panel-asyncio",
+                daemon=True,
+            )
+            self._loop_thread.start()
+
+        # Open history DB — submit as a coroutine to the now-running loop.
+        future = asyncio.run_coroutine_threadsafe(self._history.open(), self._loop)
+        future.result(timeout=10.0)  # block until open() completes
 
         # Build UI
         tokens = self._config.theme_tokens
@@ -148,17 +164,18 @@ class PanelController:
         """Persist state and tear down."""
         self._hotkey.stop()
         self._state.save()
-        # history.close() is a coroutine — run it on our dedicated loop.
-        # Guard against the case where the loop is already closed or running.
         try:
             if not self._loop.is_closed():
-                if self._loop.is_running():
-                    # Schedule it as a future; don't block — we're shutting down.
-                    asyncio.run_coroutine_threadsafe(self._history.close(), self._loop)
-                else:
-                    self._loop.run_until_complete(self._history.close())
+                future = asyncio.run_coroutine_threadsafe(self._history.close(), self._loop)
+                try:
+                    future.result(timeout=5.0)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("panel_controller: history close error — %s", exc)
+                # Stop the loop only if we started it ourselves.
+                if getattr(self, "_loop_thread", None) is not None:
+                    self._loop.call_soon_threadsafe(self._loop.stop)
         except Exception as exc:  # noqa: BLE001
-            log.warning("panel_controller: history close error — %s", exc)
+            log.warning("panel_controller: stop error — %s", exc)
         if self._window:
             try:
                 self._window.hide()
@@ -204,16 +221,16 @@ class PanelController:
 
         # Update history row.
         if self._pending_row_id is not None:
-            if not self._loop.is_running():
-                self._loop.run_until_complete(
-                    self._history.update_outcome(
-                        self._pending_row_id,
-                        success=success,
-                        duration_ms=duration,
-                        intent_resolved=intent,
-                        method_used=method,
-                    )
-                )
+            asyncio.run_coroutine_threadsafe(
+                self._history.update_outcome(
+                    self._pending_row_id,
+                    success=success,
+                    duration_ms=duration,
+                    intent_resolved=intent,
+                    method_used=method,
+                ),
+                self._loop,
+            )
             self._pending_row_id = None
 
         # Update UI.
@@ -222,6 +239,11 @@ class PanelController:
             level = "success" if success else "error"
             msg = f"Done ({method}, {duration} ms)" if success else "Failed"
             self._renderer.set_status(msg, level)
+        # Update the badge intent label now that the real resolved intent is known.
+        # This covers the case where the suggestion engine showed None because the
+        # LLM hadn't resolved the intent yet at suggestion time.
+        if self._renderer and intent:
+            self._renderer.set_resolved_intent(intent)
 
         log.debug("panel_controller: action_completed success=%s method=%s", success, method)
 
@@ -260,14 +282,19 @@ class PanelController:
 
         # Persist to history (row updated when action_completed fires).
         self._pending_start_ms = time.monotonic() * 1000
-        if not self._loop.is_running():
-            self._pending_row_id = self._loop.run_until_complete(
-                self._history.record(
-                    query_text=query,
-                    app_context=self._engine._current_app,
-                    limit=self._state.history_limit,
-                )
-            )
+        future = asyncio.run_coroutine_threadsafe(
+            self._history.record(
+                query_text=query,
+                app_context=self._engine._current_app,
+                limit=self._state.history_limit,
+            ),
+            self._loop,
+        )
+        try:
+            self._pending_row_id = future.result(timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("panel_controller: history.record failed — %s", exc)
+            self._pending_row_id = None
 
         # Publish to the Orchestrator (same event as voice pipeline).
         try:
@@ -309,11 +336,19 @@ class PanelController:
     # ------------------------------------------------------------------
 
     def _schedule_suggest(self, text: str) -> None:
-        """Called by the renderer's debounce timer; schedules async suggest."""
-        if self._loop.is_running():
-            asyncio.ensure_future(self._async_suggest(text), loop=self._loop)
-        else:
-            self._loop.run_until_complete(self._async_suggest(text))
+        """
+        Called by the renderer's debounce timer (Qt thread) to schedule the
+        async suggest pipeline.
+
+        The panel runs Qt's exec() on the dedicated panel thread while the
+        asyncio event loop lives on that same thread but is driven manually.
+        ensure_future() must NOT be used here — the loop is not in a running
+        state from Qt's perspective, so the coroutine is silently dropped.
+        asyncio.run_coroutine_threadsafe is the correct primitive: it enqueues
+        the coroutine onto the loop's internal queue regardless of whether it
+        is currently spinning.
+        """
+        asyncio.run_coroutine_threadsafe(self._async_suggest(text), self._loop)
 
     async def _async_suggest(self, text: str) -> None:
         try:
