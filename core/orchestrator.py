@@ -95,7 +95,8 @@ class Orchestrator:
     def __init__(self) -> None:
         self.active_tasks: dict[str, dict[str, Any]] = {}
         self.is_running: bool = False
-
+        self._voice_active = True
+        
         # ── Single AudioManager ───────────────────────────────────────────────
         self.audio_manager = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
