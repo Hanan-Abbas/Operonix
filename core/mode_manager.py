@@ -22,13 +22,19 @@ Design rules:
   • Thread-safe: asyncio.Lock guards the switch sequence so two rapid
     API calls cannot interleave teardown/startup steps.
 
-Integration points (read these before changing anything):
-  • orchestrator._voice_active  (bool)  — set here; checked in _background_wake_loop
-  • orchestrator.audio_manager          — start()/stop() called here
-  • orchestrator._panel_controller      — checked for None; stop() called here
-  • bus event "action_completed"        — signals that the full cycle is done
-  • bus event "input_mode_changed"      — published after every successful switch
-  • .env key CURRENT_MODE               — persisted after every switch
+FIX CHANGELOG (Step 1):
+  • _startup_panel() now delegates entirely to orchestrator._start_panel()
+    which already contains a re-entry guard (checks if the panel thread is
+    alive before spawning a new one). This means switching panel → panel
+    or calling _startup_panel() while the thread is running is a safe no-op.
+  • _teardown_panel() now calls orchestrator._stop_panel() (the new unified
+    stop helper) instead of calling panel_ctrl.stop() directly via an
+    executor. _stop_panel() handles both controller teardown and Qt thread
+    joining in the correct order.
+  • _apply_mode() at boot is unchanged — it calls _startup(mode) which
+    calls _startup_panel() → _start_panel(). Because orchestrator.start()
+    no longer calls _start_panel() itself, this is now the single boot-time
+    panel creation path. No double panel.
 """
 from __future__ import annotations
 
@@ -176,10 +182,6 @@ class ModeManager:
         """
         Wait until the orchestrator has no active tasks, or until
         _TASK_DRAIN_TIMEOUT seconds elapse, whichever comes first.
-
-        The orchestrator exposes self.active_tasks (a dict keyed by task_id).
-        When it is empty the cycle is fully done — we can switch safely.
-        We also listen for action_completed as a faster wake-up signal.
         """
         orch = self._orchestrator
         if orch is None:
@@ -242,11 +244,6 @@ class ModeManager:
         Stop the voice subsystem in the correct order:
           1. Signal the wake-loop gate so detect() returns on the next tick.
           2. Stop the AudioManager (releases the mic hardware lock).
-
-        The VoicePipeline (capture_command) is a blocking call run in an
-        executor by the orchestrator. Stopping the AudioManager causes
-        read_chunk() to return None, which makes capture_command() exit
-        its loop naturally — no forced cancel needed.
         """
         orch = self._orchestrator
         if orch is None:
@@ -254,7 +251,7 @@ class ModeManager:
 
         logger.info("ModeManager: tearing down VOICE subsystem …")
 
-        # 1. Gate the wake-word loop (checked in orchestrator._background_wake_loop)
+        # 1. Gate the wake-word loop
         orch._voice_active = False  # type: ignore[attr-defined]
 
         # 2. Stop the mic stream
@@ -268,23 +265,33 @@ class ModeManager:
 
     async def _teardown_panel(self) -> None:
         """
-        Stop the panel subsystem:
-          1. Call panel_controller.stop() in the executor (it uses its own loop).
+        Stop the panel subsystem via orchestrator._stop_panel().
+
+        FIX: Previously called panel_ctrl.stop() directly via run_in_executor,
+        which then called self._window.hide() from the executor thread — a
+        cross-thread Qt widget call that caused the segfault.
+
+        orchestrator._stop_panel() is the correct unified stop path:
+          1. Calls panel_controller.stop() which posts QApplication.quit()
+             onto the Qt thread (safe) and stops the asyncio loop.
+          2. Joins the Qt thread with a timeout.
+        All of this is thread-safe.
         """
         orch = self._orchestrator
         if orch is None:
             return
 
-        panel_ctrl = getattr(orch, "_panel_controller", None)
-        if panel_ctrl is None:
-            logger.info("ModeManager: no panel controller running — skipping teardown.")
+        # Check if the panel is actually running before trying to stop it.
+        panel_thread = getattr(orch, "_panel_thread", None)
+        if panel_thread is None or not panel_thread.is_alive():
+            logger.info("ModeManager: no panel thread running — skipping teardown.")
             return
 
         logger.info("ModeManager: tearing down PANEL subsystem …")
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, panel_ctrl.stop)
-            logger.info("ModeManager: PanelController stopped.")
+            await loop.run_in_executor(None, orch._stop_panel)
+            logger.info("ModeManager: panel stopped.")
         except Exception as exc:
             logger.warning("ModeManager: panel stop error — %s", exc)
 
@@ -328,11 +335,17 @@ class ModeManager:
 
     async def _startup_panel(self) -> None:
         """
-        Start the panel subsystem.
+        Start the panel subsystem via orchestrator._start_panel().
 
-        If the panel thread is already alive (Qt is still running but the
-        controller was stopped), we call _start_panel() on the orchestrator
-        to re-initialise it. If the thread has never been created, same call.
+        FIX: orchestrator._start_panel() now contains a re-entry guard that
+        returns immediately if the panel thread is already alive. This means:
+          • At boot: _apply_mode(PANEL) → _startup_panel() → _start_panel()
+            creates the panel thread. orchestrator.start() no longer calls
+            _start_panel(), so there is only ever one call at boot.
+          • On a panel → voice → panel round-trip: _teardown_panel() joined
+            and cleared the thread, so _start_panel() creates a fresh one.
+          • On a spurious double call: the guard in _start_panel() makes the
+            second call a silent no-op — no second window is created.
         """
         orch = self._orchestrator
         if orch is None:
@@ -369,8 +382,6 @@ class ModeManager:
         • If the key already exists it is updated in-place (line replaced).
         • If the key is absent it is appended.
         • If the file does not exist it is created.
-
-        Uses a simple regex replacement — no external library required.
         """
         key = "CURRENT_MODE"
         new_line = f"{key}={mode.value}\n"
