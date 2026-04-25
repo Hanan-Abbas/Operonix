@@ -11,6 +11,14 @@ here is:
   • A `window_detector` is started so `app_context_changed` events fire.
   • The shutdown sequence calls `orchestrator.stop()` which in turn calls
     `panel_controller.stop()` — no separate panel teardown needed here.
+
+Mode Manager integration
+────────────────────────
+  • After orchestrator.start(), mode_manager.initialise(orchestrator) is
+    called. This wires the EventBus listener that watches action_completed
+    and applies the boot mode (read from CURRENT_MODE in .env).
+  • On shutdown, mode_manager does not need an explicit stop — the
+    orchestrator.stop() call already tears down both subsystems.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
 from core.logger import sys_logger
+from core.mode_manager import mode_manager          # ← NEW
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
@@ -136,16 +145,23 @@ class LifecycleManager:
         await orchestrator.start()
         system_state.orchestrator_running = True
 
-        # 10. Plugin system
+        # 10. Mode manager — must run AFTER orchestrator.start() so the orchestrator
+        #     instance is fully initialised before mode_manager references it.
+        #     initialise() wires the action_completed listener and applies the boot
+        #     mode (CURRENT_MODE from .env, defaulting to "panel").
+        mode_manager.initialise(orchestrator)       # ← NEW
+        logger.info("🔀 ModeManager: initialised (boot mode=%s).", mode_manager.current_mode.name)
+
+        # 11. Plugin system
         await start_plugin_system()
 
-        # 10. STT health reference
+        # 12. STT health reference
         stt_instance = SpeechToText()
         system_state.stt_model = stt_instance
         system_state.llm_client = llm_client
         system_state.audio_manager = orchestrator.audio_manager
 
-        # 11. Learning system
+        # 13. Learning system
         try:
             await learner.start()
             logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
@@ -233,6 +249,7 @@ class LifecycleManager:
             logger.error("Failed to prune pattern store: %s", exc)
 
         # Orchestrator stop → shuts down panel Qt thread and audio manager.
+        # mode_manager does not need a separate stop — orchestrator.stop() covers it.
         try:
             await orchestrator.stop()
         except Exception as exc:
