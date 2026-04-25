@@ -15,14 +15,7 @@ Panel integration:
   • preferred_method from the panel payload is forwarded to the executor
     so user strategy overrides are honoured end-to-end.
 
-Changes vs previous version:
-  • Panel boot sequence added (_start_panel, _panel_thread_target)
-  • text_query_received subscription + _handle_panel_input normaliser
-  • handle_new_task now accepts an optional preferred_method field
-  • finalize_task / handle_failure now emit action_completed for the panel
-  • _emit_app_context_loop publishes app_context_changed periodically
-  • No double-routing bug (unchanged from prior fix)
-  • Graceful shutdown calls panel_controller.stop()
+
 """
 from __future__ import annotations
 
@@ -96,7 +89,7 @@ class Orchestrator:
         self.active_tasks: dict[str, dict[str, Any]] = {}
         self.is_running: bool = False
         self._voice_active = True
-        
+
         # ── Single AudioManager ───────────────────────────────────────────────
         self.audio_manager = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
@@ -145,10 +138,11 @@ class Orchestrator:
             "enabled" if _panel_enabled() else "disabled",
         )
 
-        # Start the panel in its own OS thread (Qt requires its own thread
-        # if the main thread is the asyncio event loop).
-        if _panel_enabled():
-            self._start_panel()
+        # NOTE: _start_panel() is intentionally NOT called here.
+        # mode_manager._apply_mode() will call _startup_panel() →
+        # _start_panel() once immediately after orchestrator.start()
+        # returns in lifecycle_manager.startup(). Calling it here too
+        # was the source of the double-panel bug.
 
     async def stop(self) -> None:
         self.is_running = False
@@ -156,11 +150,8 @@ class Orchestrator:
 
         if self._panel_controller is not None:
             try:
-                # panel_controller.stop() may call loop.run_until_complete()
-                # internally; running it from a thread avoids the
-                # "loop already running" RuntimeError.
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._panel_controller.stop)
+                await loop.run_in_executor(None, self._stop_panel)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Orchestrator: panel stop error — %s", exc)
 
@@ -171,48 +162,110 @@ class Orchestrator:
     def _start_panel(self) -> None:
         """
         Spin up the Qt event loop in a daemon thread.
-        Qt widgets must live in a single thread; we isolate that thread here
-        so it never blocks the asyncio event loop.
+
+        GUARD: if the panel thread is already alive this method returns
+        immediately. This prevents a second PanelWindow from being created
+        when mode_manager calls _start_panel() while the thread from the
+        initial boot is still running.
         """
+        # ── Re-entry guard ───────────────────────────────────────────────────
+        if self._panel_thread is not None and self._panel_thread.is_alive():
+            logger.info(
+                "Orchestrator: _start_panel() called but panel thread is already alive — skipping."
+            )
+            return
+
+        # Reset the ready event for this (re-)start.
+        self._panel_ready.clear()
+
         self._panel_thread = threading.Thread(
             target=self._panel_thread_target,
             name="operonix-panel",
             daemon=True,
         )
         self._panel_thread.start()
-        # Give the panel up to 5 s to initialise before the rest of start() continues.
-        ready = self._panel_ready.wait(timeout=float(getattr(settings, "PANEL_START_TIMEOUT", 10.0)))
+
+        # Give the panel up to PANEL_START_TIMEOUT seconds to initialise.
+        ready = self._panel_ready.wait(
+            timeout=float(getattr(settings, "PANEL_START_TIMEOUT", 10.0))
+        )
         if not ready:
             logger.warning("Orchestrator: panel did not signal ready within timeout.")
+
+    def _stop_panel(self) -> None:
+        """
+        Stop the panel controller and wait for the Qt thread to exit.
+
+        Called from:
+          • orchestrator.stop() (via run_in_executor)
+          • mode_manager._teardown_panel() (via run_in_executor)
+
+        Delegates asyncio-loop teardown to panel_controller.stop() which
+        calls loop.call_soon_threadsafe(loop.stop) on the loop it owns.
+        We then join the Qt thread with a short timeout.
+        """
+        if self._panel_controller is not None:
+            try:
+                self._panel_controller.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Orchestrator: panel_controller.stop() error — %s", exc)
+            self._panel_controller = None
+
+        if self._panel_thread is not None and self._panel_thread.is_alive():
+            self._panel_thread.join(timeout=5.0)
+            if self._panel_thread.is_alive():
+                logger.warning("Orchestrator: panel thread did not exit within 5 s.")
+            self._panel_thread = None
+
+        logger.info("Orchestrator: panel stopped.")
 
     def _panel_thread_target(self) -> None:
         """
         Runs in the panel daemon thread.
-        Creates a dedicated event loop, initializes QApplication, and runs the Qt loop.
+
+        Creates QApplication and runs qt_app.exec() on this thread.
+        The asyncio loop is NOT created or owned here — panel_controller
+        creates its own "panel-asyncio" daemon thread for that.
+
+        FIX: The previous version created an asyncio loop here, passed it
+        to panel_controller.start(), and then called loop.close() in the
+        finally block. panel_controller.start() was already spinning that
+        loop via run_forever() in a separate thread, so loop.close() raced
+        with run_forever() and raised RuntimeError: Cannot close a running
+        event loop.
+
+        The fix is simply to let panel_controller manage its own loop
+        entirely (pass loop=None) and remove the loop.close() call.
         """
         try:
             from PyQt6.QtWidgets import QApplication
             import sys
-            import asyncio
 
-            # 1. FIX: Create and set a NEW event loop for this specific thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Ensure the ~/.operonix directory exists before any Qt or
+            # panel code tries to write panel_state.json.  This is the
+            # earliest safe point — before PanelController.__init__ or
+            # PanelConfig touch the filesystem.
+            from pathlib import Path
+            state_dir = Path.home() / ".operonix"
+            state_dir.mkdir(parents=True, exist_ok=True)
 
-            # 2. Initialize Qt Application
+            # Create QApplication on this thread (Qt requires that the
+            # QApplication and all widgets live on the same thread).
             qt_app = QApplication.instance() or QApplication(sys.argv)
 
-            # 3. Build the controller
+            # Build the controller and let it manage its own asyncio loop.
+            # Passing loop=None causes panel_controller.start() to create
+            # a new event loop and run it in its own "panel-asyncio" thread.
             self._panel_controller = _build_panel_controller()
-
-            # 4. Pass the loop we just created to the controller
-            # This allows the GUI to communicate with the rest of Operonix
-            self._panel_controller.start(loop=loop)
+            self._panel_controller.start(loop=None)
 
             self._panel_ready.set()
-            logger.info("Orchestrator: panel thread ready with dedicated event loop.")
+            logger.info("Orchestrator: panel thread ready.")
 
-            # 5. Execute the Qt Event Loop
+            # Block this thread on Qt's event loop.
+            # When the user closes the panel or stop() is called,
+            # panel_controller.stop() calls qt_app.quit() (via the window)
+            # which causes exec() to return.
             qt_app.exec()
 
         except ImportError as exc:
@@ -223,10 +276,9 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.error("Orchestrator: panel thread crashed — %s", exc, exc_info=True)
             self._panel_ready.set()
-        finally:
-            # Clean up the loop when the window is closed
-            if 'loop' in locals():
-                loop.close()
+        # NOTE: No finally: loop.close() here. The asyncio loop is owned
+        # by panel_controller's "panel-asyncio" thread. panel_controller.stop()
+        # is responsible for stopping it cleanly via loop.call_soon_threadsafe.
 
     # ── Background loops ──────────────────────────────────────────────────────
 
@@ -242,9 +294,12 @@ class Orchestrator:
         Periodically publish app_context_changed so the panel badge and
         suggestion engine stay in sync with the user's active window.
 
-        The context/app_profiler.py is expected to subscribe to this event
-        (or this loop can be replaced by a focus_tracker callback — see
-        context/focus_tracker.py).
+        FIX: renderer.set_app_context() is a Qt widget call. Calling it
+        directly from this asyncio coroutine (which runs on the asyncio
+        thread, not the Qt thread) was the root cause of the segfault on
+        mode switch. The EventBus handler in panel_controller now uses
+        QMetaObject.invokeMethod to post the call onto the Qt thread.
+        This loop itself only publishes the event — no Qt calls here.
         """
         interval = float(getattr(settings, "APP_CONTEXT_POLL_INTERVAL", 2.0))
         last_app: str = ""
