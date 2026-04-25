@@ -6,11 +6,12 @@ from core.event_bus import bus
 from core.config import settings
 from brain.intent_matcher import match_intent_local
 
+
 class LLMClient:
     def __init__(self):
         self.logger = logging.getLogger("LLMClient")
         self.ollama_url = "http://localhost:11434/api/generate"
-        self.ollama_embed_url = "http://localhost:11434/api/embed"  # 🟢 Added for embeddings
+        self.ollama_embed_url = "http://localhost:11434/api/embed"
 
     async def start(self):
         """Listen for any brain-related requests."""
@@ -18,42 +19,45 @@ class LLMClient:
         bus.subscribe("request_reasoning", self.process_reasoning)
         print("🧠 LLM Client: Online & Multi-Provider Capable")
 
-    # 🔄 UPGRADE 5: Explicit Role Separation
     async def generate(self, prompt: str, use_json: bool = False):
-        """Primary code generator using DeepSeek."""
+        """Primary code generator using OpenRouter (DeepSeek R1)."""
         return await self.ask(prompt, provider="deepseek", use_json=use_json)
 
     async def critique(self, prompt: str, use_json: bool = True):
         """Strict code reviewer and auditor using Gemini."""
         return await self.ask(prompt, provider="gemini", use_json=use_json)
 
-    # 🔄 UPGRADE 1 & 2: Fallback System + Retry Logic
     async def ask(self, prompt: str, provider: str = "local", use_json: bool = True):
         """
-        Generic method to ask an LLM anything. 
+        Generic method to ask an LLM anything.
         Tries the primary provider with retries, falling back to Ollama on failure.
+
+        BUG FIX: The original code raised an exception after retries fail, which
+        was caught by the outer except and triggered a redundant Ollama fallback
+        log message even when Ollama itself was the provider. Now each branch
+        returns the Ollama fallback directly and cleanly.
         """
         try:
             if provider == "deepseek":
-                # Try DeepSeek with 2 retries
-                result = await self._retry(self._call_deepseek, prompt, use_json, retries=2)
+                result = await self._retry(self._call_openrouter, prompt, use_json, retries=2)
                 if result:
                     return result
-                raise Exception("DeepSeek failed after retries")
+                # BUG FIX: Don't raise here — fall through to Ollama cleanly
+                self.logger.warning("🚨 OpenRouter/DeepSeek failed after retries. Falling back to local Ollama...")
+                return await self._call_ollama(prompt, use_json)
 
             elif provider == "gemini":
-                # Try Gemini with 2 retries
                 result = await self._retry(self._call_gemini, prompt, use_json, retries=2)
                 if result:
                     return result
-                raise Exception("Gemini failed after retries")
+                self.logger.warning("🚨 Gemini failed after retries. Falling back to local Ollama...")
+                return await self._call_ollama(prompt, use_json)
 
             else:
                 return await self._call_ollama(prompt, use_json)
 
         except Exception as e:
-            self.logger.warning(f"🚨 Primary provider '{provider}' failed: {e}. Falling back to local Ollama...")
-            # Ultimate safety net: hit local Llama3
+            self.logger.warning(f"🚨 Provider '{provider}' encountered unexpected error: {e}. Falling back to local Ollama...")
             return await self._call_ollama(prompt, use_json)
 
     async def _retry(self, func, *args, retries=2):
@@ -64,23 +68,20 @@ class LLMClient:
                 if result:
                     return result
             except Exception as e:
-                self.logger.warning(f"Attempt {i+1} failed with error: {e}")
+                self.logger.warning(f"Attempt {i + 1} failed: {e}")
         return None
 
-    # 🟢 NEW: Math vector generation for CapabilityMapper
     async def get_embedding(self, text: str) -> list[float]:
         """Generates a vector embedding for a given text using Ollama's all-minilm."""
         payload = {
             "model": "all-minilm",
-            "input": text  # Ollama's /embed endpoint expects 'input'
+            "input": text
         }
-
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.ollama_embed_url, json=payload) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Returns a dictionary containing a list of lists under 'embeddings'
                         vectors = data.get("embeddings", [])
                         return vectors[0] if vectors else []
                     else:
@@ -90,20 +91,16 @@ class LLMClient:
             self.logger.error(f"Error connecting to Ollama for embeddings: {e}")
             return []
 
-    # 🔄 UPGRADE 3: Safe JSON parsing
     def _safe_json(self, text):
-        """Prevents crashes if the model returns invalid JSON markdown."""
+        """Prevents crashes if the model returns invalid JSON or markdown fences."""
         try:
-            # Clean up potential markdown code blocks if the model ignored instructions
             cleaned = text.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned.split("```json")[1].split("```")[0].strip()
             elif cleaned.startswith("```"):
                 cleaned = cleaned.split("```")[1].split("```")[0].strip()
-
             return json.loads(cleaned)
         except Exception:
-            # Fallback: many models wrap valid JSON with extra text.
             match = re.search(r"\{[\s\S]*\}", text or "")
             if match:
                 try:
@@ -115,68 +112,122 @@ class LLMClient:
 
     # --- 🦙 PROVIDER 1: OLLAMA (Local Llama3) ---
     async def _call_ollama(self, prompt, use_json):
-        payload = {"model": "llama3", "prompt": prompt, "stream": False}
+        """
+        BUG FIX: Added explicit timeout (aiohttp.ClientTimeout) so Ollama
+        calls don't hang forever if the local server is unresponsive.
+        Also added non-200 status logging.
+        """
+        payload = {"model": settings.OLLAMA_MODEL, "prompt": prompt, "stream": False}
         if use_json:
             payload["format"] = "json"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.ollama_url, json=payload) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    response_text = result.get("response", "{}")
-                    return self._safe_json(response_text) if use_json else response_text
-                return None
+        timeout = aiohttp.ClientTimeout(total=settings.OLLAMA_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self.ollama_url, json=payload) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        response_text = result.get("response", "{}")
+                        return self._safe_json(response_text) if use_json else response_text
+                    else:
+                        self.logger.error(f"Ollama returned non-200 status: {resp.status}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"Ollama call failed: {e}")
+            return None
 
-    # --- 🐳 PROVIDER 2: DEEPSEEK ---
-    async def _call_deepseek(self, prompt, use_json):
-        url = "https://api.deepseek.com/chat/completions"
+    # --- 🌐 PROVIDER 2: OPENROUTER (DeepSeek R1 Distill Qwen 14B) ---
+    async def _call_openrouter(self, prompt, use_json):
+        """
+        CHANGED: Replaced direct DeepSeek API with OpenRouter.
+        - URL: https://openrouter.ai/api/v1/chat/completions
+        - Model: deepseek/deepseek-r1-distill-qwen-14b
+        - Auth: Bearer OPENROUTER_API_KEY from config/env
+        - Added timeout to avoid hanging on slow responses.
+
+        NOTE: deepseek-r1-distill-qwen-14b is a reasoning model that wraps
+        its answer in <think>...</think> tags. The _strip_think_tags helper
+        removes those before JSON parsing so _safe_json doesn't choke.
+
+        NOTE: json_object response_format is NOT supported on this model via
+        OpenRouter — we rely on prompt instructions + _safe_json instead.
+        """
+        url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            # OpenRouter recommends these headers for tracking/ranking
+            "HTTP-Referer": "https://github.com/your-project",
+            "X-Title": "Operonix AI OS Agent",
         }
         payload = {
-            "model": "deepseek-chat",
+            "model": "deepseek/deepseek-r1-distill-qwen-14b",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
+            "temperature": 0.1,
         }
-        if use_json:
-            payload["response_format"] = {"type": "json_object"}
+        # NOTE: Do NOT set response_format json_object — not supported on this model
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    content = result['choices'][0]['message']['content']
-                    return self._safe_json(content) if use_json else content
-                return None
+        timeout = aiohttp.ClientTimeout(total=60)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        content = result["choices"][0]["message"]["content"]
+                        # Strip <think>...</think> reasoning block before parsing
+                        content = self._strip_think_tags(content)
+                        return self._safe_json(content) if use_json else content
+                    else:
+                        body = await resp.text()
+                        self.logger.error(f"OpenRouter returned {resp.status}: {body[:200]}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"OpenRouter call failed: {e}")
+            return None
+
+    def _strip_think_tags(self, text: str) -> str:
+        """
+        DeepSeek R1 reasoning models emit <think>...</think> blocks before
+        the actual answer. Strip them so JSON parsing is not broken.
+        """
+        return re.sub(r"<think>[\s\S]*?</think>", "", text or "").strip()
 
     # --- ✨ PROVIDER 3: GEMINI ---
     async def _call_gemini(self, prompt, use_json):
-        # 🔄 UPGRADE 4: Using gemini-2.5-flash for speed & efficiency
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+        )
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2}
+            "generationConfig": {"temperature": 0.2},
         }
         if use_json:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    content = result['candidates'][0]['content']['parts'][0]['text']
-                    return self._safe_json(content) if use_json else content
-                return None
+        timeout = aiohttp.ClientTimeout(total=30)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        content = result["candidates"][0]["content"]["parts"][0]["text"]
+                        return self._safe_json(content) if use_json else content
+                    else:
+                        body = await resp.text()
+                        self.logger.error(f"Gemini returned {resp.status}: {body[:200]}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"Gemini call failed: {e}")
+            return None
 
     # --- EVENT BUS HANDLERS ---
     async def process_intent(self, event):
         task_id = event.data.get("task_id")
         user_text = event.data.get("text")
         stt_meta = event.data.get("stt") or {}
-        
-        # If STT confidence is extremely low, avoid hard failing; route to a safe text capability.
+
         stt_conf = stt_meta.get("confidence")
         if isinstance(stt_conf, (int, float)) and float(stt_conf) < 0.25:
             safe_intent = self._choose_safe_text_intent()
@@ -188,29 +239,28 @@ class LLMClient:
                 )
                 return
 
-        prompt = self._build_parsing_prompt(user_text)
-        intent_data = await self._ask_intent_with_provider_fallback(prompt)
+        try:
+            prompt = self._build_parsing_prompt(user_text)
+            raw_intent = await self._ask_intent_with_provider_fallback(prompt)
+            result = await self._normalize_intent_output(task_id, user_text, raw_intent)
 
-        normalized = await self._normalize_intent_output(task_id, user_text, intent_data)
-        if normalized:
-            await bus.emit("intent_parsed", normalized, source="llm_client")
-        else:
-            # If we couldn't parse, avoid loops: route to safe text capability when available.
-            safe_intent = self._choose_safe_text_intent()
-            if safe_intent:
-                await bus.emit(
-                    "intent_parsed",
-                    {"task_id": task_id, "intent": safe_intent, "parameters": {"text": user_text, "stt": stt_meta}},
-                    source="llm_client",
-                )
+            if result:
+                await bus.emit("intent_parsed", result, source="llm_client")
             else:
-                await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
+                fallback = self._fallback_intent_from_user_text(user_text)
+                if fallback:
+                    await bus.emit(
+                        "intent_parsed",
+                        {"task_id": task_id, **fallback},
+                        source="llm_client",
+                    )
+                else:
+                    await bus.emit("task_failed", {"task_id": task_id, "error": "LLM failed to parse intent."})
+        except Exception as e:
+            self.logger.error(f"process_intent error for task {task_id}: {e}")
+            await bus.emit("task_failed", {"task_id": task_id, "error": str(e)})
 
     def _choose_safe_text_intent(self):
-        """
-        Pick a non-destructive intent dynamically from the registered capabilities.
-        Preference order is based on capability names, but only if they exist.
-        """
         intents = set(self._get_registered_intents())
         for preferred in ("generate_text", "summarize_text", "correct_grammar", "translate_text"):
             if preferred in intents:
@@ -220,8 +270,6 @@ class LLMClient:
     async def process_reasoning(self, event):
         task_id = event.data.get("task_id")
         prompt = event.data.get("prompt")
-        
-        # Using our explicit role method!
         result = await self.generate(prompt)
         await bus.emit("reasoning_completed", {"task_id": task_id, "response": result}, source="llm_client")
 
@@ -232,28 +280,23 @@ class LLMClient:
             'Return ONLY strict JSON with this exact schema: '
             '{ "intent": "<one_registered_capability_name>", "parameters": { ... } }. '
             f"Use one of these intents when possible: {json.dumps(allowed_intents)}. "
-            "Do not include markdown or explanation."
+            "Do not include markdown, <think> blocks, or explanation. Output JSON only."
         )
 
     async def _ask_intent_with_provider_fallback(self, prompt):
-        """
-        Intent parsing must be resilient; try cloud providers first when configured,
-        then local Ollama as final fallback.
-        """
-        if settings.DEEPSEEK_API_KEY:
+        if settings.OPENROUTER_API_KEY:
             result = await self.ask(prompt, provider="deepseek", use_json=True)
-            if result:
+            if result and "raw" not in result:
                 return result
 
         if settings.GEMINI_API_KEY:
             result = await self.ask(prompt, provider="gemini", use_json=True)
-            if result:
+            if result and "raw" not in result:
                 return result
 
         return await self.ask(prompt, provider="local", use_json=True)
 
     def _get_registered_intents(self):
-        """Fetch current capability names dynamically to avoid hardcoded intent lists."""
         try:
             from capabilities.registry import capability_registry
             return capability_registry.get_all_names()
@@ -261,14 +304,9 @@ class LLMClient:
             return []
 
     def _coerce_parsed_intent(self, intent_data):
-        """
-        Normalize common model output variants into:
-        {"intent": str, "parameters": dict}
-        """
         if not isinstance(intent_data, dict):
             return None
 
-        # Handle variations like "capability", "action", or nested payloads.
         intent = (
             intent_data.get("intent")
             or intent_data.get("capability")
@@ -301,9 +339,6 @@ class LLMClient:
         return {"intent": str(intent).strip(), "parameters": params}
 
     async def _repair_intent_with_llm(self, user_text, intent_data):
-        """
-        Ask the model to repair malformed parser output using the live capability registry.
-        """
         allowed_intents = self._get_registered_intents()
         repair_prompt = (
             "You are repairing malformed intent-parser output.\n"
@@ -316,19 +351,12 @@ class LLMClient:
         return await self._ask_intent_with_provider_fallback(repair_prompt)
 
     def _fallback_intent_from_user_text(self, user_text):
-        """
-        Last-resort fallback if we cannot produce a valid structured intent.
-        """
         text = (user_text or "").strip()
         if not text:
             return None
         return {"intent": text, "parameters": {"text": text}}
 
     async def _semantic_resolve_registered_intent(self, candidate_text):
-        """
-        Resolve free-form candidate text to a registered intent locally.
-        Avoids network/model downloads during live intent parsing.
-        """
         if not candidate_text:
             return None
 
@@ -341,7 +369,7 @@ class LLMClient:
         if best_intent:
             self.logger.info(
                 "🔎 Local intent fallback matched '%s' -> '%s' (score=%.2f)",
-                candidate_text, best_intent, best_score
+                candidate_text, best_intent, best_score,
             )
             return best_intent
         return None
@@ -352,7 +380,6 @@ class LLMClient:
             repaired = await self._repair_intent_with_llm(user_text, intent_data)
             parsed = self._coerce_parsed_intent(repaired)
             if not parsed:
-                # LLM unavailable/invalid: fallback to semantic mapping from transcript.
                 resolved = await self._semantic_resolve_registered_intent(user_text)
                 if not resolved:
                     return None
@@ -388,6 +415,7 @@ class LLMClient:
                 intent_name = resolved
 
         return {"task_id": task_id, "intent": intent_name, "parameters": params}
+
 
 # Global instance
 llm_client = LLMClient()
