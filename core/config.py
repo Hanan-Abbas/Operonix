@@ -64,11 +64,7 @@ class Settings:
     DYNAMIC_SETTINGS_FILE: Path = BASE_DIR / "core" / "dynamic_settings.json"
 
     # --- API KEYS & EXTERNAL SERVICES ---
-    # CHANGED: Replaced DEEPSEEK_API_KEY with OPENROUTER_API_KEY.
-    # OpenRouter is now the gateway for DeepSeek (deepseek-r1-distill-qwen-14b).
-    # Set OPENROUTER_API_KEY in your .env file — get your key at openrouter.ai/keys
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
     # --- BRAIN & LLM SETTINGS ---
@@ -105,6 +101,17 @@ class Settings:
     APP_CONTEXT_POLL_INTERVAL: float = float(os.getenv("APP_CONTEXT_POLL_INTERVAL", "2.0"))
     INTENT_MATCH_MIN_CONFIDENCE: float = float(os.getenv("INTENT_MATCH_MIN_CONFIDENCE", "0.35"))
     PRUNE_TIMEOUT: float = float(os.getenv("PRUNE_TIMEOUT", "2.0"))
+
+    # ── Input Mode ────────────────────────────────────────────────────────────
+    # Persisted between restarts via .env key CURRENT_MODE.
+    # Valid values: "voice" | "panel" | "none"
+    # Default is "panel" — ModeManager reads this at boot and applies it.
+    # Never read this directly at runtime; use mode_manager.current_mode instead.
+    CURRENT_MODE: str = os.getenv("CURRENT_MODE", "panel")
+
+    # How long (seconds) a mode switch waits for an active task to finish
+    # before switching anyway. Configurable without restarting.
+    MODE_SWITCH_DRAIN_TIMEOUT: float = float(os.getenv("MODE_SWITCH_DRAIN_TIMEOUT", "30.0"))
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self):
@@ -116,9 +123,6 @@ class Settings:
 
         self._load_dynamic_settings()
 
-        # BUG FIX: Warn loudly at startup if OpenRouter key is missing
-        # so the failure reason is obvious in logs, rather than silently
-        # failing at runtime with a cryptic 401 or empty-response error.
         if not self.OPENROUTER_API_KEY:
             logger.warning(
                 "⚠️  OPENROUTER_API_KEY is not set. DeepSeek via OpenRouter will "
