@@ -10,6 +10,7 @@ This is the "nervous system" of the API layer:
   - Self-evolution hooks: trigger re-planning, capability re-mapping,
     reflector analysis, and learning updates at runtime
   - Config hot-reload (no server restart needed)
+  - Input mode switching (voice | panel | none) via ModeManager
 
 All values are resolved dynamically — nothing is hardcoded.
 """
@@ -82,6 +83,15 @@ def _lifecycle():
     try:
         from core.lifecycle_manager import lifecycle_manager
         return lifecycle_manager
+    except Exception:
+        return None
+
+
+def _mode_manager():
+    """Lazy import so mode_manager is never loaded before lifecycle boots it."""
+    try:
+        from core.mode_manager import mode_manager
+        return mode_manager
     except Exception:
         return None
 
@@ -260,12 +270,6 @@ async def trigger_reflection(
 ) -> Dict[str, Any]:
     """
     🧠 Trigger the Reflector to analyse recent behaviour and suggest improvements.
-
-    The reflector (brain/reflector.py) reads episodic memory, identifies
-    failure patterns, and emits 'reflection_complete' with its findings.
-
-    Optional body:
-        {"focus": "task_failures", "window": 50}
     """
     r = _reflector()
     if r is None:
@@ -284,9 +288,6 @@ async def trigger_reflection(
 async def remap_capabilities() -> Dict[str, Any]:
     """
     🗺️ Force a capability re-discovery pass.
-
-    The CapabilityMapper (brain/capability_mapper.py) scans all registered
-    tools and plugins and rebuilds the internal capability graph.
     """
     cm = _capability_mapper()
     if cm is None:
@@ -307,12 +308,6 @@ async def trigger_learning(
 ) -> Dict[str, Any]:
     """
     📚 Trigger the Learner to consolidate recent experience into long-term memory.
-
-    The learner (learning/learner.py) reads new episodic entries, extracts
-    patterns, updates the vector store, and prunes stale knowledge.
-
-    Optional body:
-        {"mode": "full"}  or  {"mode": "incremental"}
     """
     l = _learner()
     if l is None:
@@ -337,9 +332,6 @@ async def inject_goal(
 ) -> Dict[str, Any]:
     """
     🎯 Inject a high-level goal into the orchestrator's goal stack.
-
-    The orchestrator will decompose the goal into a plan and begin working
-    on it autonomously.
     """
     orch = _orchestrator()
     if orch is None:
@@ -364,9 +356,7 @@ async def inject_goal(
 @router.get("/evolve/history")
 async def evolution_history(limit: int = 20) -> Dict[str, Any]:
     """
-    📜 Return a history of self-evolution events (reflections, remaps, learning runs).
-
-    Reads from episodic memory filtered by evolution-related event types.
+    📜 Return a history of self-evolution events.
     """
     try:
         from memory.episodic import episodic_memory
@@ -379,18 +369,82 @@ async def evolution_history(limit: int = 20) -> Dict[str, Any]:
         logger.warning("Could not fetch evolution history: %s", exc)
         return {"history": [], "count": 0, "message": str(exc)}
 
-_active_input_mode = "none"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoints — Input Mode
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/input-mode")
-async def set_input_mode(payload: Dict[str, Any] = Body(...)):
-    global _active_input_mode
-    mode = payload.get("mode", "none")
-    if mode not in ("voice", "panel", "none"):
-        raise HTTPException(status_code=422, detail="mode must be 'voice', 'panel', or 'none'")
-    _active_input_mode = mode
-    await _bus().emit("input_mode_changed", {"mode": mode}, source="api_system")
-    return {"mode": mode}
+async def set_input_mode(
+    payload: Dict[str, Any] = Body(
+        ...,
+        examples=[{"mode": "panel"}, {"mode": "voice"}, {"mode": "none"}],
+    )
+) -> Dict[str, Any]:
+    """
+    🔀 Switch the active input mode.
+
+    Behaviour:
+      • Validates the requested mode and transition are legal.
+      • Waits for any in-flight orchestrator task to finish (action_completed)
+        before switching — up to MODE_SWITCH_DRAIN_TIMEOUT seconds.
+      • Tears down the outgoing subsystem, starts the incoming one.
+      • Persists the new mode to .env so it survives restarts.
+      • Publishes input_mode_changed on the EventBus — the WebSocket bridge
+        forwards this to all connected dashboard clients automatically.
+
+    Request body:
+        {"mode": "voice" | "panel" | "none"}
+
+    Response:
+        {"mode": "panel", "previous_mode": "voice", "changed": true}
+      or if already in that mode:
+        {"mode": "panel", "changed": false, "reason": "already_active"}
+    """
+    mm = _mode_manager()
+    if mm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ModeManager not available — system may still be booting.",
+        )
+
+    raw_mode = payload.get("mode", "")
+    if not raw_mode:
+        raise HTTPException(status_code=422, detail="'mode' field is required.")
+
+    # Validate and parse the raw string into an InputMode enum value.
+    try:
+        from core.input_mode import parse_mode
+        new_mode = parse_mode(raw_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Delegate all switching logic to ModeManager.
+    try:
+        from core.input_mode import ModeTransitionError
+        result = await mm.set_mode(new_mode)
+        return result
+
+    except ModeTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    except Exception as exc:
+        logger.error("Mode switch failed (%s): %s", raw_mode, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @router.get("/input-mode")
-async def get_input_mode():
-    return {"mode": _active_input_mode}
+async def get_input_mode() -> Dict[str, Any]:
+    """
+    🔀 Return the currently active input mode.
+
+    Response:
+        {"mode": "panel"}
+    """
+    mm = _mode_manager()
+    if mm is None:
+        # Fall back to reading CURRENT_MODE from settings if manager not yet ready.
+        from core.config import settings
+        return {"mode": getattr(settings, "CURRENT_MODE", "none")}
+
+    return {"mode": mm.current_mode.value}
