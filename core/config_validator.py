@@ -18,6 +18,14 @@ class AudioSettings(BaseSettings):
         default=None, 
         description="Audio device index. None = system default"
     )
+    
+    @validator("input_index", pre=True)
+    def coerce_empty_to_none(cls, v):
+        """Convert empty string from .env to None (uses system default mic)."""
+        if v == "" or v is None:
+            return None
+        return v
+
     rate: int = Field(
         default=16000, 
         ge=8000, 
