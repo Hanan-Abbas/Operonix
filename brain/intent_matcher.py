@@ -40,4 +40,3 @@ def match_intent_local(
     if best_intent and best_score >= float(threshold):
         return best_intent, float(best_score)
     return None, float(best_score)
-
