@@ -16,6 +16,22 @@
  * Component JS files (system_health.js, action_stream.js, etc.) register
  * themselves via App.registerComponent() and receive WS events through
  * App.ws.on(eventType, handler).
+ *
+ * Mode switching
+ * ──────────────
+ * inputMode.activate(mode) calls POST /api/system/input-mode which delegates
+ * to ModeManager on the Python side. ModeManager waits for any active task,
+ * tears down the old subsystem, starts the new one, persists to .env, and
+ * publishes input_mode_changed on the EventBus.
+ *
+ * The WebSocket bridge (api/websocket.py) forwards input_mode_changed to all
+ * connected dashboard clients automatically (it subscribes to "*").
+ * _init() registers a ws.on("input_mode_changed") listener so every open
+ * browser tab reflects the new state without polling.
+ *
+ * The ModeSwitcher component (dashboard/components/mode_switcher.js) uses the
+ * same wsClient.onEvent() API and is mounted into #modeSwitcherMount if the
+ * element exists in index.html.
  */
 
 "use strict";
@@ -199,6 +215,19 @@ const App = (() => {
       if (_ws) { _ws.onclose = null; _ws.close(); }
       _connect();
     },
+
+    /**
+     * Register a typed event listener — returns an unsubscribe function.
+     * Used by ModeSwitcher and other components that need clean teardown.
+     *
+     * @param {string} eventType
+     * @param {Function} fn
+     * @returns {Function} unsubscribe
+     */
+    onEvent(eventType, fn) {
+      ws.on(eventType, fn);
+      return () => ws.off(eventType, fn);
+    },
   };
 
   function _connect() {
@@ -344,31 +373,57 @@ const App = (() => {
   const inputMode = {
     _pending: false,
 
+    /**
+     * Request a mode change via the API.
+     * ModeManager on the Python side handles task drain, teardown, startup,
+     * .env persistence, and publishing input_mode_changed on the EventBus.
+     * The ws.on("input_mode_changed") listener below then calls _render()
+     * so every open tab reflects the new state automatically.
+     */
     async activate(mode) {
       if (inputMode._pending) return;
       if (mode === _currentMode) return;
 
       inputMode._pending = true;
       const prev = _currentMode;
-      _currentMode = mode;
-      inputMode._render(mode);
 
-      const { ok, error } = await apiFetch("/api/system/input-mode", {
+      // Show pending state visually while we wait for ModeManager to drain
+      // any active task (can take up to MODE_SWITCH_DRAIN_TIMEOUT seconds).
+      inputMode._renderPending(mode);
+
+      const { ok, data, error } = await apiFetch("/api/system/input-mode", {
         method: "POST",
         body: JSON.stringify({ mode }),
       });
 
+      inputMode._pending = false;
+
       if (!ok) {
-        // Rollback
+        // Rollback to previous state
         _currentMode = prev;
         inputMode._render(prev);
         toast.show("error", "Mode Switch Failed", error || "Could not change input mode.");
       } else {
-        const label = mode === "none" ? "All modes deactivated"
-          : `${mode.charAt(0).toUpperCase() + mode.slice(1)} mode activated`;
+        // data.mode is the confirmed new mode from the server.
+        // _render() will also be called by the ws input_mode_changed listener
+        // below — calling it here too is harmless (idempotent).
+        _currentMode = data.mode || mode;
+        inputMode._render(_currentMode);
+        const label = _currentMode === "none"
+          ? "All modes deactivated"
+          : `${_currentMode.charAt(0).toUpperCase() + _currentMode.slice(1)} mode activated`;
         toast.show("success", "Input Mode", label);
       }
-      inputMode._pending = false;
+    },
+
+    /**
+     * Apply a mode change that arrived from the server (WebSocket event).
+     * Does NOT call the API — the change already happened server-side.
+     */
+    applyFromServer(mode) {
+      if (mode === _currentMode) return;
+      _currentMode = mode;
+      inputMode._render(mode);
     },
 
     _render(mode) {
@@ -382,8 +437,8 @@ const App = (() => {
       if (!voiceCard) return;
 
       // Reset
-      voiceCard.classList.remove("active");
-      panelCard.classList.remove("active");
+      voiceCard.classList.remove("active", "pending");
+      panelCard.classList.remove("active", "pending");
       voiceCard.setAttribute("aria-pressed", "false");
       panelCard.setAttribute("aria-pressed", "false");
       if (voiceWave) voiceWave.classList.remove("listening");
@@ -406,6 +461,20 @@ const App = (() => {
         if (panelState) panelState.textContent = "Inactive";
         if (noneBtn)    noneBtn.style.display = "none";
       }
+    },
+
+    /**
+     * Show a "waiting" visual state while ModeManager drains the active task.
+     * Adds a .pending class so CSS can show a spinner or muted colour.
+     */
+    _renderPending(targetMode) {
+      const voiceCard = $("#modeCardVoice");
+      const panelCard = $("#modeCardPanel");
+      if (!voiceCard) return;
+      voiceCard.classList.remove("active");
+      panelCard.classList.remove("active");
+      if (targetMode === "voice") voiceCard.classList.add("pending");
+      if (targetMode === "panel") panelCard.classList.add("pending");
     },
 
     /** Update the voice RMS display from audio health data */
@@ -735,7 +804,7 @@ const App = (() => {
       }
     });
 
-    // 6. Fetch initial input mode
+    // 6. Fetch initial input mode from the server (authoritative source).
     apiFetch("/api/system/input-mode").then(({ ok, data }) => {
       if (ok && data?.mode) {
         _currentMode = data.mode;
@@ -762,7 +831,37 @@ const App = (() => {
       }
     }
 
-    // 9. WS event → error badge on logs nav item
+    // 9. Mount the ModeSwitcher component into #modeSwitcherMount if present.
+    //    ModeSwitcher connects to ws via the onEvent() API so it stays in sync
+    //    with input_mode_changed events without polling.
+    const switcherMount = $("#modeSwitcherMount");
+    if (switcherMount) {
+      import("../components/mode_switcher.js")
+        .then(({ ModeSwitcher }) => {
+          const switcher = new ModeSwitcher(switcherMount);
+          switcher.connect(ws);
+        })
+        .catch(err => {
+          console.warn("[App] ModeSwitcher failed to load:", err);
+        });
+    }
+
+    // 10. Handle input_mode_changed from the EventBus (via WebSocket bridge).
+    //     This fires whenever ModeManager completes a switch — including
+    //     switches triggered from OTHER tabs or directly via the API.
+    //     Keeps all open dashboard tabs in sync without polling.
+    ws.on("input_mode_changed", (data) => {
+      const newMode = data?.new_mode || data?.mode;
+      if (newMode) {
+        inputMode.applyFromServer(newMode);
+        const label = newMode === "none"
+          ? "All modes deactivated"
+          : `${newMode.charAt(0).toUpperCase() + newMode.slice(1)} mode now active`;
+        toast.show("info", "Input Mode Changed", label);
+      }
+    });
+
+    // 11. WS event → error badge on logs nav item
     ws.on("error", () => {
       const badge = $("#errorCountBadge");
       if (!badge) return;
@@ -771,23 +870,23 @@ const App = (() => {
       badge.style.display = "";
     });
 
-    // 10. Handle system_shutting_down event
+    // 12. Handle system_shutting_down event
     ws.on("system_shutting_down", () => {
       _setWsState("disconnected");
       toast.show("warn", "System Shutdown", "Agent is shutting down. Dashboard will disconnect.");
     });
 
-    // 11. Handle reflection_complete
+    // 13. Handle reflection_complete
     ws.on("reflection_complete", (data) => {
       toast.show("success", "Reflection Complete", "Reflector finished analysis. Check Evolution page.");
     });
 
-    // 12. Handle capabilities_remapped
+    // 14. Handle capabilities_remapped
     ws.on("capabilities_remapped", () => {
       toast.show("success", "Capabilities Remapped", "Capability graph rebuilt.");
     });
 
-    // 13. Keyboard shortcut: Escape closes confirm modal
+    // 15. Keyboard shortcut: Escape closes confirm modal
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         const overlay = $("#confirmOverlay");
