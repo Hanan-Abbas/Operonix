@@ -4,6 +4,12 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
+
+# Load .env from the project root (two levels up from core/config.py).
+# This must happen before ANY os.getenv() call so all keys are available.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=True)
+
 logger = logging.getLogger("Config")
 
 
@@ -58,15 +64,19 @@ class Settings:
     DYNAMIC_SETTINGS_FILE: Path = BASE_DIR / "core" / "dynamic_settings.json"
 
     # --- API KEYS & EXTERNAL SERVICES ---
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+    # CHANGED: Replaced DEEPSEEK_API_KEY with OPENROUTER_API_KEY.
+    # OpenRouter is now the gateway for DeepSeek (deepseek-r1-distill-qwen-14b).
+    # Set OPENROUTER_API_KEY in your .env file — get your key at openrouter.ai/keys
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
     # --- BRAIN & LLM SETTINGS ---
     OLLAMA_EMBED_MODEL: str = "all-minilm"
-    OLLAMA_ENABLED   = True
-    OLLAMA_MODEL     = "llama3"
-    OLLAMA_BASE_URL  = "http://localhost:11434"
-    OLLAMA_TIMEOUT   = 30
+    OLLAMA_ENABLED: bool = True
+    OLLAMA_MODEL: str = "llama3"
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_TIMEOUT: int = 30
 
     # --- SYSTEM GUARDRAILS ---
     MAX_RETRY_ATTEMPTS: int = 3
@@ -84,27 +94,16 @@ class Settings:
     GAP_WINDOW_THRESHOLD = 5
     PLUGIN_REVOKE_CONSECUTIVE = 5
     PLUGIN_EVOLVE_THRESHOLD = 0.75
-    
+
     # --- SERVER & DASHBOARD ---
     API_HOST: str = "localhost"
     API_PORT: int = 8000
 
     # ── Panel Settings ────────────────────────────────────────────────────────
-    # Set PANEL_ENABLED=false in environment to run headless (server / CI).
     PANEL_ENABLED: bool = os.getenv("PANEL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
-
-    # Seconds the orchestrator waits for the Qt thread to signal ready.
     PANEL_START_TIMEOUT: float = float(os.getenv("PANEL_START_TIMEOUT", "5.0"))
-
-    # How often (seconds) the orchestrator polls the active window and fires
-    # app_context_changed. Keep ≥ 1.0 to avoid hammering the OS window API.
     APP_CONTEXT_POLL_INTERVAL: float = float(os.getenv("APP_CONTEXT_POLL_INTERVAL", "2.0"))
-
-    # Intent-confidence threshold below which the suggestion engine shows the
-    # next tier in the waterfall as the recommended strategy.
     INTENT_MATCH_MIN_CONFIDENCE: float = float(os.getenv("INTENT_MATCH_MIN_CONFIDENCE", "0.35"))
-
-    # Seconds the pattern pruner is allowed to run at shutdown.
     PRUNE_TIMEOUT: float = float(os.getenv("PRUNE_TIMEOUT", "2.0"))
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -116,6 +115,16 @@ class Settings:
         self.COMPLEX_INTENTS: List[str] = ["write_", "debug_", "complex_"]
 
         self._load_dynamic_settings()
+
+        # BUG FIX: Warn loudly at startup if OpenRouter key is missing
+        # so the failure reason is obvious in logs, rather than silently
+        # failing at runtime with a cryptic 401 or empty-response error.
+        if not self.OPENROUTER_API_KEY:
+            logger.warning(
+                "⚠️  OPENROUTER_API_KEY is not set. DeepSeek via OpenRouter will "
+                "be unavailable and all LLM calls will fall back to local Ollama. "
+                "Set OPENROUTER_API_KEY in your .env file to enable cloud inference."
+            )
 
     def _load_dynamic_settings(self):
         """Safely loads dynamic intent configurations from JSON."""
