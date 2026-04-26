@@ -137,13 +137,49 @@ class EventBus:
             self._queue.task_done()
 
     async def _execute_callback(self, callback: Callable, event: Event):
+        # Guard: if the callback is bound to a Qt object, that object may have
+        # been destroyed (C++ layer deleted) while the Python wrapper still
+        # exists. Attempting to call it raises RuntimeError with the message
+        # "wrapped C/C++ object … has been deleted".  We detect this by
+        # checking __self__ on bound methods and catching that specific error.
+        bound_obj = getattr(callback, "__self__", None)
+        if bound_obj is not None:
+            # isValid() covers QObject subclasses; sip/PyQt5 objects expose it.
+            is_valid_fn = getattr(bound_obj, "isValid", None) or getattr(bound_obj, "sip_isdeleted", None)
+            if is_valid_fn is not None:
+                try:
+                    if callable(is_valid_fn) and not is_valid_fn():
+                        self.logger.debug(
+                            "Skipping dead Qt callback for %s — unsubscribing.", event.name
+                        )
+                        self._unsubscribe_dead(callback)
+                        return
+                except Exception:
+                    pass
+
         try:
             if asyncio.iscoroutinefunction(callback):
                 await callback(event)
             else:
                 callback(event)
+        except RuntimeError as e:
+            err_str = str(e)
+            if "wrapped C/C++ object" in err_str and "has been deleted" in err_str:
+                self.logger.debug(
+                    "Dead Qt object in listener for %s — removing callback.", event.name
+                )
+                self._unsubscribe_dead(callback)
+            else:
+                self.logger.error(f"Error in listener for {event.name}: {e}")
         except Exception as e:
             self.logger.error(f"Error in listener for {event.name}: {e}")
 
+    def _unsubscribe_dead(self, callback: Callable) -> None:
+        """Remove a callback that belongs to a destroyed object from all patterns."""
+        for pattern in list(self.listeners.keys()):
+            try:
+                self.listeners[pattern].remove(callback)
+            except ValueError:
+                pass
 
 bus = EventBus()
