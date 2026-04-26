@@ -91,10 +91,18 @@ class Orchestrator:
         self._voice_active = True
 
         # ── Single AudioManager ───────────────────────────────────────────────
+        # auto_start=False — the mic must NOT open at import time.
+        # Orchestrator() is instantiated at module level (bottom of this file),
+        # which runs before lifecycle_manager.startup() and before
+        # mode_manager.initialise() are called.
+        # ModeManager._startup_voice() calls audio_manager.start() when the
+        # system enters VOICE mode. ModeManager._teardown_voice() calls
+        # audio_manager.stop() when leaving VOICE mode. If CURRENT_MODE=panel
+        # at boot the mic is never opened at all.
         self.audio_manager = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
             chunk=int(getattr(settings, "AUDIO_CHUNK", 1280)),
-            auto_start=True,
+            auto_start=False,
         )
 
         self.pipeline = VoicePipeline(audio_manager=self.audio_manager)
