@@ -11,6 +11,18 @@ Robustness improvements vs original:
   • Volume boost applied in read_chunk (controlled by MIC_VOLUME_BOOST)
   • Overflow counter exposed for diagnostics
   • Thread-safe start / stop with a lock
+
+FIX CHANGELOG (Step 2):
+  • auto_start default changed from True to False.
+    The mic now only opens when voice mode is explicitly activated by
+    mode_manager._startup_voice(). Previously the stream was opened in
+    Orchestrator.__init__ before any mode decision was made, so the mic
+    hardware was always live even in panel mode — mic indicator stayed on,
+    other apps (Zoom, Teams) could not acquire the device.
+  • drain_tail(num_chunks) added: reads up to num_chunks of audio from the
+    stream without blocking the capture loop. Called by
+    VoicePipeline.flush_tail() during voice → panel teardown so the last
+    spoken command is not silently dropped.
 """
 from __future__ import annotations
 
@@ -37,7 +49,7 @@ class AudioManager:
         self,
         rate: Optional[int] = None,
         chunk: Optional[int] = None,
-        auto_start: bool = True,
+        auto_start: bool = False,          # FIX: was True — mic now only opens when voice mode starts
     ) -> None:
         self._lock = threading.Lock()
 
@@ -53,8 +65,6 @@ class AudioManager:
 
         if auto_start:
             self.start()
-
-    # ── Stream lifecycle ──────────────────────────────────────────────────────
 
     def start(self) -> bool:
         """Open the mic stream.  Returns True on success."""
@@ -158,26 +168,28 @@ class AudioManager:
         for _ in range(max(1, num_chunks)):
             self.read_chunk()
 
-    # ── Diagnostics ───────────────────────────────────────────────────────────
+    def drain_tail(self, num_chunks: int = 10) -> Optional[np.ndarray]:
+        """
+        Read up to num_chunks of audio without blocking the pipeline loop.
 
-    def _query_native_rate(self) -> int:
-        try:
-            info = sd.query_devices(self.device, "input")
-            return int(info["default_samplerate"])
-        except Exception:
-            return 16000
+        Used by VoicePipeline.flush_tail() during voice → panel teardown.
+        Reads whatever is in the hardware buffer right now so the last
+        spoken command is not dropped when audio_manager.stop() is called.
 
-    def device_info(self) -> dict:
-        """Return a summary of the active device for logging/debug."""
-        try:
-            info = sd.query_devices(self.device, "input")
-            return {
-                "name": info.get("name"),
-                "index": self.device,
-                "rate": self.rate,
-                "chunk": self.chunk,
-                "running": self.is_running,
-                "overflows": self.overflow_count,
-            }
-        except Exception:
-            return {"index": self.device, "running": self.is_running}
+        Returns a flat int16 numpy array of all drained samples, or None
+        if the stream is not running or the buffer is empty.
+        """
+        if not self.is_running:
+            return None
+
+        frames: list[np.ndarray] = []
+        for _ in range(max(1, num_chunks)):
+            chunk = self.read_chunk()
+            if chunk is None:
+                break
+            frames.append(chunk.flatten())
+
+        if not frames:
+            return None
+
+        return np.concatenate(frames).astype(np.int16)
