@@ -1,7 +1,8 @@
 """
 panel/panel_renderer.py
 
-Renders the panel UI into the three tab areas:
+Renders the panel UI into the tab areas plus a persistent mode switcher:
+  • Mode switcher strip (always visible, above the tabs)
   • Command tab  — input box + live suggestion list
   • History tab  — scrollable, re-runnable history
   • Snippets tab — saved named commands
@@ -9,6 +10,17 @@ Renders the panel UI into the three tab areas:
 
 All colors and sizes are read from ThemeTokens.
 No hex values, pixel constants, or font names live here.
+
+FIX CHANGELOG (Step 2):
+  • Persistent mode switcher strip added above the QTabWidget.
+    Three buttons: 🎤 Voice / ⌨ Panel / ○ None
+    The active mode button is highlighted with the accent colour.
+    Clicking a button emits mode_change_requested(str) which
+    panel_controller publishes to the EventBus for mode_manager.
+  • mode_change_requested = pyqtSignal(str) added to PanelRenderer.
+  • set_active_mode(mode_str) slot added — called via _QtBridge on every
+    input_mode_changed event so the correct button stays highlighted
+    regardless of whether the switch came from the panel or the dashboard.
 """
 from __future__ import annotations
 
@@ -47,7 +59,6 @@ except ImportError:
     _HAS_QT = False
     log.warning("panel_renderer: PyQt6 not available — renderer disabled.")
 
-    # Stub base so the module still imports cleanly.
     class QWidget:  # type: ignore[no-redef]
         pass
 
@@ -58,10 +69,10 @@ if _HAS_QT:
         """Small coloured badge showing plugin/api/command/ui."""
 
         _METHOD_KEYS = {
-            "plugin": "tag_plugin",
-            "api": "tag_api",
+            "plugin":  "tag_plugin",
+            "api":     "tag_api",
             "command": "tag_command",
-            "ui": "tag_ui",
+            "ui":      "tag_ui",
         }
 
         def __init__(self, method: str, tokens: ThemeTokens) -> None:
@@ -85,7 +96,7 @@ if _HAS_QT:
     class _StrategyRow(QFrame):
         """One row in the suggestion list."""
 
-        selected = pyqtSignal(str)  # emits method string when clicked
+        selected = pyqtSignal(str)
 
         def __init__(
             self,
@@ -136,16 +147,15 @@ if _HAS_QT:
             text_col.addWidget(label)
             text_col.addWidget(desc)
             layout.addLayout(text_col)
-
             layout.addStretch()
 
             conf_pct = int(self._strategy.confidence * 100)
-            conf_label = QLabel(f"{conf_pct}%")
             conf_colour = (
                 tokens.success if conf_pct >= 70
                 else tokens.warning if conf_pct >= 40
                 else tokens.error
             )
+            conf_label = QLabel(f"{conf_pct}%")
             conf_label.setStyleSheet(
                 f"color: {conf_colour}; font-size: {tokens.font_size_sm}pt;"
                 f" font-family: {tokens.font_family}; font-weight: bold;"
@@ -160,15 +170,12 @@ if _HAS_QT:
     # -----------------------------------------------------------------------
 
     class PanelRenderer(QWidget):
-        """
-        The full panel body. Owned by panel_window.py which calls
-        set_tokens() whenever the theme changes.
-        """
+        """The full panel body."""
 
-        # Signals consumed by panel_controller.py
-        query_submitted = pyqtSignal(str, str)     # (query_text, chosen_method)
-        setting_changed = pyqtSignal(str, object)  # (key, value)
-        rerun_requested = pyqtSignal(str)          # query_text from history
+        query_submitted      = pyqtSignal(str, str)    # (query_text, chosen_method)
+        setting_changed      = pyqtSignal(str, object) # (key, value)
+        rerun_requested      = pyqtSignal(str)         # query_text from history
+        mode_change_requested = pyqtSignal(str)        # mode value string e.g. "voice"
 
         def __init__(
             self,
@@ -183,6 +190,10 @@ if _HAS_QT:
             self._chosen_method: str | None = None
             self._debounce_timer: QTimer | None = None
             self._suggest_callback: Callable[[str], None] | None = None
+            # Track which mode button is active so we can restyle on update.
+            self._active_mode: str = "panel"
+            # References to the mode buttons for highlight updates.
+            self._mode_buttons: dict[str, QPushButton] = {}
             self._build()
 
         # ------------------------------------------------------------------
@@ -235,12 +246,137 @@ if _HAS_QT:
             root.setContentsMargins(0, 0, 0, 0)
             root.setSpacing(0)
 
+            # ── Persistent mode switcher strip ────────────────────────────
+            root.addWidget(self._build_mode_switcher())
+
+            # ── Tab area ──────────────────────────────────────────────────
             self._tabs = QTabWidget()
-            self._tabs.addTab(self._build_command_tab(), "Command")
-            self._tabs.addTab(self._build_history_tab(), "History")
+            self._tabs.addTab(self._build_command_tab(),  "Command")
+            self._tabs.addTab(self._build_history_tab(),  "History")
             self._tabs.addTab(self._build_snippets_tab(), "Snippets")
             self._tabs.addTab(self._build_settings_tab(), "Settings")
             root.addWidget(self._tabs)
+
+        def _build_mode_switcher(self) -> QWidget:
+            """
+            Thin persistent strip above the tabs with three mode buttons.
+            Always visible regardless of the active tab.
+
+            Buttons:  🎤 Voice  |  ⌨ Panel  |  ○ None
+            The active mode button is highlighted with the accent colour.
+            Clicking a non-active button emits mode_change_requested(mode).
+            """
+            t = self._tokens
+            sp = t.spacing_unit
+
+            strip = QWidget()
+            strip.setFixedHeight(sp * 5)
+            strip.setStyleSheet(
+                f"""
+                QWidget {{
+                    background: {t.bg_secondary};
+                    border-bottom: 1px solid {t.border_color};
+                }}
+                """
+            )
+            layout = QHBoxLayout(strip)
+            layout.setContentsMargins(sp, sp // 2, sp, sp // 2)
+            layout.setSpacing(sp // 2)
+
+            mode_label = QLabel("Input:")
+            mode_label.setStyleSheet(
+                f"color: {t.text_muted}; font-size: {t.font_size_sm}pt;"
+                f" background: transparent; border: none;"
+            )
+            layout.addWidget(mode_label)
+
+            self._mode_buttons = {}
+            modes = [
+                ("voice", "🎤 Voice"),
+                ("panel", "⌨ Panel"),
+                ("none",  "○ None"),
+            ]
+            for mode_val, mode_label_text in modes:
+                btn = QPushButton(mode_label_text)
+                btn.setCheckable(False)
+                btn.setFixedHeight(sp * 3)
+                self._mode_buttons[mode_val] = btn
+                self._style_mode_button(btn, mode_val, t)
+                # Capture mode_val in closure correctly.
+                btn.clicked.connect(
+                    (lambda mv: lambda: self._on_mode_btn_clicked(mv))(mode_val)
+                )
+                layout.addWidget(btn)
+
+            layout.addStretch()
+
+            # Apply initial highlight.
+            self._highlight_mode_button(self._active_mode, t)
+
+            return strip
+
+        def _style_mode_button(
+            self,
+            btn: QPushButton,
+            mode_val: str,
+            t: ThemeTokens,
+            active: bool = False,
+        ) -> None:
+            """Apply active or inactive style to a mode button."""
+            sp = t.spacing_unit
+            if active:
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background: {t.accent};
+                        color: {t.accent_text};
+                        border: none;
+                        border-radius: {t.radius_sm}px;
+                        padding: 2px {sp}px;
+                        font-size: {t.font_size_sm}pt;
+                        font-family: {t.font_family};
+                        font-weight: bold;
+                    }}
+                    QPushButton:hover {{
+                        background: {t.accent};
+                        opacity: 0.85;
+                    }}
+                    """
+                )
+            else:
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background: transparent;
+                        color: {t.text_muted};
+                        border: 1px solid {t.border_color};
+                        border-radius: {t.radius_sm}px;
+                        padding: 2px {sp}px;
+                        font-size: {t.font_size_sm}pt;
+                        font-family: {t.font_family};
+                    }}
+                    QPushButton:hover {{
+                        background: {t.bg_tertiary};
+                        color: {t.text_primary};
+                        border-color: {t.accent};
+                    }}
+                    """
+                )
+
+        def _highlight_mode_button(self, active_mode: str, t: ThemeTokens) -> None:
+            """Style all mode buttons, highlighting only the active one."""
+            for mode_val, btn in self._mode_buttons.items():
+                self._style_mode_button(btn, mode_val, t, active=(mode_val == active_mode))
+
+        def _on_mode_btn_clicked(self, mode_val: str) -> None:
+            """User clicked a mode button — emit signal for panel_controller."""
+            if mode_val == self._active_mode:
+                return  # already active — no-op
+            self.mode_change_requested.emit(mode_val)
+
+        # ------------------------------------------------------------------
+        # Command tab
+        # ------------------------------------------------------------------
 
         def _build_command_tab(self) -> QWidget:
             t = self._tokens
@@ -250,14 +386,12 @@ if _HAS_QT:
             layout.setContentsMargins(sp, sp, sp, sp)
             layout.setSpacing(sp // 2)
 
-            # App context badge
             self._app_badge = QLabel("App: —")
             self._app_badge.setStyleSheet(
                 f"color: {t.text_muted}; font-size: {t.font_size_sm}pt;"
             )
             layout.addWidget(self._app_badge)
 
-            # Input box
             self._input = QLineEdit()
             self._input.setPlaceholderText("Type a command…")
             self._input.setStyleSheet(
@@ -281,7 +415,6 @@ if _HAS_QT:
             self._input.returnPressed.connect(self._on_enter)
             layout.addWidget(self._input)
 
-            # Strategy list
             self._strategy_container = QVBoxLayout()
             self._strategy_container.setSpacing(2)
             strategy_wrap = QWidget()
@@ -292,7 +425,6 @@ if _HAS_QT:
             scroll.setFrameShape(QFrame.Shape.NoFrame)
             layout.addWidget(scroll)
 
-            # Status bar
             self._status_label = QLabel("")
             self._status_label.setStyleSheet(
                 f"color: {t.text_muted}; font-size: {t.font_size_sm}pt;"
@@ -300,6 +432,10 @@ if _HAS_QT:
             layout.addWidget(self._status_label)
 
             return w
+
+        # ------------------------------------------------------------------
+        # History tab
+        # ------------------------------------------------------------------
 
         def _build_history_tab(self) -> QWidget:
             t = self._tokens
@@ -337,6 +473,10 @@ if _HAS_QT:
             layout.addWidget(hint)
             return w
 
+        # ------------------------------------------------------------------
+        # Snippets tab
+        # ------------------------------------------------------------------
+
         def _build_snippets_tab(self) -> QWidget:
             t = self._tokens
             sp = t.spacing_unit
@@ -366,6 +506,10 @@ if _HAS_QT:
             layout.addWidget(self._snippet_list)
             return w
 
+        # ------------------------------------------------------------------
+        # Settings tab
+        # ------------------------------------------------------------------
+
         def _build_settings_tab(self) -> QWidget:
             t = self._tokens
             sp = t.spacing_unit
@@ -383,7 +527,6 @@ if _HAS_QT:
             layout.setContentsMargins(sp, sp, sp, sp)
             layout.setSpacing(sp)
 
-            # --- Theme chooser ---
             layout.addWidget(_row_label("Theme"))
             self._theme_combo = QComboBox()
             self._theme_combo.setStyleSheet(
@@ -413,7 +556,6 @@ if _HAS_QT:
             )
             layout.addWidget(self._theme_combo)
 
-            # --- Opacity slider ---
             layout.addWidget(_row_label("Opacity"))
             opacity_row = QHBoxLayout()
             self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -431,7 +573,6 @@ if _HAS_QT:
             opacity_row.addWidget(self._opacity_label)
             layout.addLayout(opacity_row)
 
-            # --- Font size ---
             layout.addWidget(_row_label("Font size (pt)"))
             self._font_spin = QSpinBox()
             self._font_spin.setRange(8, 24)
@@ -446,7 +587,6 @@ if _HAS_QT:
             )
             layout.addWidget(self._font_spin)
 
-            # --- Hotkey ---
             layout.addWidget(_row_label("Global hotkey"))
             self._hotkey_input = QLineEdit()
             self._hotkey_input.setPlaceholderText("<ctrl>+<space>")
@@ -464,36 +604,40 @@ if _HAS_QT:
             return w
 
         # ------------------------------------------------------------------
-        # Public update methods (called by panel_controller)
+        # Public update methods (called via _QtBridge from panel_controller)
         # ------------------------------------------------------------------
 
         def set_tokens(self, tokens: ThemeTokens) -> None:
             """Swap in a new theme; rebuilds the stylesheet."""
             self._tokens = tokens
-            # Remove the old top-level layout and all its children safely.
             old_layout = self.layout()
             if old_layout is not None:
-                # Drain widgets from the old layout before deleting it.
                 while old_layout.count():
                     item = old_layout.takeAt(0)
                     w = item.widget()
                     if w:
                         w.setParent(None)  # type: ignore[arg-type]
                         w.deleteLater()
-                # Qt requires the layout to be re-parented to a throw-away
-                # widget before we can assign a new one to self.
                 import PyQt6.QtWidgets as _qw
                 _dummy = _qw.QWidget()
                 _dummy.setLayout(old_layout)
             self._build()
             log.info("panel_renderer: theme applied")
 
+        def set_active_mode(self, mode_str: str) -> None:
+            """
+            Highlight the button matching mode_str and un-highlight the others.
+            Called via _QtBridge.sig_set_active_mode (safe from any thread via signal).
+            Also called directly in start() to set the initial state.
+            """
+            self._active_mode = mode_str
+            if self._mode_buttons:
+                self._highlight_mode_button(mode_str, self._tokens)
+
         def update_suggestions(self, result: SuggestionResult) -> None:
-            """Refresh the strategy list in the Command tab."""
             self._current_result = result
             self._chosen_method = result.top.method if result.top else None
 
-            # Clear previous rows.
             while self._strategy_container.count():
                 item = self._strategy_container.takeAt(0)
                 if item.widget():
@@ -536,38 +680,21 @@ if _HAS_QT:
             self._status_label.setText(message)
 
         def set_suggest_callback(self, cb: Callable[[str], None]) -> None:
-            """Register the async suggestion trigger (wired by panel_controller)."""
             self._suggest_callback = cb
 
         def set_app_context(self, app_name: str) -> None:
-            """
-            Update the App badge immediately when the focused window changes.
-            Preserves any intent text that is already displayed so the badge
-            never regresses to a stale value between suggestion refreshes.
-            Called directly by panel_controller._on_app_context_changed.
-            """
             current = self._app_badge.text()
-            # Keep the intent portion (everything from " · " onward) if present.
             intent_part = ""
             if "  ·  " in current:
                 intent_part = current[current.index("  ·  "):]
             self._app_badge.setText(f"App: {app_name or '—'}{intent_part}")
 
         def set_resolved_intent(self, intent: str) -> None:
-            """
-            Update the Intent portion of the App badge with the fully resolved
-            intent string returned by action_completed.  This fills in the
-            badge even when the suggestion engine showed None at typing time
-            (e.g. because the LLM hadn't resolved the intent yet).
-            Called directly by panel_controller._on_action_completed.
-            """
             current = self._app_badge.text()
-            # Strip any existing intent suffix then re-append the resolved one.
             app_part = current.split("  ·  ")[0] if "  ·  " in current else current
             self._app_badge.setText(f"{app_part}  ·  Intent: {intent}")
 
         def set_theme_selection(self, theme_key: str) -> None:
-            """Programmatically select a theme in the combo box."""
             for i in range(self._theme_combo.count()):
                 if self._theme_combo.itemData(i) == theme_key:
                     self._theme_combo.setCurrentIndex(i)
@@ -594,7 +721,7 @@ if _HAS_QT:
             self._debounce_timer = QTimer()
             self._debounce_timer.setSingleShot(True)
             self._debounce_timer.timeout.connect(lambda: self._suggest_callback(text))
-            self._debounce_timer.start(self._tokens.spacing_unit * 31)  # ~248 ms at sp=8
+            self._debounce_timer.start(self._tokens.spacing_unit * 31)
 
         def _on_enter(self) -> None:
             text = self._input.text().strip()
@@ -633,7 +760,9 @@ if _HAS_QT:
                 self._input.setFocus()
 
 else:
-    # Stub for non-Qt environments.
     class PanelRenderer:  # type: ignore[no-redef]
         def __init__(self, *a: Any, **kw: Any) -> None:
             log.warning("PanelRenderer: PyQt6 not available.")
+        def set_active_mode(self, mode_str: str) -> None: pass
+        def set_app_context(self, app: str) -> None: pass
+        def set_status(self, msg: str, level: str = "info") -> None: pass
