@@ -65,7 +65,7 @@ class AudioManager:
 
         if auto_start:
             self.start()
-            
+
     def _query_native_rate(self) -> int:
         """Query the hardware for its default sampling rate (fallback: 16000)."""
         try:
@@ -74,7 +74,31 @@ class AudioManager:
         except Exception as exc:
             logger.warning("AudioManager: Could not query native rate — %s. Using 16k fallback.", exc)
             return 16000
-            
+
+    def device_info(self) -> dict:
+        """Return a dict of the current input device's properties for diagnostics."""
+        try:
+            raw = sd.query_devices(self.device, "input")
+            return {
+                "name": raw.get("name", "unknown"),
+                "index": self.device,
+                "sample_rate": self.rate,
+                "chunk_size": self.chunk,
+                "channels": int(raw.get("max_input_channels", 1)),
+                "is_running": self.is_running,
+                "overflow_count": self.overflow_count,
+            }
+        except Exception as exc:
+            logger.warning("AudioManager.device_info: could not query device — %s", exc)
+            return {
+                "name": "unknown",
+                "index": self.device,
+                "sample_rate": self.rate,
+                "chunk_size": self.chunk,
+                "is_running": self.is_running,
+                "overflow_count": self.overflow_count,
+            }
+                    
     def start(self) -> bool:
         """Open the mic stream.  Returns True on success."""
         with self._lock:
