@@ -3,38 +3,34 @@ core/mode_manager.py — Operonix AI OS Agent
 ════════════════════════════════════════════
 Owns all input-mode switching logic.
 
-Responsibilities:
-  • Holds the single authoritative CURRENT_MODE at runtime
-  • Validates transitions against ALLOWED_TRANSITIONS
-  • Waits for any active orchestrator task to finish before switching
-    (listens for action_completed on the EventBus)
-  • Tears down the outgoing subsystem, starts the incoming one
-  • Persists the new mode to .env so it survives restarts
-  • Publishes input_mode_changed after every successful switch
+FIX CHANGELOG (Step 2):
+  • Subscribes to panel_mode_switch_requested at priority=10 (high).
+    This is the event published by panel_controller when the user clicks
+    a mode button in the panel UI. Priority=10 ensures it runs before
+    lower-priority listeners so the mode switch feels immediate.
 
-Design rules:
-  • Never imports from voice/ or panel/ at module level — all subsystem
-    references are lazy inside _teardown_voice / _startup_voice etc.
-    This avoids circular imports and lets the module load cleanly before
-    those subsystems exist.
-  • Does NOT touch orchestrator internals directly — it flips flags that
-    the orchestrator's own loops check (orchestrator._voice_active).
-  • Thread-safe: asyncio.Lock guards the switch sequence so two rapid
-    API calls cannot interleave teardown/startup steps.
+  • Full handoff sequence implemented in _teardown_voice():
+    1. pipeline.request_stop() — signals capture_command() to exit
+       gracefully after finishing the current utterance.
+    2. pipeline.flush_tail() — waits up to 2s for the pipeline to finish
+       processing the tail audio, then drains the hardware buffer.
+    3. audio_manager.stop() — releases the mic hardware so other apps
+       (Zoom, Teams) can acquire it and the OS mic indicator turns off.
+    4. Publishes system_mode_changed event so all subscribers can react
+       (panel auto-focus, dashboard icon update, model unloading, etc).
 
-FIX CHANGELOG (Step 1):
-  • _startup_panel() now delegates entirely to orchestrator._start_panel()
-    which already contains a re-entry guard (checks if the panel thread is
-    alive before spawning a new one). This means switching panel → panel
-    or calling _startup_panel() while the thread is running is a safe no-op.
-  • _teardown_panel() now calls orchestrator._stop_panel() (the new unified
-    stop helper) instead of calling panel_ctrl.stop() directly via an
-    executor. _stop_panel() handles both controller teardown and Qt thread
-    joining in the correct order.
-  • _apply_mode() at boot is unchanged — it calls _startup(mode) which
-    calls _startup_panel() → _start_panel(). Because orchestrator.start()
-    no longer calls _start_panel() itself, this is now the single boot-time
-    panel creation path. No double panel.
+  • _startup_voice() calls pipeline.reset() after audio_manager.start()
+    so _stop_requested is cleared and VAD state is fresh for the new session.
+
+  • _startup_panel() explicitly calls audio_manager.stop() as its first
+    step. Combined with auto_start=False in AudioManager.__init__, this
+    guarantees the mic is never open in panel mode — not even at first boot.
+
+  • _startup_panel() publishes system_mode_changed after the panel starts
+    so the panel renderer can auto-focus the input box.
+
+  • auto_start=False in Orchestrator.__init__ (see orchestrator.py) means
+    the mic is never opened until _startup_voice() explicitly opens it.
 """
 from __future__ import annotations
 
@@ -49,38 +45,24 @@ from core.input_mode import ALLOWED_TRANSITIONS, InputMode, ModeTransitionError,
 
 logger = logging.getLogger("ModeManager")
 
-# Path to the project-root .env file.
-# BASE_DIR is two levels up from this file (core/mode_manager.py → core/ → project/).
 _ENV_PATH: Path = Path(__file__).resolve().parent.parent / ".env"
-
-# How long (seconds) to wait for a running task to emit action_completed
-# before giving up and switching anyway.
 _TASK_DRAIN_TIMEOUT: float = float(os.getenv("MODE_SWITCH_DRAIN_TIMEOUT", "30.0"))
 
 
 class ModeManager:
-    """
-    Central controller for voice ↔ panel ↔ none switching.
-
-    Instantiated once as `mode_manager` at the bottom of this file.
-    Wired into the system by lifecycle_manager.startup() which calls
-    mode_manager.initialise(orchestrator) after the orchestrator starts.
-    """
+    """Central controller for voice ↔ panel ↔ none switching."""
 
     def __init__(self) -> None:
-        # Read starting mode from .env; default to PANEL per product decision.
         raw = os.getenv("CURRENT_MODE", InputMode.PANEL.value)
         try:
             self._current_mode: InputMode = parse_mode(raw)
         except ValueError:
-            logger.warning(
-                "ModeManager: CURRENT_MODE=%r in .env is invalid. Defaulting to PANEL.", raw
-            )
+            logger.warning("ModeManager: CURRENT_MODE=%r invalid. Defaulting to PANEL.", raw)
             self._current_mode = InputMode.PANEL
 
         self._lock = asyncio.Lock()
-        self._task_done_event: Optional[asyncio.Event] = None  # set when action_completed fires
-        self._orchestrator: Optional[object] = None             # injected by initialise()
+        self._task_done_event: Optional[asyncio.Event] = None
+        self._orchestrator: Optional[object] = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -89,23 +71,20 @@ class ModeManager:
         return self._current_mode
 
     def initialise(self, orchestrator: object) -> None:
-        """
-        Called by lifecycle_manager after orchestrator.start().
-        Wires the EventBus listener and applies the boot mode.
-
-        Must be called before any set_mode() call.
-        """
+        """Called by lifecycle_manager after orchestrator.start()."""
         from core.event_bus import bus
 
         self._orchestrator = orchestrator
 
-        # Listen for task-completion events so pending switches know when to proceed.
         bus.subscribe("action_completed", self._on_action_completed)
+
+        # Subscribe to panel UI mode button events at high priority (10).
+        # Priority=10 means this fires before default-priority (50) listeners,
+        # making the mode switch feel immediate from the user's perspective.
+        bus.subscribe("panel_mode_switch_requested", self._on_panel_mode_switch, priority=10)
 
         logger.info("ModeManager: initialised. Boot mode = %s.", self._current_mode.name)
 
-        # Apply the boot mode without waiting — there are no tasks yet at boot.
-        # We schedule it as a fire-and-forget so the asyncio loop handles it.
         from core.event_bus import bus as _bus
         _bus.publish(
             "input_mode_initialised",
@@ -117,20 +96,7 @@ class ModeManager:
     async def set_mode(self, new_mode: InputMode) -> dict:
         """
         Public entry point for mode switching.
-
-        Called by api/routes/system.py (POST /api/system/input-mode).
-
-        Steps:
-          1. Validate the transition is allowed.
-          2. If a task is currently running, wait for action_completed
-             (up to MODE_SWITCH_DRAIN_TIMEOUT seconds).
-          3. Tear down the current subsystem.
-          4. Start the new subsystem.
-          5. Persist to .env.
-          6. Publish input_mode_changed.
-
-        Returns a dict that the API layer can return directly as JSON.
-        Raises ModeTransitionError on invalid transition.
+        Called by api/routes/system.py and by _on_panel_mode_switch().
         """
         if new_mode == self._current_mode:
             return {"mode": new_mode.value, "changed": False, "reason": "already_active"}
@@ -141,31 +107,20 @@ class ModeManager:
         async with self._lock:
             previous_mode = self._current_mode
 
-            # ── Wait for any active task to finish ────────────────────────────
             await self._drain_active_tasks()
 
-            # ── Switch ────────────────────────────────────────────────────────
-            logger.info(
-                "ModeManager: switching %s → %s …",
-                previous_mode.name, new_mode.name,
-            )
+            logger.info("ModeManager: switching %s → %s …", previous_mode.name, new_mode.name)
 
             await self._teardown(previous_mode)
             await self._startup(new_mode)
 
             self._current_mode = new_mode
-
-            # ── Persist ───────────────────────────────────────────────────────
             self._persist_to_env(new_mode)
 
-            # ── Notify ────────────────────────────────────────────────────────
             from core.event_bus import bus
             bus.publish(
                 "input_mode_changed",
-                {
-                    "new_mode":      new_mode.value,
-                    "previous_mode": previous_mode.value,
-                },
+                {"new_mode": new_mode.value, "previous_mode": previous_mode.value},
                 source="mode_manager",
             )
 
@@ -176,43 +131,57 @@ class ModeManager:
                 "changed":       True,
             }
 
+    # ── Panel mode switch event handler ──────────────────────────────────────
+
+    async def _on_panel_mode_switch(self, event: object) -> None:
+        """
+        High-priority EventBus handler for panel UI mode button clicks.
+
+        Published by panel_controller._on_mode_change_requested() when the
+        user clicks a mode button in the panel. Delegates to set_mode() which
+        handles validation, drain, teardown, startup, persistence, and notify.
+        """
+        payload = event.data if hasattr(event, "data") else event  # type: ignore[union-attr]
+        if not isinstance(payload, dict):
+            return
+
+        raw_mode = payload.get("mode", "")
+        if not raw_mode:
+            return
+
+        try:
+            new_mode = parse_mode(raw_mode)
+            await self.set_mode(new_mode)
+        except ModeTransitionError as exc:
+            logger.warning("ModeManager: panel mode switch blocked — %s", exc)
+        except Exception as exc:
+            logger.error("ModeManager: panel mode switch failed — %s", exc)
+
     # ── Task drain ────────────────────────────────────────────────────────────
 
     async def _drain_active_tasks(self) -> None:
-        """
-        Wait until the orchestrator has no active tasks, or until
-        _TASK_DRAIN_TIMEOUT seconds elapse, whichever comes first.
-        """
         orch = self._orchestrator
         if orch is None:
             return
 
         active: dict = getattr(orch, "active_tasks", {})
         if not active:
-            return  # nothing running — switch immediately
+            return
 
         logger.info(
-            "ModeManager: %d task(s) in flight — waiting up to %.0fs before switching …",
+            "ModeManager: %d task(s) in flight — waiting up to %.0fs …",
             len(active), _TASK_DRAIN_TIMEOUT,
         )
-
         self._task_done_event = asyncio.Event()
-
         try:
-            await asyncio.wait_for(
-                self._wait_for_tasks_empty(),
-                timeout=_TASK_DRAIN_TIMEOUT,
-            )
-            logger.info("ModeManager: all tasks finished — proceeding with switch.")
+            await asyncio.wait_for(self._wait_for_tasks_empty(), timeout=_TASK_DRAIN_TIMEOUT)
+            logger.info("ModeManager: all tasks finished.")
         except asyncio.TimeoutError:
-            logger.warning(
-                "ModeManager: drain timeout (%.0fs) reached. Switching anyway.", _TASK_DRAIN_TIMEOUT
-            )
+            logger.warning("ModeManager: drain timeout. Switching anyway.")
         finally:
             self._task_done_event = None
 
     async def _wait_for_tasks_empty(self) -> None:
-        """Poll active_tasks and yield on action_completed events."""
         orch = self._orchestrator
         while True:
             if not getattr(orch, "active_tasks", {}):
@@ -222,28 +191,27 @@ class ModeManager:
                 try:
                     await asyncio.wait_for(self._task_done_event.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
-                    pass  # re-check active_tasks on next iteration
+                    pass
 
     async def _on_action_completed(self, event: object) -> None:
-        """EventBus callback — wakes the drain waiter when a task finishes."""
         if self._task_done_event is not None:
             self._task_done_event.set()
 
     # ── Teardown ──────────────────────────────────────────────────────────────
 
     async def _teardown(self, mode: InputMode) -> None:
-        """Stop whichever subsystem is currently active."""
         if mode == InputMode.VOICE:
             await self._teardown_voice()
         elif mode == InputMode.PANEL:
             await self._teardown_panel()
-        # NONE → nothing to tear down
 
     async def _teardown_voice(self) -> None:
         """
-        Stop the voice subsystem in the correct order:
-          1. Signal the wake-loop gate so detect() returns on the next tick.
-          2. Stop the AudioManager (releases the mic hardware lock).
+        Full voice handoff sequence:
+          1. pipeline.request_stop() — exit capture loop after current utterance
+          2. pipeline.flush_tail()   — wait for pipeline to finish + drain buffer
+          3. audio_manager.stop()    — release mic hardware (OS indicator off)
+          4. Publish system_mode_changed so panel/dashboard/models can react
         """
         orch = self._orchestrator
         if orch is None:
@@ -251,37 +219,48 @@ class ModeManager:
 
         logger.info("ModeManager: tearing down VOICE subsystem …")
 
-        # 1. Gate the wake-word loop
-        orch._voice_active = False  # type: ignore[attr-defined]
+        # 1. Signal pipeline to stop gracefully after finishing the utterance.
+        pipeline = getattr(orch, "pipeline", None)
+        if pipeline is not None:
+            try:
+                pipeline.request_stop()
+            except Exception as exc:
+                logger.warning("ModeManager: pipeline.request_stop() error — %s", exc)
 
-        # 2. Stop the mic stream
+        # 2. Flush — wait for current utterance + drain hardware buffer.
+        #    Run in executor because flush_tail() blocks (threading.Event.wait).
+        if pipeline is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, pipeline.flush_tail)
+                logger.info("ModeManager: pipeline flush complete.")
+            except Exception as exc:
+                logger.warning("ModeManager: pipeline.flush_tail() error — %s", exc)
+
+        # 3. Stop the mic hardware — releases device lock, turns off OS indicator.
+        orch._voice_active = False  # type: ignore[attr-defined]
         audio_manager = getattr(orch, "audio_manager", None)
         if audio_manager is not None:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, audio_manager.stop)
-            logger.info("ModeManager: AudioManager stopped.")
+            logger.info("ModeManager: AudioManager stopped — mic hardware released.")
+
+        # 4. Notify all subsystems that voice mode has been torn down.
+        from core.event_bus import bus
+        bus.publish(
+            "system_mode_changed",
+            {"from_mode": "voice", "to_mode": self._current_mode.value},
+            source="mode_manager",
+        )
 
         logger.info("ModeManager: VOICE teardown complete.")
 
     async def _teardown_panel(self) -> None:
-        """
-        Stop the panel subsystem via orchestrator._stop_panel().
-
-        FIX: Previously called panel_ctrl.stop() directly via run_in_executor,
-        which then called self._window.hide() from the executor thread — a
-        cross-thread Qt widget call that caused the segfault.
-
-        orchestrator._stop_panel() is the correct unified stop path:
-          1. Calls panel_controller.stop() which posts QApplication.quit()
-             onto the Qt thread (safe) and stops the asyncio loop.
-          2. Joins the Qt thread with a timeout.
-        All of this is thread-safe.
-        """
+        """Stop the panel via orchestrator._stop_panel() (Qt-safe unified path)."""
         orch = self._orchestrator
         if orch is None:
             return
 
-        # Check if the panel is actually running before trying to stop it.
         panel_thread = getattr(orch, "_panel_thread", None)
         if panel_thread is None or not panel_thread.is_alive():
             logger.info("ModeManager: no panel thread running — skipping teardown.")
@@ -291,7 +270,6 @@ class ModeManager:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, orch._stop_panel)
-            logger.info("ModeManager: panel stopped.")
         except Exception as exc:
             logger.warning("ModeManager: panel stop error — %s", exc)
 
@@ -300,18 +278,18 @@ class ModeManager:
     # ── Startup ───────────────────────────────────────────────────────────────
 
     async def _startup(self, mode: InputMode) -> None:
-        """Start whichever subsystem the new mode requires."""
         if mode == InputMode.VOICE:
             await self._startup_voice()
         elif mode == InputMode.PANEL:
             await self._startup_panel()
-        # NONE → nothing to start
 
     async def _startup_voice(self) -> None:
         """
-        Start the voice subsystem:
-          1. Re-open the AudioManager (acquires the mic).
-          2. Re-enable the wake-word loop gate.
+        Voice startup sequence:
+          1. Start audio_manager (open mic hardware).
+          2. pipeline.reset() — clear stop flag, fresh VAD state.
+          3. Enable wake-word loop gate.
+          4. Publish system_mode_changed.
         """
         orch = self._orchestrator
         if orch is None:
@@ -319,6 +297,7 @@ class ModeManager:
 
         logger.info("ModeManager: starting VOICE subsystem …")
 
+        # 1. Open mic hardware.
         audio_manager = getattr(orch, "audio_manager", None)
         if audio_manager is not None:
             loop = asyncio.get_running_loop()
@@ -326,26 +305,36 @@ class ModeManager:
             if not success:
                 logger.error("ModeManager: AudioManager failed to start — VOICE may not work.")
             else:
-                logger.info("ModeManager: AudioManager started.")
+                logger.info("ModeManager: AudioManager started — mic is LIVE.")
 
-        # Re-enable the wake-word loop gate
+        # 2. Reset pipeline state for a fresh session.
+        pipeline = getattr(orch, "pipeline", None)
+        if pipeline is not None:
+            try:
+                pipeline.reset()
+            except Exception as exc:
+                logger.warning("ModeManager: pipeline.reset() error — %s", exc)
+
+        # 3. Enable wake-word loop.
         orch._voice_active = True  # type: ignore[attr-defined]
+
+        # 4. Notify subsystems.
+        from core.event_bus import bus
+        bus.publish(
+            "system_mode_changed",
+            {"from_mode": self._current_mode.value, "to_mode": "voice"},
+            source="mode_manager",
+        )
 
         logger.info("ModeManager: VOICE startup complete.")
 
     async def _startup_panel(self) -> None:
         """
-        Start the panel subsystem via orchestrator._start_panel().
-
-        FIX: orchestrator._start_panel() now contains a re-entry guard that
-        returns immediately if the panel thread is already alive. This means:
-          • At boot: _apply_mode(PANEL) → _startup_panel() → _start_panel()
-            creates the panel thread. orchestrator.start() no longer calls
-            _start_panel(), so there is only ever one call at boot.
-          • On a panel → voice → panel round-trip: _teardown_panel() joined
-            and cleared the thread, so _start_panel() creates a fresh one.
-          • On a spurious double call: the guard in _start_panel() makes the
-            second call a silent no-op — no second window is created.
+        Panel startup sequence:
+          1. Ensure mic is stopped (in case called at boot with auto_start=False,
+             or after a failed voice teardown — idempotent).
+          2. Start the panel Qt thread via orchestrator._start_panel().
+          3. Publish system_mode_changed so the panel can auto-focus the input box.
         """
         orch = self._orchestrator
         if orch is None:
@@ -353,6 +342,14 @@ class ModeManager:
 
         logger.info("ModeManager: starting PANEL subsystem …")
 
+        # 1. Ensure mic is not open — idempotent (stop() is a no-op if not running).
+        audio_manager = getattr(orch, "audio_manager", None)
+        if audio_manager is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, audio_manager.stop)
+            logger.info("ModeManager: mic confirmed stopped before panel start.")
+
+        # 2. Start the panel (re-entry guard in _start_panel prevents double panel).
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, orch._start_panel)
@@ -360,15 +357,19 @@ class ModeManager:
         except Exception as exc:
             logger.error("ModeManager: panel startup error — %s", exc)
 
+        # 3. Notify — panel_controller listens for this to auto-focus the input box.
+        from core.event_bus import bus
+        bus.publish(
+            "system_mode_changed",
+            {"from_mode": self._current_mode.value, "to_mode": "panel"},
+            source="mode_manager",
+        )
+
         logger.info("ModeManager: PANEL startup complete.")
 
-    # ── Apply mode at boot (no drain, no teardown) ────────────────────────────
+    # ── Apply mode at boot ────────────────────────────────────────────────────
 
     async def _apply_mode(self, mode: InputMode) -> None:
-        """
-        Called once at boot to put the system into the configured starting mode.
-        Skips drain and teardown because nothing is running yet.
-        """
         logger.info("ModeManager: applying boot mode %s …", mode.name)
         await self._startup(mode)
         logger.info("ModeManager: boot mode %s applied.", mode.name)
@@ -376,16 +377,8 @@ class ModeManager:
     # ── .env persistence ──────────────────────────────────────────────────────
 
     def _persist_to_env(self, mode: InputMode) -> None:
-        """
-        Write CURRENT_MODE=<value> into the project's .env file.
-
-        • If the key already exists it is updated in-place (line replaced).
-        • If the key is absent it is appended.
-        • If the file does not exist it is created.
-        """
         key = "CURRENT_MODE"
         new_line = f"{key}={mode.value}\n"
-
         try:
             if _ENV_PATH.exists():
                 original = _ENV_PATH.read_text(encoding="utf-8")
@@ -397,9 +390,7 @@ class ModeManager:
                 _ENV_PATH.write_text(updated, encoding="utf-8")
             else:
                 _ENV_PATH.write_text(new_line, encoding="utf-8")
-
             logger.info("ModeManager: persisted %s=%s to .env", key, mode.value)
-
         except OSError as exc:
             logger.warning("ModeManager: could not write to .env — %s", exc)
 
