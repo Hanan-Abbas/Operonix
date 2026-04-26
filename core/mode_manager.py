@@ -3,34 +3,6 @@ core/mode_manager.py — Operonix AI OS Agent
 ════════════════════════════════════════════
 Owns all input-mode switching logic.
 
-FIX CHANGELOG (Step 2):
-  • Subscribes to panel_mode_switch_requested at priority=10 (high).
-    This is the event published by panel_controller when the user clicks
-    a mode button in the panel UI. Priority=10 ensures it runs before
-    lower-priority listeners so the mode switch feels immediate.
-
-  • Full handoff sequence implemented in _teardown_voice():
-    1. pipeline.request_stop() — signals capture_command() to exit
-       gracefully after finishing the current utterance.
-    2. pipeline.flush_tail() — waits up to 2s for the pipeline to finish
-       processing the tail audio, then drains the hardware buffer.
-    3. audio_manager.stop() — releases the mic hardware so other apps
-       (Zoom, Teams) can acquire it and the OS mic indicator turns off.
-    4. Publishes system_mode_changed event so all subscribers can react
-       (panel auto-focus, dashboard icon update, model unloading, etc).
-
-  • _startup_voice() calls pipeline.reset() after audio_manager.start()
-    so _stop_requested is cleared and VAD state is fresh for the new session.
-
-  • _startup_panel() explicitly calls audio_manager.stop() as its first
-    step. Combined with auto_start=False in AudioManager.__init__, this
-    guarantees the mic is never open in panel mode — not even at first boot.
-
-  • _startup_panel() publishes system_mode_changed after the panel starts
-    so the panel renderer can auto-focus the input box.
-
-  • auto_start=False in Orchestrator.__init__ (see orchestrator.py) means
-    the mic is never opened until _startup_voice() explicitly opens it.
 """
 from __future__ import annotations
 
@@ -78,10 +50,7 @@ class ModeManager:
 
         bus.subscribe("action_completed", self._on_action_completed)
 
-        # Subscribe to panel UI mode button events at high priority (10).
-        # Priority=10 means this fires before default-priority (50) listeners,
-        # making the mode switch feel immediate from the user's perspective.
-        bus.subscribe("panel_mode_switch_requested", self._on_panel_mode_switch, priority=10)
+        bus.subscribe("panel_mode_switch_requested", self._on_panel_mode_switch)
 
         logger.info("ModeManager: initialised. Boot mode = %s.", self._current_mode.name)
 
