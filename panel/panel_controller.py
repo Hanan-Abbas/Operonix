@@ -2,28 +2,25 @@
 panel/panel_controller.py
 
 The critical wiring file.
-Connects the panel UI ↔ EventBus.  It:
+Connects the panel UI ↔ EventBus.
 
-  • Publishes text_query_received (same event the voice pipeline fires)
-  • Publishes panel_toggle_requested / execution_strategy_overridden
-  • Subscribes to action_completed, app_context_changed, config_changed
+FIX CHANGELOG (Step 2):
+  • _QtBridge(QObject) inner class replaces the fragile _invoke_on_qt_thread
+    helper. The bridge is created on the Qt thread during start() and owns
+    typed pyqtSignals for every cross-thread UI update. Emitting a signal
+    from any thread is safe in Qt — the connected slot always executes on
+    the receiving object's thread (QueuedConnection when crossing threads).
+    This fully fixes the "app badge never updates" bug.
 
-The controller never imports concrete brain/, capabilities/, or tools/ code.
-All subsystem interactions go through the EventBus.
+  • Mode switcher wired via EventBus (high-priority):
+      panel renderer emits mode_change_requested(str)
+      → controller publishes panel_mode_switch_requested on bus
+      → mode_manager subscribes at priority=10 and calls set_mode()
+    The bridge carries sig_set_active_mode to highlight the active button
+    on any mode change (including changes from the dashboard).
 
-FIX CHANGELOG (Step 1):
-  • _on_app_context_changed and _on_action_completed now post Qt widget
-    updates via QMetaObject.invokeMethod(Qt.ConnectionType.QueuedConnection)
-    instead of calling renderer methods directly. The EventBus callbacks
-    fire on the asyncio thread; calling Qt widget methods from a non-Qt
-    thread was the root cause of the segfault on mode switch.
-  • stop() no longer calls self._window.hide() directly from the executor
-    thread. It instead calls QApplication.quit() via invokeMethod, which
-    causes qt_app.exec() in the panel thread to return cleanly. This is
-    the correct Qt-safe shutdown path.
-  • start() signature unchanged — loop=None continues to work as before,
-    causing the controller to create and own its own asyncio loop on a
-    dedicated "panel-asyncio" daemon thread.
+  • stop() uses bridge.sig_request_quit to post QApplication.quit()
+    onto the Qt thread safely.
 """
 from __future__ import annotations
 
@@ -42,61 +39,58 @@ from panel.suggestion_engine import SuggestionEngine
 
 log = logging.getLogger(__name__)
 
+_HAS_QT = False
+try:
+    from PyQt6.QtCore import QObject, pyqtSignal as _pyqtSignal
+    _HAS_QT = True
+except ImportError:
+    pass
 
-def _invoke_on_qt_thread(obj: Any, method_name: str, *args: Any) -> None:
-    """
-    Schedule a call to obj.method_name(*args) on the Qt GUI thread.
 
-    Uses QMetaObject.invokeMethod with QueuedConnection so it is safe to
-    call from any thread (asyncio thread, executor thread, etc.).
-    If PyQt6 is not available or obj is None this is a no-op.
-    """
-    if obj is None:
-        return
-    try:
-        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-        from PyQt6.QtCore import QObject
-        # For methods with no arguments the simple string overload works.
-        if not args:
-            QMetaObject.invokeMethod(
-                obj,
-                method_name,
-                Qt.ConnectionType.QueuedConnection,
-            )
-        else:
-            # PyQt6 does not expose Q_ARG as a Python-callable in all builds;
-            # fall back to a zero-arg lambda posted via a QTimer when there
-            # are arguments, which is always safe from any thread.
-            from PyQt6.QtCore import QTimer
-            # Capture args in closure to avoid late-binding issues.
-            captured = args
-            def _call():
-                getattr(obj, method_name)(*captured)
-            QTimer.singleShot(0, obj, _call)
-    except Exception as exc:  # noqa: BLE001
-        log.debug("_invoke_on_qt_thread: could not post %s.%s — %s", obj, method_name, exc)
+# ---------------------------------------------------------------------------
+# Qt bridge — created on the Qt thread, emitted from any thread
+# ---------------------------------------------------------------------------
 
+if _HAS_QT:
+    class _QtBridge(QObject):
+        """
+        Thread-safe signal bridge between asyncio callbacks and the Qt GUI.
+
+        Created inside PanelController.start() which runs on the Qt thread,
+        so this object's thread affinity is correctly set to the Qt thread.
+        Emitting any signal from a background thread causes Qt to queue the
+        delivery and execute the connected slot on the Qt thread automatically.
+        """
+        sig_set_app_context     = _pyqtSignal(str)
+        sig_set_status          = _pyqtSignal(str, str)       # message, level
+        sig_push_history        = _pyqtSignal(str, str, bool) # text, method, success
+        sig_set_resolved_intent = _pyqtSignal(str)
+        sig_update_suggestions  = _pyqtSignal(object)         # SuggestionResult
+        sig_set_active_mode     = _pyqtSignal(str)            # mode value string
+        sig_toggle              = _pyqtSignal()
+        sig_apply_theme         = _pyqtSignal()
+        sig_request_quit        = _pyqtSignal()
+
+        def __init__(self, parent: QObject | None = None) -> None:
+            super().__init__(parent)
+
+else:
+    class _QtBridge:  # type: ignore[no-redef]
+        """Stub when PyQt6 is unavailable."""
+        def __init__(self, *a: Any, **kw: Any) -> None: pass
+        def __getattr__(self, name: str) -> Any:
+            class _Noop:
+                def connect(self, *a: Any) -> None: pass
+                def emit(self, *a: Any) -> None: pass
+            return _Noop()
+
+
+# ---------------------------------------------------------------------------
+# Controller
+# ---------------------------------------------------------------------------
 
 class PanelController:
-    """
-    Owns all panel subsystems and wires them together.
-
-    Lifecycle::
-
-        ctrl = PanelController(event_bus, intent_parser, plugin_registry,
-                               capability_registry, learned_ranking)
-        ctrl.start()          # creates Qt window, registers hotkey
-        # ... application runs ...
-        ctrl.stop()           # persists state, tears down
-
-    Args:
-        event_bus:           Operonix EventBus instance.
-        intent_parser:       Callable[str] -> dict (brain/intent_parser.py wrapper).
-        plugin_registry:     Callable[str, str] -> list[dict].
-        capability_registry: Callable[str] -> list[dict].
-        learned_ranking:     Optional Callable[str, str] -> list[str].
-        qt_app:              Optional QApplication (if already created by caller).
-    """
+    """Owns all panel subsystems and wires them together."""
 
     def __init__(
         self,
@@ -112,15 +106,12 @@ class PanelController:
         self._pending_row_id: int | None = None
         self._pending_start_ms: float = 0.0
 
-        # Config & state
         self._config = PanelConfig(event_bus)
         self._state = self._config.state
 
-        # Stores
         self._history = HistoryStore()
         self._snippets = SnippetStore()
 
-        # Suggestion engine
         self._engine = SuggestionEngine(
             intent_parser=intent_parser,
             plugin_registry=plugin_registry,
@@ -129,17 +120,15 @@ class PanelController:
             learned_ranking=learned_ranking,
         )
 
-        # UI
         self._window: PanelWindow | None = None
         self._renderer: PanelRenderer | None = None
+        self._bridge: _QtBridge | None = None
 
-        # Hotkey listener
         self._hotkey = HotkeyListener(
             hotkey_str=self._config.hotkey,
             event_bus=event_bus,
         )
 
-        # Track the last suggestion result for override reporting.
         self._last_result: Any = None
 
     # ------------------------------------------------------------------
@@ -147,15 +136,10 @@ class PanelController:
     # ------------------------------------------------------------------
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        """Initialise all subsystems. Call from the main Qt thread."""
+        """Initialise all subsystems. Must be called from the Qt thread."""
         import threading
         self._loop = loop or asyncio.new_event_loop()
 
-        # The asyncio loop must be RUNNING (via run_forever) so that
-        # asyncio.run_coroutine_threadsafe can submit coroutines from Qt
-        # signal handlers.  We spin it in a daemon thread so it doesn't
-        # block Qt's exec().  If the caller already passed in a running loop
-        # (e.g. the orchestrator's panel thread), we skip this step.
         self._loop_thread: threading.Thread | None = None
         if not self._loop.is_running():
             self._loop_thread = threading.Thread(
@@ -165,11 +149,13 @@ class PanelController:
             )
             self._loop_thread.start()
 
-        # Open history DB — submit as a coroutine to the now-running loop.
         future = asyncio.run_coroutine_threadsafe(self._history.open(), self._loop)
-        future.result(timeout=10.0)  # block until open() completes
+        future.result(timeout=10.0)
 
-        # Build UI
+        # ── Create bridge on Qt thread ────────────────────────────────────
+        self._bridge = _QtBridge()
+
+        # ── Build UI ──────────────────────────────────────────────────────
         tokens = self._config.theme_tokens
         self._window = PanelWindow(tokens=tokens, state=self._state)
         self._renderer = PanelRenderer(
@@ -179,53 +165,53 @@ class PanelController:
         )
         self._window.set_body(self._renderer)
 
-        # Wire renderer signals → controller methods.
+        # ── Wire bridge → renderer/window ─────────────────────────────────
+        self._bridge.sig_set_app_context.connect(self._renderer.set_app_context)
+        self._bridge.sig_set_status.connect(self._renderer.set_status)
+        self._bridge.sig_push_history.connect(self._renderer.push_history_item)
+        self._bridge.sig_set_resolved_intent.connect(self._renderer.set_resolved_intent)
+        self._bridge.sig_update_suggestions.connect(self._renderer.update_suggestions)
+        self._bridge.sig_set_active_mode.connect(self._renderer.set_active_mode)
+        self._bridge.sig_toggle.connect(self._window.toggle)
+        self._bridge.sig_apply_theme.connect(self._apply_current_theme)
+
+        if _HAS_QT:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                self._bridge.sig_request_quit.connect(app.quit)
+
+        # ── Wire renderer → controller ────────────────────────────────────
         self._renderer.query_submitted.connect(self._on_query_submitted)
         self._renderer.setting_changed.connect(self._on_setting_changed)
         self._renderer.rerun_requested.connect(self._on_rerun)
+        self._renderer.mode_change_requested.connect(self._on_mode_change_requested)
 
-        # Pre-populate UI state.
+        # ── Pre-populate UI ───────────────────────────────────────────────
         self._renderer.set_theme_selection(self._state.theme)
         self._renderer.set_opacity_value(self._state.opacity)
         self._renderer.set_font_size_value(self._state.font_size)
         self._renderer.set_hotkey_value(self._state.hotkey)
 
-        # Register suggestion callback with the renderer.
-        self._renderer.set_suggest_callback(self._schedule_suggest)
+        try:
+            from core.mode_manager import mode_manager
+            self._renderer.set_active_mode(mode_manager.current_mode.value)
+        except Exception:
+            pass
 
-        # Load snippets.
+        self._renderer.set_suggest_callback(self._schedule_suggest)
         self._renderer.load_snippets(self._snippets.all())
 
-        # Subscribe to EventBus events.
         self._subscribe()
-
-        # Start hotkey listener.
         self._hotkey.start()
 
-        # Show the window.
         if self._window:
             self._window.show_panel()
 
         log.info("panel_controller: started (theme=%s)", self._state.theme)
 
     def stop(self) -> None:
-        """
-        Persist state and tear down.
-
-        FIX: Previously called self._window.hide() directly, which runs on
-        whatever thread calls stop() (usually a thread-pool executor thread).
-        Calling any Qt widget method from a non-Qt thread is undefined
-        behaviour and was a contributing factor to the segfault on mode switch.
-
-        The correct shutdown sequence is:
-          1. Stop the hotkey listener (pure Python, thread-safe).
-          2. Persist state to disk (pure Python, thread-safe).
-          3. Close the history DB via the asyncio loop we own.
-          4. Stop our asyncio loop (only if we started it).
-          5. Post QApplication.quit() onto the Qt thread — this causes
-             qt_app.exec() in the panel thread to return, which naturally
-             destroys all widgets on the correct thread.
-        """
+        """Persist state and tear down."""
         self._hotkey.stop()
         self._state.save()
 
@@ -234,26 +220,18 @@ class PanelController:
                 future = asyncio.run_coroutine_threadsafe(self._history.close(), self._loop)
                 try:
                     future.result(timeout=5.0)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning("panel_controller: history close error — %s", exc)
-
-                # Stop our asyncio loop only if we started it.
                 if getattr(self, "_loop_thread", None) is not None:
                     self._loop.call_soon_threadsafe(self._loop.stop)
-
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("panel_controller: stop error — %s", exc)
 
-        # Post QApplication.quit() onto the Qt thread safely.
-        # This causes qt_app.exec() to return, destroying all widgets
-        # on the correct thread without any cross-thread widget access.
-        try:
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app is not None:
-                _invoke_on_qt_thread(app, "quit")
-        except Exception as exc:  # noqa: BLE001
-            log.debug("panel_controller: could not post quit — %s", exc)
+        if self._bridge is not None:
+            try:
+                self._bridge.sig_request_quit.emit()
+            except Exception as exc:
+                log.debug("panel_controller: sig_request_quit failed — %s", exc)
 
         log.info("panel_controller: stopped.")
 
@@ -263,38 +241,36 @@ class PanelController:
 
     def _subscribe(self) -> None:
         handlers = {
-            "panel_toggle_requested":  self._on_toggle,
-            "action_completed":        self._on_action_completed,
-            "app_context_changed":     self._on_app_context_changed,
-            "config_changed":          self._on_config_changed,
+            "panel_toggle_requested": self._on_toggle,
+            "action_completed":       self._on_action_completed,
+            "app_context_changed":    self._on_app_context_changed,
+            "config_changed":         self._on_config_changed,
+            "input_mode_changed":     self._on_input_mode_changed,
         }
         for event, handler in handlers.items():
             try:
                 self._bus.subscribe(event, handler)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.warning("panel_controller: could not subscribe to '%s' — %s", event, exc)
 
     # ------------------------------------------------------------------
-    # EventBus handlers
+    # EventBus handlers  (fire on asyncio thread — use bridge signals)
     # ------------------------------------------------------------------
 
     def _on_toggle(self, _payload: Any) -> None:
-        # window.toggle() is a Qt call — post it onto the Qt thread.
-        if self._window:
-            _invoke_on_qt_thread(self._window, "toggle")
+        if self._bridge:
+            self._bridge.sig_toggle.emit()
 
     def _on_action_completed(self, event: Any) -> None:
-        # Accept both an Event object and a plain dict for resilience.
         payload = event.data if hasattr(event, "data") else event
         if not isinstance(payload, dict):
             payload = {}
-        success = bool(payload.get("success", False))
+        success  = bool(payload.get("success", False))
         duration = int(payload.get("duration_ms", 0))
-        method = payload.get("method", "unknown")
-        query = payload.get("query", "")
-        intent = payload.get("intent", None)
+        method   = payload.get("method", "unknown")
+        query    = payload.get("query", "")
+        intent   = payload.get("intent", None)
 
-        # Update history row (asyncio-safe — runs on the panel-asyncio thread).
         if self._pending_row_id is not None:
             asyncio.run_coroutine_threadsafe(
                 self._history.update_outcome(
@@ -308,17 +284,14 @@ class PanelController:
             )
             self._pending_row_id = None
 
-        # Update UI — post onto the Qt thread to avoid cross-thread widget access.
-        if self._renderer and query:
-            _invoke_on_qt_thread(self._renderer, "push_history_item", query, method, success)
+        if self._bridge and query:
+            self._bridge.sig_push_history.emit(query, method, success)
             level = "success" if success else "error"
-            msg = f"Done ({method}, {duration} ms)" if success else "Failed"
-            _invoke_on_qt_thread(self._renderer, "set_status", msg, level)
+            msg   = f"Done ({method}, {duration} ms)" if success else "Failed"
+            self._bridge.sig_set_status.emit(msg, level)
 
-        if self._renderer and intent:
-            _invoke_on_qt_thread(self._renderer, "set_resolved_intent", intent)
-
-        log.debug("panel_controller: action_completed success=%s method=%s", success, method)
+        if self._bridge and intent:
+            self._bridge.sig_set_resolved_intent.emit(intent)
 
     def _on_app_context_changed(self, event: Any) -> None:
         payload = event.data if hasattr(event, "data") else event
@@ -326,42 +299,49 @@ class PanelController:
             payload = {}
         app = payload.get("app_name", "unknown")
         self._engine.set_app_context(app)
-
-        # FIX: Previously called self._renderer.set_app_context(app) directly.
-        # This callback fires on the asyncio thread (not the Qt thread), so any
-        # direct Qt widget call here is a cross-thread violation → segfault.
-        # Post it onto the Qt thread via QTimer.singleShot (wrapped in
-        # _invoke_on_qt_thread) so the widget update always happens safely.
-        if self._renderer:
-            _invoke_on_qt_thread(self._renderer, "set_app_context", app)
-
-        log.debug("panel_controller: app context → %s", app)
+        if self._bridge:
+            self._bridge.sig_set_app_context.emit(app)
 
     def _on_config_changed(self, event: Any) -> None:
         payload = event.data if hasattr(event, "data") else event
         if not isinstance(payload, dict):
             payload = {}
         if payload.get("source") == "panel":
-            return  # Ignore changes we ourselves fired.
-        # Re-read tokens in case an external config change affects the theme.
-        # _apply_current_theme touches Qt widgets — post onto Qt thread.
-        _invoke_on_qt_thread(
-            self._window,   # any QObject in the Qt thread works as the receiver
-            "_apply_theme_slot",
-        ) if self._window else self._apply_current_theme()
+            return
+        if self._bridge:
+            self._bridge.sig_apply_theme.emit()
+
+    def _on_input_mode_changed(self, event: Any) -> None:
+        """Reflect external mode changes (dashboard) in the panel switcher."""
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            payload = {}
+        new_mode = payload.get("new_mode", "")
+        if self._bridge and new_mode:
+            self._bridge.sig_set_active_mode.emit(new_mode)
 
     # ------------------------------------------------------------------
-    # Renderer signal handlers (already on Qt thread — no invokeMethod needed)
+    # Renderer signal handlers  (Qt thread — direct calls are safe)
     # ------------------------------------------------------------------
+
+    def _on_mode_change_requested(self, mode_str: str) -> None:
+        """User clicked a mode button — publish to bus for mode_manager."""
+        log.info("panel_controller: mode switch requested → %s", mode_str)
+        try:
+            self._bus.publish(
+                "panel_mode_switch_requested",
+                {"mode": mode_str},
+                source="panel",
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish mode switch — %s", exc)
 
     def _on_query_submitted(self, query: str, chosen_method: str) -> None:
-        # Report override if the user changed the default strategy.
         if self._last_result and self._last_result.top:
             default_method = self._last_result.top.method
             intent = self._last_result.intent
             self._engine.publish_override(query, chosen_method, default_method, intent)
 
-        # Persist to history (row updated when action_completed fires).
         self._pending_start_ms = time.monotonic() * 1000
         future = asyncio.run_coroutine_threadsafe(
             self._history.record(
@@ -373,32 +353,23 @@ class PanelController:
         )
         try:
             self._pending_row_id = future.result(timeout=5.0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("panel_controller: history.record failed — %s", exc)
             self._pending_row_id = None
 
-        # Publish to the Orchestrator (same event as voice pipeline).
         try:
             self._bus.publish(
                 "text_query_received",
-                {
-                    "query": query,
-                    "source": "panel",
-                    "preferred_method": chosen_method,
-                },
+                {"query": query, "source": "panel", "preferred_method": chosen_method},
             )
-            log.info("panel_controller: published text_query_received '%s' (method=%s)",
-                     query, chosen_method)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.error("panel_controller: failed to publish query — %s", exc)
 
         if self._renderer:
             self._renderer.set_status("Running…", "info")
 
     def _on_setting_changed(self, key: str, value: Any) -> None:
-        log.debug("panel_controller: setting changed %s=%s", key, value)
         self._config.update(**{key: value})
-
         if key == "theme":
             self._apply_current_theme()
         elif key == "opacity" and self._window:
@@ -406,10 +377,9 @@ class PanelController:
         elif key == "hotkey":
             self._hotkey.update_hotkey(str(value))
         elif key in ("font_size", "font_family"):
-            self._apply_current_theme()  # Tokens include font — full rebuild.
+            self._apply_current_theme()
 
     def _on_rerun(self, query: str) -> None:
-        # Treat as a fresh submission with the default method.
         self._on_query_submitted(query, "command")
 
     # ------------------------------------------------------------------
@@ -417,27 +387,22 @@ class PanelController:
     # ------------------------------------------------------------------
 
     def _schedule_suggest(self, text: str) -> None:
-        """
-        Called by the renderer's debounce timer (Qt thread) to schedule the
-        async suggest pipeline.
-        """
         asyncio.run_coroutine_threadsafe(self._async_suggest(text), self._loop)
 
     async def _async_suggest(self, text: str) -> None:
         try:
             result = await self._engine.suggest(text)
             self._last_result = result
-            if self._renderer:
-                _invoke_on_qt_thread(self._renderer, "update_suggestions", result)
-        except Exception as exc:  # noqa: BLE001
+            if self._bridge:
+                self._bridge.sig_update_suggestions.emit(result)
+        except Exception as exc:
             log.warning("panel_controller: suggestion failed — %s", exc)
 
     # ------------------------------------------------------------------
-    # Theme helpers
+    # Theme helpers  (called on Qt thread via bridge signal)
     # ------------------------------------------------------------------
 
     def _apply_current_theme(self) -> None:
-        """Must be called from the Qt thread."""
         tokens = self._config.theme_tokens
         if self._window:
             self._window.apply_tokens(tokens)
