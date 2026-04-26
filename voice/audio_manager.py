@@ -65,6 +65,7 @@ class AudioManager:
 
         if auto_start:
             self.start()
+            
     def _query_native_rate(self) -> int:
         """Query the hardware for its default sampling rate (fallback: 16000)."""
         try:
