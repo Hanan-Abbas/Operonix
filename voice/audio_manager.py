@@ -65,7 +65,15 @@ class AudioManager:
 
         if auto_start:
             self.start()
-
+    def _query_native_rate(self) -> int:
+        """Query the hardware for its default sampling rate (fallback: 16000)."""
+        try:
+            device_info = sd.query_devices(self.device, 'input')
+            return int(device_info.get('default_samplerate', 16000))
+        except Exception as exc:
+            logger.warning("AudioManager: Could not query native rate — %s. Using 16k fallback.", exc)
+            return 16000
+            
     def start(self) -> bool:
         """Open the mic stream.  Returns True on success."""
         with self._lock:
