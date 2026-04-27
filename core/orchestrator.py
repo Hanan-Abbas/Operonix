@@ -7,15 +7,19 @@ Input sources (both equal, no special casing):
   • Voice pipeline  → fires  transcription_complete  → normalised to user_input_received
   • Panel (text UI) → fires  text_query_received     → normalised to user_input_received
 
-Panel integration:
-  • PanelController is created here and started in a dedicated Qt thread.
-  • The Orchestrator exposes four thin adapter methods that translate
-    execution outcomes back into EventBus events the panel understands:
-      action_completed, app_context_changed
-  • preferred_method from the panel payload is forwarded to the executor
-    so user strategy overrides are honoured end-to-end.
+FIX CHANGELOG (this revision)
+──────────────────────────────
+BUG: _build_panel_controller() was constructing a brand-new CapabilityRegistry()
+     instance (line 56 of the original).  That instance was always empty because
+     auto_register_ops() had already been called on the global capability_registry
+     singleton in capabilities/bootstrap.py.  The panel's suggestion waterfall
+     therefore found zero capabilities for every intent and always fell through
+     to UI-fallback — even for simple operations like write_file that have a
+     registered capability.
 
-
+FIX: _build_panel_controller() now imports and passes the global
+     capability_registry singleton so the panel sees all registered capabilities.
+     Same fix applied to plugin_registry — uses the global plugin loader instance.
 """
 from __future__ import annotations
 
@@ -47,18 +51,27 @@ def _panel_enabled() -> bool:
 def _build_panel_controller() -> Any:
     """
     Construct PanelController with all dependencies injected.
-    All subsystem callables are wrapped so the panel never imports
-    brain/ or capabilities/ directly.
+
+    FIX: Previously this function created *new* CapabilityRegistry() and
+    PluginLoader() instances, which were always empty because the global
+    singletons had already been populated by bootstrap.py.  The panel's
+    suggestion waterfall found no capabilities and always fell through to
+    UI-fallback (10% confidence shown in the screenshot).
+
+    Now we import the global singletons so the panel shares the same
+    populated registry as the rest of the system.
     """
     from panel.panel_controller import PanelController
     from brain.intent_parser import IntentParser
-    from capabilities.registry import CapabilityRegistry
-    from plugins.loader import PluginLoader
+
+    # ── FIX: use global singletons, not fresh empty instances ────────────────
+    from capabilities.registry import capability_registry   # global singleton
+    from plugins.loader import plugin_loader                # global singleton
+    # ─────────────────────────────────────────────────────────────────────────
+
     from learning.retriever import Retriever
 
     _intent_parser = IntentParser()
-    _cap_registry = CapabilityRegistry()
-    _plugin_loader = PluginLoader()
 
     # Wrap retriever for learned ranking; returns [] gracefully on failure.
     try:
@@ -66,16 +79,22 @@ def _build_panel_controller() -> Any:
         def learned_ranking(app: str, intent: str) -> list[str]:
             try:
                 return _retriever.get_method_ranking(app=app, intent=intent)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return []
-    except Exception:  # noqa: BLE001
+    except Exception:
         learned_ranking = None  # type: ignore[assignment]
 
     return PanelController(
         event_bus=bus,
         intent_parser=lambda text: _intent_parser.parse(text),
-        plugin_registry=lambda app, intent: _plugin_loader.find(app=app, intent=intent),
-        capability_registry=lambda intent: _cap_registry.find(intent=intent),
+        # FIX: was lambda app, intent: _plugin_loader.find(app=app, intent=intent)
+        # where _plugin_loader was a fresh PluginLoader() with nothing loaded.
+        # Now uses the global plugin_loader singleton.
+        plugin_registry=lambda app, intent: plugin_loader.find(app=app, intent=intent),
+        # FIX: was lambda intent: _cap_registry.find(intent=intent)
+        # where _cap_registry was a fresh empty CapabilityRegistry().
+        # Now uses the global capability_registry singleton.
+        capability_registry=lambda intent: capability_registry.find(intent=intent),
         learned_ranking=learned_ranking,
     )
 
@@ -92,13 +111,9 @@ class Orchestrator:
 
         # ── Single AudioManager ───────────────────────────────────────────────
         # auto_start=False — the mic must NOT open at import time.
-        # Orchestrator() is instantiated at module level (bottom of this file),
-        # which runs before lifecycle_manager.startup() and before
-        # mode_manager.initialise() are called.
         # ModeManager._startup_voice() calls audio_manager.start() when the
-        # system enters VOICE mode. ModeManager._teardown_voice() calls
-        # audio_manager.stop() when leaving VOICE mode. If CURRENT_MODE=panel
-        # at boot the mic is never opened at all.
+        # system enters VOICE mode.  ModeManager._teardown_voice() calls
+        # audio_manager.stop() when leaving VOICE mode.
         self.audio_manager = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
             chunk=int(getattr(settings, "AUDIO_CHUNK", 1280)),
@@ -126,11 +141,8 @@ class Orchestrator:
         loop = asyncio.get_running_loop()
         self.wake_detector.loop = loop
 
-        # Voice subscriptions (unchanged)
         bus.subscribe("wake_word_detected",   self.handle_wake_word)
         bus.subscribe("user_input_received",  self.handle_new_task)
-
-        # Panel subscriptions
         bus.subscribe("text_query_received",  self._handle_panel_input)
         bus.subscribe("intent_parsed",        self.route_to_mapper)
         bus.subscribe("capability_mapped",    self.route_to_executor)
@@ -146,12 +158,6 @@ class Orchestrator:
             "enabled" if _panel_enabled() else "disabled",
         )
 
-        # NOTE: _start_panel() is intentionally NOT called here.
-        # mode_manager._apply_mode() will call _startup_panel() →
-        # _start_panel() once immediately after orchestrator.start()
-        # returns in lifecycle_manager.startup(). Calling it here too
-        # was the source of the double-panel bug.
-
     async def stop(self) -> None:
         self.is_running = False
         self.audio_manager.stop()
@@ -160,7 +166,7 @@ class Orchestrator:
             try:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self._stop_panel)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Orchestrator: panel stop error — %s", exc)
 
         logger.info("🛑 Orchestrator stopped.")
@@ -172,18 +178,14 @@ class Orchestrator:
         Spin up the Qt event loop in a daemon thread.
 
         GUARD: if the panel thread is already alive this method returns
-        immediately. This prevents a second PanelWindow from being created
-        when mode_manager calls _start_panel() while the thread from the
-        initial boot is still running.
+        immediately — prevents a second PanelWindow from being created.
         """
-        # ── Re-entry guard ───────────────────────────────────────────────────
         if self._panel_thread is not None and self._panel_thread.is_alive():
             logger.info(
                 "Orchestrator: _start_panel() called but panel thread is already alive — skipping."
             )
             return
 
-        # Reset the ready event for this (re-)start.
         self._panel_ready.clear()
 
         self._panel_thread = threading.Thread(
@@ -193,7 +195,6 @@ class Orchestrator:
         )
         self._panel_thread.start()
 
-        # Give the panel up to PANEL_START_TIMEOUT seconds to initialise.
         ready = self._panel_ready.wait(
             timeout=float(getattr(settings, "PANEL_START_TIMEOUT", 10.0))
         )
@@ -201,21 +202,11 @@ class Orchestrator:
             logger.warning("Orchestrator: panel did not signal ready within timeout.")
 
     def _stop_panel(self) -> None:
-        """
-        Stop the panel controller and wait for the Qt thread to exit.
-
-        Called from:
-          • orchestrator.stop() (via run_in_executor)
-          • mode_manager._teardown_panel() (via run_in_executor)
-
-        Delegates asyncio-loop teardown to panel_controller.stop() which
-        calls loop.call_soon_threadsafe(loop.stop) on the loop it owns.
-        We then join the Qt thread with a short timeout.
-        """
+        """Stop the panel controller and wait for the Qt thread to exit."""
         if self._panel_controller is not None:
             try:
                 self._panel_controller.stop()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Orchestrator: panel_controller.stop() error — %s", exc)
             self._panel_controller = None
 
@@ -234,46 +225,23 @@ class Orchestrator:
         Creates QApplication and runs qt_app.exec() on this thread.
         The asyncio loop is NOT created or owned here — panel_controller
         creates its own "panel-asyncio" daemon thread for that.
-
-        FIX: The previous version created an asyncio loop here, passed it
-        to panel_controller.start(), and then called loop.close() in the
-        finally block. panel_controller.start() was already spinning that
-        loop via run_forever() in a separate thread, so loop.close() raced
-        with run_forever() and raised RuntimeError: Cannot close a running
-        event loop.
-
-        The fix is simply to let panel_controller manage its own loop
-        entirely (pass loop=None) and remove the loop.close() call.
         """
         try:
             from PyQt6.QtWidgets import QApplication
             import sys
-
-            # Ensure the ~/.operonix directory exists before any Qt or
-            # panel code tries to write panel_state.json.  This is the
-            # earliest safe point — before PanelController.__init__ or
-            # PanelConfig touch the filesystem.
             from pathlib import Path
+
             state_dir = Path.home() / ".operonix"
             state_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create QApplication on this thread (Qt requires that the
-            # QApplication and all widgets live on the same thread).
             qt_app = QApplication.instance() or QApplication(sys.argv)
 
-            # Build the controller and let it manage its own asyncio loop.
-            # Passing loop=None causes panel_controller.start() to create
-            # a new event loop and run it in its own "panel-asyncio" thread.
             self._panel_controller = _build_panel_controller()
             self._panel_controller.start(loop=None)
 
             self._panel_ready.set()
             logger.info("Orchestrator: panel thread ready.")
 
-            # Block this thread on Qt's event loop.
-            # When the user closes the panel or stop() is called,
-            # panel_controller.stop() calls qt_app.quit() (via the window)
-            # which causes exec() to return.
             qt_app.exec()
 
         except ImportError as exc:
@@ -281,19 +249,18 @@ class Orchestrator:
                 "Orchestrator: PyQt6 not available — panel disabled (%s).", exc
             )
             self._panel_ready.set()
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Orchestrator: panel thread crashed — %s", exc, exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "Orchestrator: panel thread crashed — %s", exc, exc_info=True
+            )
             self._panel_ready.set()
-        # NOTE: No finally: loop.close() here. The asyncio loop is owned
-        # by panel_controller's "panel-asyncio" thread. panel_controller.stop()
-        # is responsible for stopping it cleanly via loop.call_soon_threadsafe.
 
     # ── Background loops ──────────────────────────────────────────────────────
 
     async def _background_wake_loop(self) -> None:
         loop = asyncio.get_running_loop()
         while self.is_running:
-            if getattr(self, '_voice_active', True):
+            if getattr(self, "_voice_active", True):
                 await loop.run_in_executor(None, self.wake_detector.detect)
             await asyncio.sleep(0.005)
 
@@ -301,13 +268,6 @@ class Orchestrator:
         """
         Periodically publish app_context_changed so the panel badge and
         suggestion engine stay in sync with the user's active window.
-
-        FIX: renderer.set_app_context() is a Qt widget call. Calling it
-        directly from this asyncio coroutine (which runs on the asyncio
-        thread, not the Qt thread) was the root cause of the segfault on
-        mode switch. The EventBus handler in panel_controller now uses
-        QMetaObject.invokeMethod to post the call onto the Qt thread.
-        This loop itself only publishes the event — no Qt calls here.
         """
         interval = float(getattr(settings, "APP_CONTEXT_POLL_INTERVAL", 2.0))
         last_app: str = ""
@@ -315,7 +275,7 @@ class Orchestrator:
         while self.is_running:
             await asyncio.sleep(interval)
             try:
-                from context.app_profiler import AppProfiler  # lazy import; avoids circular dep
+                from context.app_profiler import AppProfiler
                 current_app = AppProfiler.get_active_app_name()
                 if current_app and current_app != last_app:
                     last_app = current_app
@@ -325,7 +285,7 @@ class Orchestrator:
                         source="orchestrator",
                     )
                     logger.debug("Orchestrator: app context → %s", current_app)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("Orchestrator: app_profiler error — %s", exc)
 
     # ── Wake-word handler (voice path) ────────────────────────────────────────
@@ -352,7 +312,7 @@ class Orchestrator:
                         "stt_provider": command.get("provider"),
                         "confidence": confidence,
                         "duration": command.get("duration_seconds", 0),
-                        "preferred_method": None,   # voice never overrides method
+                        "preferred_method": None,
                     },
                     source="orchestrator",
                 )
@@ -373,11 +333,8 @@ class Orchestrator:
         """
         text_query_received  →  user_input_received
 
-        The panel fires text_query_received with an optional preferred_method
-        field that carries the user's strategy override (plugin/api/command/ui).
-        We normalise it into the same envelope the voice path uses so
-        handle_new_task and all downstream handlers are completely unaware of
-        the input source.
+        Normalises panel input into the same envelope the voice path uses
+        so handle_new_task and all downstream handlers are source-agnostic.
         """
         query = (event.data.get("query") or "").strip()
         if not query:
@@ -396,7 +353,7 @@ class Orchestrator:
                 "source": "panel",
                 "stt": {},
                 "stt_provider": None,
-                "confidence": 1.0,          # text input is not transcribed; assume perfect
+                "confidence": 1.0,
                 "duration": 0,
                 "preferred_method": event.data.get("preferred_method"),
             },
@@ -406,11 +363,7 @@ class Orchestrator:
     # ── Task lifecycle ────────────────────────────────────────────────────────
 
     async def handle_new_task(self, event: Any) -> None:
-        """
-        Unified entry point for both voice and panel inputs.
-        preferred_method (may be None) is threaded through the task dict so
-        the executor can honour panel strategy overrides.
-        """
+        """Unified entry point for both voice and panel inputs."""
         task_id = str(uuid.uuid4())[:8]
         user_text = (event.data.get("text") or "").strip()
         if not user_text:
@@ -460,7 +413,6 @@ class Orchestrator:
         task = self.active_tasks.get(task_id, {})
 
         payload = dict(event.data)
-        # Only inject preferred_method if the task carried one (panel override).
         if task.get("preferred_method") and "preferred_method" not in payload:
             payload["preferred_method"] = task["preferred_method"]
 
@@ -472,9 +424,10 @@ class Orchestrator:
         task = self.active_tasks.get(task_id, {})
         logger.error("❌ Task [%s] failed: %s", task_id, error)
 
-        elapsed_ms = int((time.monotonic() - task.get("started_at", time.monotonic())) * 1000)
+        elapsed_ms = int(
+            (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
+        )
 
-        # Notify the panel so it can update the status bar and history row.
         await bus.emit(
             "action_completed",
             {
@@ -502,12 +455,12 @@ class Orchestrator:
     async def finalize_task(self, event: Any) -> None:
         task_id = event.data.get("task_id")
         task = self.active_tasks.pop(task_id, {})
-        elapsed_ms = int((time.monotonic() - task.get("started_at", time.monotonic())) * 1000)
+        elapsed_ms = int(
+            (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
+        )
 
         logger.info("✅ Task [%s] completed in %d ms.", task_id, elapsed_ms)
 
-        # Notify the panel so it can show ✓ in the history list and update
-        # the history_store row with the real outcome data.
         await bus.emit(
             "action_completed",
             {
