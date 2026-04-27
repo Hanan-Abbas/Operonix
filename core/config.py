@@ -76,38 +76,42 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
     # ── LLM / Model Settings ──────────────────────────────────────────────────
+
+    # Groq (cloud, fast inference)
+    # ----------------------------
+    # Groq offers free-tier access with very fast inference via Llama3, Mixtral, Gemma.
     #
-    # Ollama (local)
-    # --------------
-    # OLLAMA_MODEL must match the name shown by `ollama list`.
-    # Common values: llama3, llama3.2, mistral, phi4, qwen2.5
-    # Set in .env:  OLLAMA_MODEL=llama3
+    # Available models (as of 2026):
+    #   llama3-70b-8192       ← best quality, recommended default
+    #   llama3-8b-8192        ← faster, lower quality
+    #   mixtral-8x7b-32768    ← large context window
+    #   gemma2-9b-it          ← Google Gemma 2
+    #
+    # Get your free API key at: https://console.groq.com
+    # Set in .env:  GROQ_API_KEY=gsk_...
+    #               GROQ_MODEL=llama3-70b-8192
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama3-70b-8192")
+    GROQ_TIMEOUT: int = int(os.getenv("GROQ_TIMEOUT", "30"))
+
+    # Ollama (local) — kept as fallback; set OLLAMA_ENABLED=false to disable
+    # -----------------------------------------------------------------------
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
     OLLAMA_EMBED_MODEL: str = os.getenv("OLLAMA_EMBED_MODEL", "all-minilm")
     OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", "60"))
-    OLLAMA_ENABLED: bool = True
+    OLLAMA_ENABLED: bool = os.getenv("OLLAMA_ENABLED", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
 
     # OpenRouter
     # ----------
-    # FIX: Model slug is now fully configurable — never hardcoded.
-    # The old hardcoded "deepseek/deepseek-r1-distill-qwen-14b" was removed
-    # from OpenRouter, causing all cloud LLM calls to 404.
-    #
-    # Free models available on OpenRouter (as of April 2026):
-    #   meta-llama/llama-3.1-8b-instruct:free
-    #   mistralai/mistral-7b-instruct:free
-    #   google/gemma-3-27b-it:free
-    #   deepseek/deepseek-chat-v3-0324:free
-    #
-    # Set in .env:  OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct:free
     OPENROUTER_MODEL: str = os.getenv(
-        "OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"
+        "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
     )
 
     # Gemini
     # ------
-    # Set in .env:  GEMINI_MODEL=gemini-2.0-flash
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -143,9 +147,6 @@ class Settings:
     PRUNE_TIMEOUT: float = float(os.getenv("PRUNE_TIMEOUT", "2.0"))
 
     # ── Input Mode ────────────────────────────────────────────────────────────
-    # Valid values: "voice" | "panel" | "none"
-    # Default: "panel" — ModeManager reads this at boot.
-    # Never read this directly at runtime; use mode_manager.current_mode instead.
     CURRENT_MODE: str = os.getenv("CURRENT_MODE", "panel")
     MODE_SWITCH_DRAIN_TIMEOUT: float = float(os.getenv("MODE_SWITCH_DRAIN_TIMEOUT", "30.0"))
 
@@ -182,17 +183,22 @@ class Settings:
 
     def _warn_missing_keys(self):
         """Warn about missing API keys at startup so issues surface immediately."""
+        # Groq warnings (primary provider)
+        if not self.GROQ_API_KEY:
+            logger.warning(
+                "⚠️  GROQ_API_KEY is not set. "
+                "LLM calls will fall back to OpenRouter or Ollama. "
+                "Get a free key at https://console.groq.com and set GROQ_API_KEY in your .env"
+            )
+        else:
+            logger.info(
+                "✅ Groq provider ready — model: %s", self.GROQ_MODEL
+            )
+
         if not self.OPENROUTER_API_KEY:
             logger.warning(
                 "⚠️  OPENROUTER_API_KEY is not set. "
-                "All LLM calls will fall back to local Ollama. "
-                "Set OPENROUTER_API_KEY and OPENROUTER_MODEL in your .env to enable cloud inference."
-            )
-        elif not self.OPENROUTER_MODEL:
-            logger.warning(
-                "⚠️  OPENROUTER_MODEL is not set. "
-                "OpenRouter calls will be skipped even though an API key is present. "
-                "Set OPENROUTER_MODEL=<slug> in your .env (e.g. meta-llama/llama-3.1-8b-instruct:free)."
+                "OpenRouter fallback will be skipped."
             )
 
         if not self.GEMINI_API_KEY:
@@ -200,12 +206,18 @@ class Settings:
                 "ℹ️  GEMINI_API_KEY not set — Gemini provider will be skipped."
             )
 
+        if not self.OLLAMA_ENABLED:
+            logger.info(
+                "ℹ️  Ollama is disabled (OLLAMA_ENABLED=false). "
+                "Set OLLAMA_ENABLED=true in .env if you want a local fallback."
+            )
+
         logger.info(
-            "LLM config — Ollama: %s @ %s | OpenRouter: %s | Gemini: %s",
-            self.OLLAMA_MODEL,
-            self.OLLAMA_BASE_URL,
-            self.OPENROUTER_MODEL or "(not configured)",
+            "LLM priority — Groq: %s | OpenRouter: %s | Gemini: %s | Ollama: %s",
+            self.GROQ_MODEL if self.GROQ_API_KEY else "(no key)",
+            self.OPENROUTER_MODEL if self.OPENROUTER_API_KEY else "(no key)",
             self.GEMINI_MODEL if self.GEMINI_API_KEY else "(no key)",
+            self.OLLAMA_MODEL if self.OLLAMA_ENABLED else "(disabled)",
         )
 
 
