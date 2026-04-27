@@ -1,10 +1,10 @@
 """
 tools/ollama_tool.py
 ─────────────────────
-Ollama LLM Fallback Tool — last-resort execution layer for Operonix.
+LLM Fallback Tool — last-resort execution layer for Operonix.
 
 When no registered native tool can handle an intent, this tool:
-  1. Sends the intent + args to a local Ollama model.
+  1. Sends the intent + args to the active LLM (Groq → OpenRouter → Gemini → Ollama).
   2. Receives a structured action plan (JSON) from the model.
   3. Dispatches the plan to OllamaExecutor, which performs the real
      OS-level action (file write, shell command, HTTP call, etc.)
@@ -23,8 +23,6 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-
-import aiohttp
 
 from core.event_bus import bus
 from core.config import settings
@@ -51,7 +49,7 @@ class OllamaTool:
 
     async def run(self, action: str, args: dict) -> tuple[bool, Any]:
         """
-        Translate intent + args into a real action via Ollama LLM.
+        Translate intent + args into a real action via the active LLM provider.
 
         Parameters
         ──────────
@@ -68,7 +66,7 @@ class OllamaTool:
             {"intent": action, "args": args},
             source="ollama_tool",
         )
-        logger.info(f"🤖 OllamaTool handling intent='{action}' via LLM fallback")
+        logger.info(f"🤖 LLMFallbackTool handling intent='{action}' via Groq/LLM")
 
         # 1. Ask the LLM how to fulfil this intent
         ok, plan_or_err = await self._query_ollama(action, args)
@@ -80,46 +78,37 @@ class OllamaTool:
         return await ollama_executor.execute(plan_or_err, original_intent=action, original_args=args)
 
     # ------------------------------------------------------------------ #
-    #  Ollama LLM query                                                    #
+    #  LLM query (routes through LLMClient — Groq → OpenRouter → Gemini → Ollama)
     # ------------------------------------------------------------------ #
 
     async def _query_ollama(self, intent: str, args: dict) -> tuple[bool, Any]:
         """
-        Sends a structured prompt to Ollama and returns a parsed action plan.
+        Sends a structured prompt to the active LLM provider via LLMClient
+        and returns a parsed action plan.
+
+        Provider priority is handled entirely by LLMClient.generate():
+          Groq → OpenRouter → Gemini → Ollama (if enabled)
         """
-        model   = getattr(settings, "OLLAMA_MODEL",   "llama3")
-        base_url = getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
-        timeout  = getattr(settings, "OLLAMA_TIMEOUT",  30)
+        from brain.llm_client import llm_client  # lazy import to avoid circular
 
         prompt = self._build_prompt(intent, args)
 
-        payload = {
-            "model":  model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",   # Ollama native JSON mode (models that support it)
-        }
-
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{base_url}/api/generate",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        return False, f"Ollama HTTP {resp.status}: {text}"
-                    data = await resp.json()
+            result = await llm_client.generate(prompt, use_json=True)
+            if not result:
+                return False, "LLM returned no result for fallback plan"
 
-            raw_text: str = data.get("response", "")
-            return self._parse_plan(raw_text)
+            # llm_client.generate() returns a parsed dict when use_json=True
+            if isinstance(result, dict):
+                required = {"strategy", "action", "params"}
+                missing = required - result.keys()
+                if missing:
+                    return False, f"LLM plan missing required keys: {missing}"
+                return True, result
 
-        except aiohttp.ClientConnectorError:
-            return False, (
-                "Cannot connect to Ollama. "
-                "Is it running? (ollama serve)"
-            )
+            # Unexpected — raw string fallback
+            return self._parse_plan(str(result))
+
         except Exception as exc:
             return False, str(exc)
 
