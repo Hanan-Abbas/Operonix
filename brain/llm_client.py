@@ -14,6 +14,7 @@ from brain.intent_matcher import match_intent_local
 class LLMClient:
     def __init__(self):
         self.logger = logging.getLogger("LLMClient")
+        # Ollama URLs (kept for optional local fallback)
         self.ollama_url = f"{settings.OLLAMA_BASE_URL}/api/generate"
         self.ollama_embed_url = f"{settings.OLLAMA_BASE_URL}/api/embed"
 
@@ -28,8 +29,10 @@ class LLMClient:
     async def generate(self, prompt: str, use_json: bool = False):
         """Primary code generator.
 
-        Uses OpenRouter if a key + model are configured, otherwise local Ollama.
+        Priority: Groq → OpenRouter → Ollama (if enabled).
         """
+        if settings.GROQ_API_KEY:
+            return await self.ask(prompt, provider="groq", use_json=use_json)
         if settings.OPENROUTER_API_KEY and settings.OPENROUTER_MODEL:
             return await self.ask(prompt, provider="openrouter", use_json=use_json)
         return await self.ask(prompt, provider="local", use_json=use_json)
@@ -37,32 +40,43 @@ class LLMClient:
     async def critique(self, prompt: str, use_json: bool = True):
         """Strict code reviewer.
 
-        Uses Gemini if a key is configured, otherwise local Ollama.
+        Priority: Groq → Gemini → Ollama (if enabled).
         """
+        if settings.GROQ_API_KEY:
+            return await self.ask(prompt, provider="groq", use_json=use_json)
         if settings.GEMINI_API_KEY:
             return await self.ask(prompt, provider="gemini", use_json=use_json)
         return await self.ask(prompt, provider="local", use_json=use_json)
 
-    async def ask(self, prompt: str, provider: str = "local", use_json: bool = True):
+    async def ask(self, prompt: str, provider: str = "groq", use_json: bool = True):
         """
         Generic method to ask an LLM anything.
 
-        Priority waterfall: openrouter → gemini → local (Ollama).
-        Each cloud branch falls back to local on failure so the system
-        always gets a response as long as Ollama is running.
+        Provider waterfall: groq → openrouter → gemini → local (Ollama).
+        Each cloud branch falls back to the next provider on failure.
+        Ollama is only used if OLLAMA_ENABLED=true in .env.
         """
         try:
-            if provider == "openrouter":
+            if provider == "groq":
+                result = await self._retry(self._call_groq, prompt, use_json, retries=2)
+                if result:
+                    return result
+                self.logger.warning(
+                    "🚨 Groq failed after retries. Falling back to OpenRouter..."
+                )
+                return await self.ask(prompt, provider="openrouter", use_json=use_json)
+
+            elif provider == "openrouter":
                 result = await self._retry(self._call_openrouter, prompt, use_json, retries=2)
                 if result:
                     return result
                 self.logger.warning(
-                    "🚨 OpenRouter failed after retries. Falling back to local Ollama..."
+                    "🚨 OpenRouter failed after retries. Falling back to Gemini..."
                 )
-                return await self._call_ollama(prompt, use_json)
+                return await self.ask(prompt, provider="gemini", use_json=use_json)
 
             elif provider == "deepseek":
-                # Legacy alias — route to openrouter with the same fallback.
+                # Legacy alias — route to openrouter.
                 return await self.ask(prompt, provider="openrouter", use_json=use_json)
 
             elif provider == "gemini":
@@ -75,15 +89,19 @@ class LLMClient:
                 return await self._call_ollama(prompt, use_json)
 
             else:
+                # provider == "local"
                 return await self._call_ollama(prompt, use_json)
 
         except Exception as exc:
             self.logger.warning(
                 "🚨 Provider '%s' encountered unexpected error: %s. "
-                "Falling back to local Ollama...",
+                "Falling back to next provider...",
                 provider, exc,
             )
-            return await self._call_ollama(prompt, use_json)
+            # Last resort: try Ollama if enabled
+            if settings.OLLAMA_ENABLED:
+                return await self._call_ollama(prompt, use_json)
+            return None
 
     # ── Internal retry helper ─────────────────────────────────────────────────
 
@@ -101,7 +119,19 @@ class LLMClient:
     # ── Embedding ─────────────────────────────────────────────────────────────
 
     async def get_embedding(self, text: str) -> list[float]:
-        """Generate a vector embedding using Ollama's configured embed model."""
+        """Generate a vector embedding.
+
+        Uses Ollama's embed model if Ollama is enabled, otherwise returns empty.
+        NOTE: Groq does not offer an embeddings API. If you need embeddings without
+        Ollama, consider adding a sentence-transformers local model or OpenAI embeddings.
+        """
+        if not settings.OLLAMA_ENABLED:
+            self.logger.warning(
+                "⚠️  get_embedding called but Ollama is disabled. "
+                "Returning empty vector. Enable Ollama or add an embedding provider."
+            )
+            return []
+
         payload = {
             "model": settings.OLLAMA_EMBED_MODEL,
             "input": text,
@@ -143,44 +173,56 @@ class LLMClient:
             self.logger.warning("Failed to parse JSON. Returning raw text wrapped in dict.")
             return {"raw": text}
 
-    # ── Provider 1: Ollama (local) ────────────────────────────────────────────
+    # ── Provider 1: Groq (primary) ────────────────────────────────────────────
 
-    async def _call_ollama(self, prompt: str, use_json: bool):
+    async def _call_groq(self, prompt: str, use_json: bool):
         """
-        Call local Ollama.
+        Call Groq cloud inference API.
 
-        Model name comes from settings.OLLAMA_MODEL (default "llama3") — set
-        this in your .env to match whatever model you have pulled locally,
-        e.g. OLLAMA_MODEL=llama3.2  or  OLLAMA_MODEL=mistral.
+        Groq is the primary LLM provider — it is extremely fast (LPU hardware)
+        and offers a generous free tier. Model is configured via GROQ_MODEL in .env.
 
-        FIX: base URL now read from settings.OLLAMA_BASE_URL so it is never
-        hardcoded.  Explicit timeout prevents hangs when Ollama is slow.
+        Recommended models:
+          llama3-70b-8192    — best quality, default
+          llama3-8b-8192     — faster, lighter
+          mixtral-8x7b-32768 — large context (32k tokens)
+          gemma2-9b-it       — Google Gemma 2
+
+        Groq uses OpenAI-compatible chat completions format.
         """
+        if not settings.GROQ_API_KEY:
+            return None
+
+        model = settings.GROQ_MODEL or "llama3-70b-8192"
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
         payload: dict = {
-            "model": settings.OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
         }
         if use_json:
-            payload["format"] = "json"
+            payload["response_format"] = {"type": "json_object"}
 
-        timeout = aiohttp.ClientTimeout(total=int(getattr(settings, "OLLAMA_TIMEOUT", 60)))
+        timeout = aiohttp.ClientTimeout(total=int(settings.GROQ_TIMEOUT))
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.ollama_url, json=payload) as resp:
+                async with session.post(url, headers=headers, json=payload) as resp:
                     if resp.status == 200:
                         result = await resp.json()
-                        response_text = result.get("response", "{}")
-                        return self._safe_json(response_text) if use_json else response_text
+                        content = result["choices"][0]["message"]["content"]
+                        return self._safe_json(content) if use_json else content
                     else:
                         body = await resp.text()
                         self.logger.error(
-                            "Ollama returned non-200 status %d: %s",
-                            resp.status, body[:300],
+                            "Groq returned %d: %s", resp.status, body[:300]
                         )
                         return None
         except Exception as exc:
-            self.logger.error("Ollama call failed: %s", exc)
+            self.logger.error("Groq call failed: %s", exc)
             return None
 
     # ── Provider 2: OpenRouter ────────────────────────────────────────────────
@@ -189,17 +231,11 @@ class LLMClient:
         """
         Call OpenRouter with whatever model is configured in settings.
 
-        FIX (root cause of 404 errors): The model slug was previously
-        hardcoded to "deepseek/deepseek-r1-distill-qwen-14b" which is no
-        longer available on OpenRouter.  The slug is now read from
-        settings.OPENROUTER_MODEL so it can be changed in .env without
-        touching code.
-
-        Recommended free/low-cost models on OpenRouter (April 2026):
-          • meta-llama/llama-3.1-8b-instruct:free
-          • mistralai/mistral-7b-instruct:free
-          • google/gemma-3-27b-it:free
-          • deepseek/deepseek-chat-v3-0324:free   (DeepSeek V3, free tier)
+        Free models available on OpenRouter (as of April 2026):
+          meta-llama/llama-3.1-8b-instruct:free
+          mistralai/mistral-7b-instruct:free
+          google/gemma-3-27b-it:free
+          deepseek/deepseek-chat-v3-0324:free
 
         Set in .env:  OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct:free
         """
@@ -209,8 +245,7 @@ class LLMClient:
         model = getattr(settings, "OPENROUTER_MODEL", "").strip()
         if not model:
             self.logger.warning(
-                "OPENROUTER_MODEL is not set — skipping OpenRouter call. "
-                "Add OPENROUTER_MODEL=<slug> to your .env file."
+                "OPENROUTER_MODEL is not set — skipping OpenRouter call."
             )
             return None
 
@@ -226,8 +261,6 @@ class LLMClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
         }
-        # Only request JSON response_format for models that support it.
-        # Reasoning models (e.g. DeepSeek R1 variants) do NOT support it.
         if use_json and not self._is_reasoning_model(model):
             payload["response_format"] = {"type": "json_object"}
 
@@ -299,6 +332,49 @@ class LLMClient:
                         return None
         except Exception as exc:
             self.logger.error("Gemini call failed: %s", exc)
+            return None
+
+    # ── Provider 4: Ollama (local, optional fallback) ─────────────────────────
+
+    async def _call_ollama(self, prompt: str, use_json: bool):
+        """
+        Call local Ollama — only used when OLLAMA_ENABLED=true in .env.
+
+        This is kept as an optional offline fallback.
+        To re-enable: set OLLAMA_ENABLED=true and ensure `ollama serve` is running.
+        """
+        if not settings.OLLAMA_ENABLED:
+            self.logger.warning(
+                "⚠️  _call_ollama invoked but OLLAMA_ENABLED=false. "
+                "All providers exhausted — returning None."
+            )
+            return None
+
+        payload: dict = {
+            "model": settings.OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+        }
+        if use_json:
+            payload["format"] = "json"
+
+        timeout = aiohttp.ClientTimeout(total=int(getattr(settings, "OLLAMA_TIMEOUT", 60)))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self.ollama_url, json=payload) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        response_text = result.get("response", "{}")
+                        return self._safe_json(response_text) if use_json else response_text
+                    else:
+                        body = await resp.text()
+                        self.logger.error(
+                            "Ollama returned non-200 status %d: %s",
+                            resp.status, body[:300],
+                        )
+                        return None
+        except Exception as exc:
+            self.logger.error("Ollama call failed: %s", exc)
             return None
 
     # ── Event bus handlers ────────────────────────────────────────────────────
@@ -383,20 +459,30 @@ class LLMClient:
 
     async def _ask_intent_with_provider_fallback(self, prompt: str):
         """Try providers in priority order until one succeeds."""
-        # 1. OpenRouter (if key + model configured)
+        # 1. Groq (primary — fastest)
+        if settings.GROQ_API_KEY:
+            result = await self.ask(prompt, provider="groq", use_json=True)
+            if result and "raw" not in result:
+                return result
+
+        # 2. OpenRouter (if key + model configured)
         if settings.OPENROUTER_API_KEY and getattr(settings, "OPENROUTER_MODEL", ""):
             result = await self.ask(prompt, provider="openrouter", use_json=True)
             if result and "raw" not in result:
                 return result
 
-        # 2. Gemini (if key configured)
+        # 3. Gemini (if key configured)
         if settings.GEMINI_API_KEY:
             result = await self.ask(prompt, provider="gemini", use_json=True)
             if result and "raw" not in result:
                 return result
 
-        # 3. Local Ollama (always available)
-        return await self.ask(prompt, provider="local", use_json=True)
+        # 4. Local Ollama (only if enabled)
+        if settings.OLLAMA_ENABLED:
+            return await self.ask(prompt, provider="local", use_json=True)
+
+        self.logger.error("🚨 All LLM providers exhausted with no result.")
+        return None
 
     def _get_registered_intents(self) -> list[str]:
         try:
