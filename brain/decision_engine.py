@@ -1,139 +1,219 @@
+"""
+brain/decision_engine.py
+─────────────────────────
+Traffic cop of the AI — prioritises tasks and selects the execution pipeline
+tier (plugin -> api -> command -> ui).
+
+Changes from original
+──────────────────────
+BUG FIX — _resolve_execution_tool()
+    The original heuristic used brittle intent-prefix matching.  "create_dir"
+    starts with none of the recognised prefixes so it fell through to the
+    "api_tool" catch-all — wrong.
+
+    New approach:
+    1. If CapabilityMapper already resolved a suggested_tool from ops metadata,
+       trust it completely — no second-guessing.
+    2. Otherwise run the prefix heuristic, but with an extended prefix table
+       that covers directory / file operations.
+    3. The heuristic now maps to *tool_type* strings that match what
+       ToolRegistry uses, not arbitrary names.
+
+    This keeps the file fully flexible: adding a new ops module with its own
+    CAPABILITY_METADATA means zero changes here.
+"""
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any
+
 from core.config import settings
 from core.event_bus import bus
 from capabilities.registry import capability_registry
 
 
 class DecisionEngine:
-    """The traffic cop of the AI.
-
-    Prioritizes tasks, resolves execution pathways, and determines the best tool 
-    via the dynamic pipeline (Plugin -> API -> CLI -> UI) without hardcoding.
+    """
+    Prioritises tasks, resolves execution pathways, and determines the best
+    tool via the dynamic pipeline (Plugin -> API -> Command -> UI).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger("DecisionEngine")
-        self.task_queue = asyncio.PriorityQueue()
-        self.active_tasks = {}
+        self.task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self.active_tasks: dict = {}
 
-        # 🔄 UPGRADE: Fallback scoring instead of hardcoded strings!
-        # We classify by intent prefix to get a baseline priority score.
-        self.PREFIX_PRIORITIES = {
+        # Priority scores by intent prefix — lowest wins queue ordering
+        # (we invert scores when inserting into PriorityQueue)
+        self.PREFIX_PRIORITIES: dict[str, int] = {
             "emergency": 100,
-            "security": 90,
-            "stop": 90,
-            "cancel": 85,
-            "voice_": 50,
-            "ui_": 30,
-            "click": 30,
-            "type_": 30,
-            "file_": 20,
-            "read_": 20,
-            "write_": 20,
-            "search_": 10,
-            "web_": 10,
+            "security":  90,
+            "stop":      90,
+            "cancel":    85,
+            "voice_":    50,
+            "ui_":       30,
+            "click":     30,
+            "type_":     30,
+            "file_":     20,
+            "read_":     20,
+            "write_":    20,
+            "create_":   20,   # covers create_dir, create_file, etc.
+            "delete_":   20,   # covers delete_dir, delete_file
+            "move_":     20,
+            "list_":     20,
+            "append_":   20,
+            "search_":   10,
+            "web_":      10,
         }
 
-    async def start(self):
-        """Subscribe to MAPPED intents and start processing loop."""
-        # 🔗 FIX: We listen AFTER the Vector DB handles mapping!
+        # Intent -> tool_type fallback table.
+        # Used ONLY when CapabilityMapper did not supply a suggested_tool.
+        # Maps intent *substrings* (checked with `in`) to tool_type strings
+        # that match ToolRegistry registrations.
+        self._INTENT_TOOL_MAP: dict[str, str] = {
+            # File / directory operations -> native file_tool or shell_tool
+            "write_file":    "file_tool",
+            "append_file":   "file_tool",
+            "read_file":     "file_tool",
+            "delete_file":   "file_tool",
+            "move_file":     "file_tool",
+            "list_dir":      "file_tool",
+            "create_dir":    "shell_tool",   # mkdir via shell
+            "delete_dir":    "shell_tool",   # rmdir via shell
+            # Shell / CLI
+            "run_command":   "shell_tool",
+            "execute_script":"shell_tool",
+            "git_op":        "shell_tool",
+            "install_package":"shell_tool",
+            "check_status":  "shell_tool",
+            # Web
+            "open_url":      "api_tool",
+            "search_web":    "api_tool",
+            # UI
+            "click":         "ui_tool",
+            "type_text":     "ui_tool",
+            "scroll":        "ui_tool",
+            "move_cursor":   "ui_tool",
+        }
+
+    # ── Lifecycle ─────────────────────────────────────────────────────── #
+
+    async def start(self) -> None:
         bus.subscribe("capability_mapped", self.enqueue_task)
-
-        # Start the background worker that feeds the pipeline
         asyncio.create_task(self._process_queue())
-        self.logger.info(
-            "🧠 Decision Engine: Online. Listening to Vector Mapper."
-        )
+        self.logger.info("Decision Engine: Online. Listening to Capability Mapper.")
 
-    async def enqueue_task(self, event):
-        """Receives a mapped intent and places it in the priority queue."""
+    # ── Queuing ───────────────────────────────────────────────────────── #
+
+    async def enqueue_task(self, event: Any) -> None:
         task_data = event.data
-        intent = task_data.get("intent")
+        intent = task_data.get("intent", "")
         task_id = task_data.get("task_id")
-
-        # Determine priority dynamically
         priority_score = self._calculate_priority(intent, task_data)
-
-        # PriorityQueue in python sorts lowest-first, so we invert the score
         await self.task_queue.put((-priority_score, task_data))
-
         self.logger.info(
-            f"📥 Task [{task_id}] ({intent}) queued with priority score: {priority_score}"
+            "Task [%s] (%s) queued — priority=%d", task_id, intent, priority_score
         )
 
-    def _calculate_priority(self, intent: str, task_data: Dict[str, Any]) -> int:
-        """Calculates a numeric priority score dynamically based on prefix matching."""
-        intent = intent.lower() if intent else ""
-        
-        # 🔄 UPGRADE: Dynamic Prefix Matching (No rigid hardcoding)
-        score = 15  # Baseline fallback score
+    def _calculate_priority(self, intent: str, task_data: dict) -> int:
+        intent_lower = (intent or "").lower()
+        score = 15  # baseline
         for prefix, weight in self.PREFIX_PRIORITIES.items():
-            if intent.startswith(prefix):
+            if intent_lower.startswith(prefix):
                 score = weight
                 break
-
-        # Boost if it's directly from the user's active session
         if task_data.get("source") == "user_foreground":
             score += 25
-
         return score
 
-    async def _resolve_execution_tool(self, intent: str, context: dict) -> str:
-        """Determines the best tool following the Execution Priority Pipeline:
-        1. Plugin (App-Specific)
-        2. Native API / File
-        3. CLI / Shell
-        4. UI Automation (Last Resort)
+    # ── Tool resolution (BUG FIX) ─────────────────────────────────────── #
+
+    async def _resolve_execution_tool(
+        self, intent: str, context: dict, suggested_tool: str | None
+    ) -> str:
         """
-        # (Assuming you have access to your tool/plugin registries in practice)
-        
-        # 🥇 1. Check for Active App Plugin
+        Determine the best execution tool for this intent.
+
+        Priority:
+          1. suggested_tool from CapabilityMapper ops metadata  — trust it.
+          2. Active app plugin (app-specific plugin registered for this app).
+          3. _INTENT_TOOL_MAP exact lookup.
+          4. Prefix heuristics (extended to cover dir/file ops).
+          5. "api_tool" as the final catch-all.
+        """
+        # 1. Trust the mapper's metadata resolution
+        if suggested_tool:
+            self.logger.debug(
+                "Using mapper-supplied tool for '%s': %s", intent, suggested_tool
+            )
+            return suggested_tool
+
+        # 2. Active app plugin check
         active_app = context.get("active_window", "")
-        # Dummy check: In reality, you'd ask plugin_registry.get_for_app(active_app)
-        if active_app and intent.startswith("app_"): 
-            return "plugin_runner"
+        if active_app:
+            # plugin_registry.get_for_app() — safe import so this doesn't
+            # break if the plugin system is not yet initialised
+            try:
+                from plugins.registry import plugin_registry          # type: ignore
+                plugin = plugin_registry.get_for_app(active_app, intent)
+                if plugin:
+                    return "plugin"
+            except Exception:
+                pass
 
-        # 🥈 2. File / Native API operations
-        if any(x in intent for x in ["file_", "read_", "write_", "delete_"]):
+        # 3. Exact intent lookup in the static fallback table
+        exact = self._INTENT_TOOL_MAP.get(intent)
+        if exact:
+            self.logger.debug(
+                "Resolved tool for '%s' via intent map: %s", intent, exact
+            )
+            return exact
+
+        # 4. Prefix heuristics (substring check for flexibility)
+        intent_lower = intent.lower()
+        if any(x in intent_lower for x in ("file", "read", "write", "append")):
             return "file_tool"
-
-        # 🥉 3. Shell / CLI commands
-        if any(x in intent for x in ["run_", "execute_", "git_", "install_"]):
+        if any(x in intent_lower for x in ("dir", "folder", "mkdir", "rmdir")):
             return "shell_tool"
-
-        # 🔴 4. UI Automation Fallback
-        if any(x in intent for x in ["click", "type_", "scroll", "move_"]):
+        if any(x in intent_lower for x in ("run", "execute", "git", "install", "cmd")):
+            return "shell_tool"
+        if any(x in intent_lower for x in ("click", "type", "scroll", "move_cursor")):
             return "ui_tool"
+        if any(x in intent_lower for x in ("url", "web", "http", "search")):
+            return "api_tool"
 
-        return "api_tool" # Catch-all background API fallback
+        # 5. Final catch-all
+        self.logger.debug(
+            "No specific tool rule for '%s' — falling back to api_tool", intent
+        )
+        return "api_tool"
 
-    async def _process_queue(self):
-        """Continuously pulls the highest priority task and hands it to the planner."""
+    # ── Queue processor ───────────────────────────────────────────────── #
+
+    async def _process_queue(self) -> None:
         while True:
             try:
-                # Wait for next priority item
-                priority, task_data = await self.task_queue.get()
+                _priority, task_data = await self.task_queue.get()
                 task_id = task_data.get("task_id")
-                intent = task_data.get("intent")
+                intent = task_data.get("intent", "")
                 context = task_data.get("context", {})
 
+                # suggested_tool comes from CapabilityMapper (may be None)
+                mapper_tool: str | None = task_data.get("suggested_tool")
+
+                resolved_tool = await self._resolve_execution_tool(
+                    intent, context, mapper_tool
+                )
+                task_data["suggested_tool"] = resolved_tool
+
                 self.logger.info(
-                    f"🧠 Decision Engine: Processing task [{task_id}] ({intent})."
+                    "Decision Engine: Task [%s] (%s) -> tool='%s'",
+                    task_id, intent, resolved_tool,
                 )
 
-                # 🔄 UPGRADE: Dynamically select the best tool pipeline!
-                suggested_tool = await self._resolve_execution_tool(intent, context)
-                task_data["suggested_tool"] = suggested_tool
-                
-                self.logger.info(
-                    f"🎯 Pipeline choice for [{intent}]: Selected '{suggested_tool}'"
-                )
-
-                # Hand the task off to the planner!
                 bus.publish(
-                    "request_planning", # Planner listens to this to generate execution steps
+                    "request_planning",
                     data=task_data,
                     source="decision_engine",
                 )
@@ -142,12 +222,9 @@ class DecisionEngine:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                self.logger.error(
-                    f"Error in Decision Engine queue processor: {e}"
-                )
+            except Exception as exc:
+                self.logger.error("Queue processor error: %s", exc)
                 await asyncio.sleep(1)
 
 
-# Global instance
 decision_engine = DecisionEngine()
