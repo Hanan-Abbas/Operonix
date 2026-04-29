@@ -1,3 +1,33 @@
+"""
+safety/validator.py
+────────────────────
+Safety gatekeeper for Operonix.
+
+FIX CHANGELOG (this revision)
+──────────────────────────────
+BUG 1 — intent was read from step.get("intent") but steps use "action" key.
+    The planner builds steps as {"action": "create_dir", "args": {...}}.
+    step.get("intent") always returned None, so every step fell through to
+    the else: risk = RiskLevel.SAFE branch.  That accidentally worked for
+    benign ops, but the intent was never correctly identified, meaning
+    destructive ops like delete_file would also have been SAFE.
+    FIX: read step.get("action") first, fall back to task_data.get("intent").
+
+BUG 2 — create_dir / delete_dir / list_dir were not in any category set.
+    They fell into the else: SAFE branch by accident.  This is correct
+    behaviour for create_dir (it IS safe), but it was untested.  Explicitly
+    added them to the correct sets so behaviour is intentional not accidental:
+      create_dir  → safe_file_ops (always SAFE, path checked)
+      list_dir    → read_only_intents (always SAFE)
+      delete_dir  → destructive_intents (HIGH, requires confirmation)
+
+BUG 3 — context passed to context_validator was built from current_context
+    which was always {} (see orchestrator BUG 2).  Now that the orchestrator
+    correctly populates context, the validator builds the payload properly.
+    No code change needed here — just flows correctly once orchestrator is fixed.
+
+All other logic unchanged.
+"""
 from __future__ import annotations
 
 import logging
@@ -16,95 +46,66 @@ from safety.risk_rules import (
 
 
 class SafetyValidator:
-    """🚨 The ultimate gatekeeper for the Operonix AI OS Agent.
 
-    Analyses proposed execution steps, normalises paths to prevent bypasses,
-    integrates with ContextValidator, and intercepts tasks that violate safety
-    rules based on behavioural patterns.
-
-    FIX SUMMARY (this revision)
-    ───────────────────────────
-    1. context_validator call wrapped in try/except and None-guarded so a
-       crash or None return no longer propagates as a blanket HIGH-risk
-       escalation for every subsequent intent (was the root cause of
-       "Risk evaluation failed: 'NoneType' object has no attribute 'get'").
-
-    2. write_file / create_file are moved OUT of the RISKY bucket.
-       Creating a plain file (hello.txt, hello.py) inside a safe path is
-       NOT inherently high-risk.  get_file_op_risk already handles the
-       genuinely dangerous cases (traversal, root paths, sensitive files).
-       Previously write_file fell into the routing block, the
-       context_validator crashed, the whole branch defaulted to HIGH, and
-       the user had to confirm every single file creation.
-
-    3. _safe_get_risk wraps every risk-function call so a crash inside
-       get_command_risk / get_file_op_risk / get_web_op_risk returns LOW
-       instead of None, preventing any future NoneType propagation.
-
-    4. Unknown / unlisted intents default to SAFE (not HIGH) now that the
-       NoneType crash that was inflating them is fixed.
-    """
-
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger("SafetyValidator")
         self.violation_counts: dict[str, int] = {}
         self.max_violations = 3
 
-        self.forbidden_patterns = [
+        self.forbidden_patterns: list[str] = [
             r"node_modules",
             r"\.env$",
             r"\.git",
         ]
 
-        # Intents that are inherently read-only — always SAFE, skip risk router.
+        # Always SAFE — no risk evaluation needed
         self.read_only_intents: set[str] = {
             "read_file",
             "list_files",
+            "list_dir",        # BUG 2 FIX: explicit, was accidental SAFE
             "get_file_info",
             "search_web",
         }
 
-        # FIX: write_file / create_file are NOT inherently high-risk.
-        # get_file_op_risk handles the dangerous sub-cases (traversal, root,
-        # sensitive paths).  For a plain path like "hello.txt" it returns SAFE.
-        # Keeping write_file out of RISKY_INTENTS prevents false confirmations.
-        self.write_intents: set[str] = {
+        # SAFE after path check — get_file_op_risk handles dangerous sub-cases
+        self.safe_file_ops: set[str] = {
             "write_file",
             "create_file",
+            "create_dir",      # BUG 2 FIX: explicit, was accidental SAFE
             "move_file",
             "copy_file",
+            "append_file",
         }
 
-        # Only these intents trigger the HIGH confirmation flow by default.
+        # HIGH by policy — always requires confirmation
         self.destructive_intents: set[str] = {
             "delete_file",
+            "delete_dir",      # BUG 2 FIX: explicit, was missing entirely
             "run_command",
             "shell_command",
         }
 
-    async def start(self):
-        """Subscribe to the event bus to intercept tasks before execution."""
+    async def start(self) -> None:
         bus.subscribe("task_dispatched", self.validate_task_safety)
-        self.logger.info("🚨 Safety Validator: Active and guarding execution.")
+        self.logger.info("Safety Validator: Active and guarding execution.")
 
-    async def validate_task_safety(self, event):
-        """Analyse all steps in a plan to assess risk before letting them pass."""
-        task_data = event.data
-        task_id = task_data.get("task_id")
-        steps = task_data.get("steps", [])
+    async def validate_task_safety(self, event: object) -> None:
+        task_data       = event.data
+        task_id         = task_data.get("task_id")
+        steps           = task_data.get("steps", [])
         current_context = task_data.get("context", {})
 
-        self.logger.debug("Assessing safety for task [%s]…", task_id)
+        self.logger.debug("Assessing safety for task [%s]...", task_id)
 
         for index, step in enumerate(steps):
-            intent = step.get("intent") or task_data.get("intent")
-            args = step.get("args", {})
+            # BUG 1 FIX: steps use "action" key, not "intent"
+            intent = step.get("action") or step.get("intent") or task_data.get("intent")
+            args   = step.get("args", {})
 
-            # ── 1. Path normalisation ─────────────────────────────────────────
+            # ── 1. Path normalisation ─────────────────────────────────────
             target_path = args.get("path") or args.get("target")
             if target_path:
                 normalized_path = os.path.normpath(target_path)
-
                 for pattern in self.forbidden_patterns:
                     if re.search(pattern, normalized_path, re.IGNORECASE):
                         await self._handle_violation(
@@ -112,25 +113,21 @@ class SafetyValidator:
                             f"Step {index} attempted to access a restricted pattern: {pattern}",
                         )
                         return
-
                 if "path" in args:
                     args["path"] = normalized_path
                 elif "target" in args:
                     args["target"] = normalized_path
 
-            # ── 2. Context & permission check ─────────────────────────────────
+            # ── 2. Context & permission check ─────────────────────────────
             mock_state = {"target_path": target_path}
             mock_state.update(current_context.get("state", {}))
 
             full_context_payload = {
                 "active_window": current_context.get("active_window", ""),
-                "app_type": current_context.get("app_type"),
-                "state": mock_state,
+                "app_type":      current_context.get("app_type"),
+                "state":         mock_state,
             }
 
-            # FIX: Wrap context_validator in try/except AND guard against None.
-            # Previously a crash or None return here caused the *entire* task to
-            # escalate to HIGH ("NoneType has no attribute 'get'" in orchestrator).
             try:
                 validation_result = await context_validator.validate_action_context(
                     intent, full_context_payload
@@ -138,16 +135,15 @@ class SafetyValidator:
                 if validation_result is None:
                     self.logger.warning(
                         "context_validator returned None for intent '%s' on task [%s]. "
-                        "Treating as valid to avoid false high-risk escalation.",
+                        "Treating as valid.",
                         intent, task_id,
                     )
-                    is_valid, reason = True, "context_validator returned None — defaulting to valid"
+                    is_valid, reason = True, "context_validator returned None"
                 else:
                     is_valid, reason = validation_result
             except Exception as ctx_err:
                 self.logger.warning(
-                    "context_validator raised an exception for task [%s]: %s. "
-                    "Defaulting to valid.",
+                    "context_validator raised for task [%s]: %s. Defaulting to valid.",
                     task_id, ctx_err,
                 )
                 is_valid, reason = True, str(ctx_err)
@@ -159,51 +155,51 @@ class SafetyValidator:
                 )
                 return
 
-            # ── 3. Dynamic risk analysis ──────────────────────────────────────
+            # ── 3. Risk analysis ───────────────────────────────────────────
 
-            # A. Read-only intents — always SAFE
             if intent in self.read_only_intents:
                 risk = RiskLevel.SAFE
 
-            # B. Shell / command execution — use get_command_risk
             elif intent in ("run_command", "shell_command"):
-                cmd = args.get("command", "")
+                cmd  = args.get("command", "")
                 risk = self._safe_get_risk(
                     get_command_risk, cmd, task_id=task_id, intent=intent
                 )
 
-            # C. Write / move / copy — use get_file_op_risk.
-            #    FIX: plain paths (e.g. "hello.txt") return SAFE from
-            #    get_file_op_risk, so no confirmation is required.
-            elif intent in self.write_intents:
+            elif intent in self.safe_file_ops:
+                # create_dir, write_file etc. — SAFE unless path is dangerous
                 path = args.get("path") or args.get("target", "")
                 risk = self._safe_get_risk(
                     get_file_op_risk, intent, path, task_id=task_id, intent=intent
                 )
 
-            # D. Destructive file ops — use get_file_op_risk (may return HIGH)
             elif intent == "delete_file":
                 path = args.get("path") or args.get("target", "")
                 risk = self._safe_get_risk(
                     get_file_op_risk, intent, path, task_id=task_id, intent=intent
                 )
-                # Deletion of any non-root file is at least HIGH by policy.
                 if risk == RiskLevel.SAFE:
                     risk = RiskLevel.HIGH
 
-            # E. Web / network ops
+            elif intent in self.destructive_intents:
+                # delete_dir and any future destructive ops
+                path = args.get("path") or args.get("target", "")
+                risk = self._safe_get_risk(
+                    get_file_op_risk, intent, path, task_id=task_id, intent=intent
+                )
+                if risk == RiskLevel.SAFE:
+                    risk = RiskLevel.HIGH
+
             elif intent == "open_url":
-                url = args.get("url") or args.get("query", "")
+                url  = args.get("url") or args.get("query", "")
                 risk = self._safe_get_risk(
                     get_web_op_risk, url, task_id=task_id, intent=intent
                 )
 
             else:
-                # Unknown / unlisted intents — SAFE by default.
-                # Destructive operations have explicit entries above.
                 risk = RiskLevel.SAFE
 
-            # ── 4. Execute risk judgment ──────────────────────────────────────
+            # ── 4. Risk judgment ───────────────────────────────────────────
             if risk == RiskLevel.FORBIDDEN:
                 await self._handle_violation(
                     task_id,
@@ -219,36 +215,24 @@ class SafetyValidator:
                 bus.publish(
                     "confirmation_required",
                     {
-                        "task_id": task_id,
-                        "reason": (
-                            f"High risk detected on step {index} with intent '{intent}'"
-                        ),
+                        "task_id":    task_id,
+                        "reason":     f"High risk on step {index} intent '{intent}'",
                         "step_index": index,
-                        "step_data": step,
+                        "step_data":  step,
                     },
                     source="safety_validator",
                 )
                 return
 
-        self.logger.info("✅ Task [%s] passed all safety checks.", task_id)
+        self.logger.info("Task [%s] passed all safety checks.", task_id)
         bus.publish("task_safety_cleared", task_data, source="safety_validator")
 
     def _safe_get_risk(self, func, *args, task_id=None, intent=None) -> RiskLevel:
-        """
-        Wrap every risk-evaluation function call in try/except.
-
-        FIX: Previously a crash inside get_command_risk / get_file_op_risk /
-        get_web_op_risk returned None.  Any downstream .get() on that None
-        caused 'NoneType object has no attribute get', caught by the
-        orchestrator and defaulted to SAFE/Locked (which surfaced as HIGH).
-        Now we catch the crash here and return LOW so benign operations are
-        not falsely escalated.
-        """
         try:
             result = func(*args)
             if result is None:
                 self.logger.warning(
-                    "Risk function %s returned None for intent '%s' on task [%s]. "
+                    "Risk function %s returned None for intent '%s' task [%s]. "
                     "Defaulting to LOW.",
                     func.__name__, intent, task_id,
                 )
@@ -256,25 +240,27 @@ class SafetyValidator:
             return result
         except Exception as exc:
             self.logger.warning(
-                "Risk evaluation crashed in %s for intent '%s' on task [%s]: %s. "
+                "Risk evaluation crashed in %s for intent '%s' task [%s]: %s. "
                 "Defaulting to LOW.",
                 func.__name__, intent, task_id, exc,
             )
             return RiskLevel.LOW
 
-    async def _handle_violation(self, task_id: str, reason: str):
-        """Handle violations and track repeated offences."""
+    async def _handle_violation(self, task_id: str, reason: str) -> None:
         self.violation_counts.setdefault(task_id, 0)
         self.violation_counts[task_id] += 1
 
         self.logger.warning(
-            "🛑 Safety violation on task %s (Offence %d/%d): %s",
-            task_id, self.violation_counts[task_id], self.max_violations, reason,
+            "Safety violation on task %s (Offence %d/%d): %s",
+            task_id,
+            self.violation_counts[task_id],
+            self.max_violations,
+            reason,
         )
 
         if self.violation_counts[task_id] >= self.max_violations:
             self.logger.critical(
-                "🚨 Task %s exceeded maximum safety violations! Terminating.", task_id
+                "Task %s exceeded maximum safety violations! Terminating.", task_id
             )
             bus.publish(
                 "task_aborted",
@@ -287,12 +273,11 @@ class SafetyValidator:
             "task_failed",
             {
                 "task_id": task_id,
-                "error": f"Safety Violation: {reason}",
-                "stage": "safety_check",
+                "error":   f"Safety Violation: {reason}",
+                "stage":   "safety_check",
             },
             source="safety_validator",
         )
 
 
-# Global instance
 safety_validator = SafetyValidator()
