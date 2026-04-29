@@ -62,8 +62,8 @@ class CapabilityMapper:
         "search_web":  {"q": "query"},
         "open_url":    {"link": "url"},
         "move_file":   {"src": "path", "dst": "destination"},
-        # create_dir / delete_dir: dir_name and location are kept as-is;
-        # _resolve_path() in file_ops understands them directly.
+        "create_dir":  {"name": "dir_name"},
+        "delete_dir":  {"name": "dir_name"},
     }
 
     def __init__(self) -> None:
