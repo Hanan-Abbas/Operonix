@@ -187,7 +187,7 @@ class ModeManager:
             return
 
         logger.info("ModeManager: tearing down VOICE subsystem …")
-
+        orch._voice_active = False
         # 1. Signal pipeline to stop gracefully after finishing the utterance.
         pipeline = getattr(orch, "pipeline", None)
         if pipeline is not None:
