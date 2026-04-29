@@ -197,8 +197,14 @@ class Orchestrator:
     async def _background_wake_loop(self) -> None:
         loop = asyncio.get_running_loop()
         while self.is_running:
-            if getattr(self, "_voice_active", True):
-                await loop.run_in_executor(None, self.wake_detector.detect)
+            if not getattr(self, "_voice_active", True):
+                await asyncio.sleep(0.05)
+                continue
+            future = loop.run_in_executor(None, self.wake_detector.detect)
+            try:
+                await asyncio.wait_for(asyncio.shield(future), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass  # re-enters loop → re-checks _voice_active immediately
             await asyncio.sleep(0.005)
 
     async def _emit_app_context_loop(self) -> None:
