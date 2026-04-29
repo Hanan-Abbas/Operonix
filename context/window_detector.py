@@ -1,44 +1,60 @@
-import platform
-import asyncio
-import subprocess
-from core.event_bus import bus
-from context.app_classifier import classifier   # ← unchanged import
+"""
+context/window_detector.py
+───────────────────────────
 
-# ── Own-window identifiers ────────────────────────────────────────────────────
-# Any active window whose title contains one of these strings (case-insensitive)
-# is considered part of the Operonix UI itself.  The detector will NOT emit a
-# context_snapshot_ready for such windows during background polls — the last
-# known *external* context is preserved instead.
+FIX CHANGELOG (this revision)
+──────────────────────────────
+BUG — snapshot never contained a "cwd" field.
+    The planner and executor need cwd to resolve location hints like
+    "here" or "current window" into real filesystem paths.  Without it,
+    os.getcwd() (the Operonix process directory) was used as fallback,
+    which is wrong — the user wants the directory of their active app.
+
+    FIX: Added _get_window_cwd() which resolves the CWD of the focused
+    window's process using OS-native methods:
+      Linux   — /proc/<pid>/cwd  symlink (zero dependencies)
+      Windows — psutil.Process(pid).cwd()  (psutil already in requirements)
+      macOS   — psutil.Process(pid).cwd()
+
+    PID is obtained from the same OS APIs already used for the title.
+    If CWD resolution fails for any reason, falls back to os.getcwd()
+    so nothing downstream breaks.
+
+    The "cwd" key is now always present in the snapshot dict.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import platform
+import subprocess
+from pathlib import Path
+
+from core.event_bus import bus
+from context.app_classifier import classifier
+
+logger = logging.getLogger("WindowDetector")
+
 _OWN_WINDOW_SUBSTRINGS = [
     "operonix",
-    "panel",               # matches "Operonix Panel", "Command Panel", etc.
+    "panel",
     "command panel",
 ]
 
 
 class WindowDetector:
-    def __init__(self):
+    def __init__(self) -> None:
         self.os_name = platform.system()
-        self.ewmh = None
+        self.ewmh    = None
         self.win32gui = None
-        self.last_title = None
-
-        # FIX (Bug 2): cache the last window context that was NOT our own panel.
-        # When the user clicks into the panel, we keep serving this cached value
-        # so the orchestrator's app_context_changed loop and any snapshot consumer
-        # always see the real app the user was working in.
+        self.last_title: str | None = None
         self._last_external_snapshot: dict | None = None
-
         self._setup_os_imports()
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # ── OS import setup ────────────────────────────────────────────────────
 
-    def _is_own_window(self, title: str) -> bool:
-        """Return True if *title* belongs to the Operonix panel / UI."""
-        t = (title or "").lower()
-        return any(sub in t for sub in _OWN_WINDOW_SUBSTRINGS)
-
-    def _setup_os_imports(self):
+    def _setup_os_imports(self) -> None:
         try:
             if self.os_name == "Windows":
                 import win32gui
@@ -56,108 +72,159 @@ class WindowDetector:
                     self.NSWorkspace = NSWorkspace
                     self.CGWindowListCopyWindowInfo = CGWindowListCopyWindowInfo
                 except ImportError:
-                    print("⚠️  WindowDetector: Mac libraries (pyobjc) missing.")
-        except Exception as e:
-            print(f"⚠️  WindowDetector Setup Error: {e}")
+                    logger.warning("WindowDetector: Mac libraries (pyobjc) missing.")
+        except Exception as exc:
+            logger.warning("WindowDetector setup error: %s", exc)
 
-    async def start(self):
+    def _is_own_window(self, title: str) -> bool:
+        t = (title or "").lower()
+        return any(sub in t for sub in _OWN_WINDOW_SUBSTRINGS)
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
-        print(f"🌍 Window Detector: Active on {self.os_name}")
+        logger.info("Window Detector: Active on %s", self.os_name)
         await asyncio.sleep(1)
         await self.capture_snapshot(
-            type('Event', (object,), {'data': {'task_id': 'initial_boot'}})()
+            type("Event", (), {"data": {"task_id": "initial_boot"}})()
         )
         asyncio.create_task(self._poll_loop())
 
-    async def _poll_loop(self):
+    async def _poll_loop(self) -> None:
         while True:
             await self.capture_snapshot(
-                type('Event', (object,), {'data': {'task_id': 'background_poll'}})()
+                type("Event", (), {"data": {"task_id": "background_poll"}})()
             )
             await asyncio.sleep(2)
 
-    # ── OS-specific title fetchers ────────────────────────────────────────────
+    # ── OS-specific title + PID fetchers ──────────────────────────────────
 
-    def _get_linux_title(self) -> str:
+    def _get_linux_info(self) -> tuple[str, int | None]:
+        """Returns (window_title, pid)."""
+        title = "Unknown Linux Window"
+        pid: int | None = None
         try:
-            return subprocess.check_output(
+            title = subprocess.check_output(
                 ["xdotool", "getactivewindow", "getwindowname"],
-                stderr=subprocess.STDOUT
-            ).decode("utf-8").strip()
+                stderr=subprocess.STDOUT,
+            ).decode().strip()
+            pid_str = subprocess.check_output(
+                ["xdotool", "getactivewindow", "getwindowpid"],
+                stderr=subprocess.STDOUT,
+            ).decode().strip()
+            pid = int(pid_str) if pid_str.isdigit() else None
         except Exception:
             try:
                 if self.ewmh:
                     win = self.ewmh.getActiveWindow()
                     if win:
-                        name = (self.ewmh.get_wm_name(win)
-                                if hasattr(self.ewmh, 'get_wm_name')
-                                else self.ewmh.getWMName(win))
-                        return name.decode('utf-8') if isinstance(name, bytes) else name
+                        name = (
+                            self.ewmh.get_wm_name(win)
+                            if hasattr(self.ewmh, "get_wm_name")
+                            else self.ewmh.getWMName(win)
+                        )
+                        title = name.decode("utf-8") if isinstance(name, bytes) else name
+                        # Try getting PID via EWMH _NET_WM_PID
+                        try:
+                            pid = self.ewmh._getProperty("_NET_WM_PID", win)
+                        except Exception:
+                            pass
             except Exception:
                 pass
-        return "Unknown Linux Window"
+        return title, pid
 
-    def _get_macos_title(self) -> str:
+    def _get_windows_info(self) -> tuple[str, int | None]:
+        """Returns (window_title, pid)."""
+        try:
+            import ctypes
+            hwnd  = self.win32gui.GetForegroundWindow()
+            title = self.win32gui.GetWindowText(hwnd)
+            pid   = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return title, pid.value or None
+        except Exception:
+            return "Unknown Windows Window", None
+
+    def _get_macos_info(self) -> tuple[str, int | None]:
+        """Returns (window_title, pid)."""
         try:
             curr_app = self.NSWorkspace.sharedWorkspace().frontmostApplication()
-            curr_pid = curr_app.processIdentifier()
+            pid      = curr_app.processIdentifier()
             window_list = self.CGWindowListCopyWindowInfo(1 << 0, 0)
             for window in window_list:
-                if window['kCGWindowOwnerPID'] == curr_pid:
-                    return window.get('kCGWindowName', curr_app.localizedName())
-            return curr_app.localizedName()
+                if window["kCGWindowOwnerPID"] == pid:
+                    return window.get("kCGWindowName", curr_app.localizedName()), pid
+            return curr_app.localizedName(), pid
         except Exception:
-            return "Unknown Mac Window"
+            return "Unknown Mac Window", None
 
-    # ── Snapshot capture ──────────────────────────────────────────────────────
+    # ── CWD resolution ─────────────────────────────────────────────────────
 
-    async def capture_snapshot(self, event):
-        data_payload = getattr(event, 'data', {})
-        task_id = data_payload.get("task_id", "background_poll")
+    def _get_window_cwd(self, pid: int | None) -> str:
+        """
+        Resolve the working directory of the process that owns the focused
+        window.  Falls back to os.getcwd() if resolution fails.
 
-        current_title = "Unknown"
+        Linux:   /proc/<pid>/cwd symlink — no extra dependencies.
+        Windows: psutil.Process(pid).cwd()
+        macOS:   psutil.Process(pid).cwd()
+        """
+        if not pid:
+            return os.getcwd()
 
         try:
-            # 1. Fetch the active window title
             if self.os_name == "Linux":
-                current_title = self._get_linux_title()
+                cwd_link = Path(f"/proc/{pid}/cwd")
+                if cwd_link.exists():
+                    return str(cwd_link.resolve())
+
+            else:  # Windows and macOS
+                import psutil
+                return psutil.Process(pid).cwd()
+
+        except Exception as exc:
+            logger.debug("CWD resolution failed for pid=%s: %s", pid, exc)
+
+        return os.getcwd()
+
+    # ── Snapshot capture ───────────────────────────────────────────────────
+
+    async def capture_snapshot(self, event: object) -> None:
+        data_payload  = getattr(event, "data", {})
+        task_id       = data_payload.get("task_id", "background_poll")
+        current_title = "Unknown"
+        pid: int | None = None
+
+        try:
+            if self.os_name == "Linux":
+                current_title, pid = self._get_linux_info()
             elif self.os_name == "Windows" and self.win32gui:
-                hwnd = self.win32gui.GetForegroundWindow()
-                current_title = self.win32gui.GetWindowText(hwnd)
+                current_title, pid = self._get_windows_info()
             elif self.os_name == "Darwin":
-                current_title = self._get_macos_title()
+                current_title, pid = self._get_macos_info()
 
-            # ── FIX (Bug 2): Own-window guard ─────────────────────────────────
-            # If the user clicked into the Operonix panel, the foreground title
-            # will match one of our own identifiers.  For background polls we
-            # silently serve the last external snapshot so no context_changed
-            # event is emitted and the task in flight keeps its original context.
-            # For explicit snapshots (task-triggered), we still serve the cached
-            # external context rather than the panel window.
+            # Own-window guard — serve cached external snapshot
             if self._is_own_window(current_title):
-                if self._last_external_snapshot is not None:
-                    # Re-emit the last good external snapshot so explicit
-                    # request_context_snapshot callers still get a response.
-                    if task_id != "background_poll":
-                        cached = dict(self._last_external_snapshot)
-                        cached["task_id"] = task_id   # keep task_id current
-                        await bus.emit(
-                            "context_snapshot_ready", cached, source="window_detector"
-                        )
-                # Either way: do NOT update last_title or emit a new snapshot
-                # that would overwrite the real app context.
+                if self._last_external_snapshot is not None and task_id != "background_poll":
+                    cached = dict(self._last_external_snapshot)
+                    cached["task_id"] = task_id
+                    await bus.emit("context_snapshot_ready", cached, source="window_detector")
                 return
-            # ── end fix ───────────────────────────────────────────────────────
 
-            # 2. Skip if nothing changed during background polls
+            # Skip unchanged titles during background polls
             if current_title == self.last_title and task_id == "background_poll":
                 return
 
             self.last_title = current_title
 
-            # 3. Classify — use async path so low-confidence titles can fall
-            #    back to the LLM without blocking the poll loop.
+            # Classify window
             app_context = await classifier.classify_async(current_title)
+
+            # Resolve CWD of the focused window's process
+            cwd = await asyncio.get_running_loop().run_in_executor(
+                None, self._get_window_cwd, pid
+            )
 
             snapshot = {
                 "window_title": current_title,
@@ -167,17 +234,22 @@ class WindowDetector:
                 "confidence":  app_context.confidence,
                 "llm_used":    app_context.llm_used,
                 "app_context": app_context.to_dict(),
+                "cwd":         cwd,          # ← NEW: always present
+                "window_pid":  pid,          # ← NEW: available for tools
                 "task_id":     task_id,
             }
 
-            # Cache this as the last known external (non-panel) snapshot.
             self._last_external_snapshot = snapshot
-
             await bus.emit("context_snapshot_ready", snapshot, source="window_detector")
 
-        except Exception as e:
+            logger.debug(
+                "Snapshot: window='%s' cwd='%s' pid=%s",
+                current_title, cwd, pid,
+            )
+
+        except Exception as exc:
             if task_id != "background_poll":
-                print(f"❌ WindowDetector Error: {e}")
+                logger.error("WindowDetector error: %s", exc)
 
 
 window_detector = WindowDetector()
