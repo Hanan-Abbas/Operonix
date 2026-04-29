@@ -50,6 +50,7 @@ from memory.long_term_memory import long_term_memory
 from memory.session_memory import session_memory
 from memory.vector_store import vector_store
 from safety.confirmation import confirmation_manager
+from safety.validator import safety_validator
 from learning.learner import learner
 from learning.pruning import pattern_pruner
 from api.routes.health import system_state
@@ -131,37 +132,42 @@ class LifecycleManager:
         await state_extractor.start()
         await window_detector.start()   # fires context_snapshot_ready → app_context_changed
 
-        # 7. Executor
+        # 7. Safety validator — MUST be started before executor so its
+        #    task_dispatched subscription is registered before any plan
+        #    is dispatched by the planner.
+        await safety_validator.start()
+
+        # 8. Executor
         await executor.start()
         system_state.executor_running = True
 
-        # 8. Memory
+        # 9. Memory
         await session_memory.start()
         await long_term_memory.start()
         await vector_store.start()
         await confirmation_manager.start()
 
-        # 9. Orchestrator — boots the panel Qt thread internally when PANEL_ENABLED=true
+        # 10. Orchestrator — boots the panel Qt thread internally when PANEL_ENABLED=true
         await orchestrator.start()
         system_state.orchestrator_running = True
 
-        # 10. Mode manager — must run AFTER orchestrator.start() so the orchestrator
+        # 11. Mode manager — must run AFTER orchestrator.start() so the orchestrator
         #     instance is fully initialised before mode_manager references it.
         #     initialise() wires the action_completed listener and applies the boot
         #     mode (CURRENT_MODE from .env, defaulting to "panel").
         mode_manager.initialise(orchestrator)       # ← NEW
         logger.info("🔀 ModeManager: initialised (boot mode=%s).", mode_manager.current_mode.name)
 
-        # 11. Plugin system
+        # 12. Plugin system
         await start_plugin_system()
 
-        # 12. STT health reference
+        # 13. STT health reference
         stt_instance = SpeechToText()
         system_state.stt_model = stt_instance
         system_state.llm_client = llm_client
         system_state.audio_manager = orchestrator.audio_manager
 
-        # 13. Learning system
+        # 14. Learning system
         try:
             await learner.start()
             logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
