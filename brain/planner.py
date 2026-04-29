@@ -124,7 +124,13 @@ class Planner:
         location = str(resolved.get("location", "")).lower()
 
         # Resolve "current window" / "current" to a real CWD
-        if "current" in location:
+        # Resolve all natural-language "here" variants to the active CWD.
+        # The LLM may produce: "here", "current", "current window",
+        # "current directory", "this folder", etc.
+        _HERE_SYNONYMS = {"here", "current", "this", "pwd", "active", "open"}
+        location_words = set(location.replace("_", " ").split())
+
+        if location_words & _HERE_SYNONYMS or "current" in location or "here" in location:
             # Try context dict hierarchy (populated by window_detector /
             # orchestrator at snapshot time)
             cwd = (
