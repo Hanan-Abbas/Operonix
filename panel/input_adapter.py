@@ -24,16 +24,18 @@ Lifecycle:
   • PanelInputAdapter.stop() disconnects the signal — no more events fire.
 
 No Qt imports at module level so this file loads safely in headless mode.
+
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from core.event_bus import bus
 
 if TYPE_CHECKING:
     from panel.panel_renderer import PanelRenderer
+    from panel.panel_state import PanelState
 
 logger = logging.getLogger("PanelInputAdapter")
 
@@ -43,11 +45,15 @@ class PanelInputAdapter:
     Connects PanelRenderer.query_submitted → EventBus("text_query_received").
 
     Instantiated once by PanelController and passed to it.
-    The adapter holds a weak reference to the renderer so it does not
-    prevent garbage collection when the panel is stopped.
+
+    Args:
+        panel_state: PanelState instance. The adapter reads
+                     panel_state.pre_panel_context on every submission to
+                     inject the correct cwd into the query payload.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, panel_state: "PanelState") -> None:
+        self._panel_state = panel_state
         self._renderer: Optional[PanelRenderer] = None
         self._connected: bool = False
 
@@ -120,17 +126,36 @@ class PanelInputAdapter:
             logger.debug("PanelInputAdapter: empty query ignored.")
             return
 
-        logger.info(
-            "PanelInputAdapter: publishing query (method=%r): %r",
-            chosen_method, query,
-        )
+        # Read the context that was snapshotted by HotkeyListener *before*
+        # the panel window appeared. This is the user's real working context.
+        pre_context: Optional[dict] = self._panel_state.pre_panel_context
+
+        payload: dict[str, Any] = {
+            "query":            query,
+            "preferred_method": chosen_method if chosen_method != "auto" else None,
+            "source":           "panel",
+        }
+
+        if pre_context is not None:
+            # Inject cwd directly at the top level so orchestrator/planner
+            # can read it without knowing about pre_panel_context.
+            payload["pre_panel_context"] = pre_context
+            payload["cwd"] = pre_context.get("cwd")
+            logger.info(
+                "PanelInputAdapter: publishing query (method=%r, cwd=%r): %r",
+                chosen_method,
+                pre_context.get("cwd"),
+                query,
+            )
+        else:
+            logger.info(
+                "PanelInputAdapter: publishing query (method=%r, no pre-context): %r",
+                chosen_method,
+                query,
+            )
 
         bus.publish(
             "text_query_received",
-            {
-                "query":            query,
-                "preferred_method": chosen_method if chosen_method != "auto" else None,
-                "source":           "panel",
-            },
+            payload,
             source="panel_input_adapter",
         )
