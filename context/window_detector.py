@@ -4,7 +4,7 @@ context/window_detector.py
 
 FIX CHANGELOG (this revision)
 ──────────────────────────────
-BUG — snapshot never contained a "cwd" field.
+BUG 1 — snapshot never contained a "cwd" field.
     The planner and executor need cwd to resolve location hints like
     "here" or "current window" into real filesystem paths.  Without it,
     os.getcwd() (the Operonix process directory) was used as fallback,
@@ -21,6 +21,16 @@ BUG — snapshot never contained a "cwd" field.
     so nothing downstream breaks.
 
     The "cwd" key is now always present in the snapshot dict.
+
+BUG 2 — own-window guard silently dropped the snapshot when
+         _last_external_snapshot was None (e.g. first launch, or the
+         background poll hadn't run yet before the user triggered the hotkey).
+
+    FIX: capture_snapshot() now also accepts an optional "pre_panel_context"
+    key in the event payload (written there by input_adapter, sourced from
+    HotkeyListener). When the own-window guard fires and
+    _last_external_snapshot is None, we use pre_panel_context as the
+    fallback so the orchestrator always gets a valid cwd.
 """
 from __future__ import annotations
 
@@ -125,7 +135,6 @@ class WindowDetector:
                             else self.ewmh.getWMName(win)
                         )
                         title = name.decode("utf-8") if isinstance(name, bytes) else name
-                        # Try getting PID via EWMH _NET_WM_PID
                         try:
                             pid = self.ewmh._getProperty("_NET_WM_PID", win)
                         except Exception:
@@ -204,12 +213,33 @@ class WindowDetector:
             elif self.os_name == "Darwin":
                 current_title, pid = self._get_macos_info()
 
-            # Own-window guard — serve cached external snapshot
+            # Own-window guard — the panel is active, serve cached context.
             if self._is_own_window(current_title):
-                if self._last_external_snapshot is not None and task_id != "background_poll":
-                    cached = dict(self._last_external_snapshot)
-                    cached["task_id"] = task_id
-                    await bus.emit("context_snapshot_ready", cached, source="window_detector")
+                if task_id == "background_poll":
+                    # Background polls while panel is open are intentionally
+                    # silent — we don't want to overwrite the last real context.
+                    return
+
+                # For real task snapshots: prefer the last known external
+                # snapshot. If that is not available yet (first launch edge
+                # case), fall back to pre_panel_context that was injected
+                # into the event payload by input_adapter.
+                cached = self._last_external_snapshot
+                if cached is None:
+                    cached = data_payload.get("pre_panel_context")
+
+                if cached is not None:
+                    reply = dict(cached)
+                    reply["task_id"] = task_id
+                    await bus.emit("context_snapshot_ready", reply, source="window_detector")
+                    logger.debug(
+                        "Own-window guard: served cached context cwd=%s for task %s",
+                        reply.get("cwd"), task_id,
+                    )
+                else:
+                    logger.warning(
+                        "Own-window guard: no cached context available for task %s", task_id
+                    )
                 return
 
             # Skip unchanged titles during background polls
@@ -234,8 +264,8 @@ class WindowDetector:
                 "confidence":  app_context.confidence,
                 "llm_used":    app_context.llm_used,
                 "app_context": app_context.to_dict(),
-                "cwd":         cwd,          # ← NEW: always present
-                "window_pid":  pid,          # ← NEW: available for tools
+                "cwd":         cwd,
+                "window_pid":  pid,
                 "task_id":     task_id,
             }
 
