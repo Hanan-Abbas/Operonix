@@ -43,6 +43,15 @@ FIXES APPLIED
      when errors are handled.  These are cosmetic but alarming; we suppress
      them by redirecting ALSA's error handler via ctypes when available.
      This is best-effort — the actual errors are still handled in Python.
+
+  6. `is_running` renamed to `_is_running` (private flag) so external callers
+     such as ModeManager can safely check `getattr(audio_manager, "_is_running",
+     False)` as a defensive guard before calling stop().  A read-only property
+     `is_running` is retained for backward compatibility with any code that
+     reads (but does not assign to) the old public name.  stop() now also sets
+     `_is_running = False` explicitly *after* the stream.close() call in
+     addition to the earlier in-lock assignment, guaranteeing the flag is False
+     even if close() raises.
 """
 from __future__ import annotations
 
@@ -103,7 +112,7 @@ class AudioManager:
         chunk: Optional[int] = None,
         auto_start: bool = False,
     ) -> None:
-        # _lock guards is_running / start / stop
+        # _lock guards _is_running / start / stop
         self._lock = threading.Lock()
         # _restart_lock serialises stream teardown+creation during restart.
         # FIX: Separate from _lock to avoid deadlock between read_chunk()
@@ -117,11 +126,27 @@ class AudioManager:
         self.chunk: int = chunk or getattr(settings, "AUDIO_CHUNK", 1280)
 
         self.stream: Optional[sd.InputStream] = None
-        self.is_running: bool = False
+        # FIX: Private flag — external callers must use the read-only
+        # `is_running` property or check `_is_running` directly via getattr.
+        self._is_running: bool = False
         self.overflow_count: int = 0
 
         if auto_start:
             self.start()
+
+    # ── Backward-compatible public flag ───────────────────────────────────────
+
+    @property
+    def is_running(self) -> bool:
+        """Read-only alias for `_is_running`.
+
+        Retained so existing code that reads (but never assigns to)
+        `audio_manager.is_running` continues to work without modification.
+        External callers that need a defensive guard should check
+        `_is_running` directly via ``getattr(mgr, "_is_running", False)``
+        so the intent is explicit.
+        """
+        return self._is_running
 
     # ── Device introspection ──────────────────────────────────────────────────
 
@@ -146,7 +171,7 @@ class AudioManager:
                 "sample_rate": self.rate,
                 "chunk_size": self.chunk,
                 "channels": int(raw.get("max_input_channels", 1)),
-                "is_running": self.is_running,
+                "is_running": self._is_running,
                 "overflow_count": self.overflow_count,
             }
         except Exception as exc:
@@ -156,7 +181,7 @@ class AudioManager:
                 "index": self.device,
                 "sample_rate": self.rate,
                 "chunk_size": self.chunk,
-                "is_running": self.is_running,
+                "is_running": self._is_running,
                 "overflow_count": self.overflow_count,
             }
 
@@ -165,7 +190,7 @@ class AudioManager:
     def start(self) -> bool:
         """Open the mic stream.  Returns True on success."""
         with self._lock:
-            if self.is_running:
+            if self._is_running:
                 return True
 
             device_label = self.device if self.device is not None else "default"
@@ -187,7 +212,7 @@ class AudioManager:
                     # Assign atomically after start() succeeds so read_chunk()
                     # never sees a stream that is allocated but not yet started.
                     self.stream = stream
-                    self.is_running = True
+                    self._is_running = True
                     logger.info(
                         "✅ AudioManager: Mic is LIVE (device=%s, rate=%d, chunk=%d).",
                         device_label, self.rate, self.chunk,
@@ -209,7 +234,7 @@ class AudioManager:
             logger.error(
                 "❌ AudioManager: Could not open mic after %d attempts.", _MAX_OPEN_RETRIES
             )
-            self.is_running = False
+            self._is_running = False
             return False
 
     def stop(self) -> None:
@@ -217,7 +242,7 @@ class AudioManager:
         with self._lock:
             stream = self.stream
             self.stream = None          # Nullify before close so read_chunk sees None
-            self.is_running = False
+            self._is_running = False
 
         if stream is not None:
             try:
@@ -226,6 +251,11 @@ class AudioManager:
                 logger.info("🛑 AudioManager: Stream stopped.")
             except Exception as exc:
                 logger.warning("AudioManager: error while closing stream — %s", exc)
+            finally:
+                # FIX: Guarantee _is_running is False even if close() raises,
+                # so external guards like `getattr(mgr, "_is_running", False)`
+                # always see a consistent False after stop() returns.
+                self._is_running = False
 
     def restart(self) -> bool:
         """
@@ -263,13 +293,13 @@ class AudioManager:
         Stream validity is re-checked inside the lock before read() so we
         never call read() on a None or already-closed stream.
         """
-        if not self.is_running:
+        if not self._is_running:
             return None
 
         with self._restart_lock:
             # Re-check inside the lock — stop() may have run between the
             # is_running check above and acquiring the lock.
-            if not self.is_running or self.stream is None:
+            if not self._is_running or self.stream is None:
                 return None
 
             try:
@@ -290,9 +320,9 @@ class AudioManager:
                 logger.warning(
                     "AudioManager: stream read error (%s) — attempting restart.", exc
                 )
-                # Set is_running=False so restart() → stop() is a no-op on
+                # Set _is_running=False so restart() → stop() is a no-op on
                 # the already-dead stream, then start fresh.
-                self.is_running = False
+                self._is_running = False
                 # Release lock before restart() re-acquires it.
 
         # Restart outside _restart_lock to avoid self-deadlock (restart()
@@ -314,7 +344,7 @@ class AudioManager:
         Returns a flat int16 numpy array of all drained samples, or None
         if the stream is not running or the buffer is empty.
         """
-        if not self.is_running:
+        if not self._is_running:
             return None
 
         frames: list[np.ndarray] = []
