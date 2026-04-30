@@ -80,7 +80,7 @@ class ModeManager:
 
             logger.info("ModeManager: switching %s → %s …", previous_mode.name, new_mode.name)
 
-            await self._teardown(previous_mode)
+            await self._teardown(previous_mode, new_mode)
             await self._startup(new_mode)
 
             self._current_mode = new_mode
@@ -168,13 +168,13 @@ class ModeManager:
 
     # ── Teardown ──────────────────────────────────────────────────────────────
 
-    async def _teardown(self, mode: InputMode) -> None:
+    async def _teardown(self, mode: InputMode, new_mode: InputMode) -> None:
         if mode == InputMode.VOICE:
-            await self._teardown_voice()
+            await self._teardown_voice(new_mode)
         elif mode == InputMode.PANEL:
             await self._teardown_panel()
 
-    async def _teardown_voice(self) -> None:
+    async def _teardown_voice(self, new_mode: InputMode) -> None:
         """
         Full voice handoff sequence:
           1. pipeline.request_stop() — exit capture loop after current utterance
@@ -211,14 +211,13 @@ class ModeManager:
         audio_manager = getattr(orch, "audio_manager", None)
         if audio_manager is not None:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, audio_manager.stop)
             logger.info("ModeManager: AudioManager stopped — mic hardware released.")
 
         # 4. Notify all subsystems that voice mode has been torn down.
         from core.event_bus import bus
         bus.publish(
             "system_mode_changed",
-            {"from_mode": "voice", "to_mode": self._current_mode.value},
+            {"from_mode": "voice", "to_mode": new_mode.value},  # ← correct
             source="mode_manager",
         )
 
