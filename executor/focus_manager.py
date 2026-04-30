@@ -8,18 +8,18 @@ class FocusManager:
         self.os_name = platform.system()
 
     async def ensure_focus(self, target_title, retries=3):
-        bus.emit("focus_attempt", {"target": target_title})
+        await bus.emit("focus_attempt", {"target": target_title})
 
         for attempt in range(retries):
             success = await self._focus_once(target_title)
 
             if success:
-                bus.emit("focus_success", {"target": target_title})
+                await bus.emit("focus_success", {"target": target_title})
                 return True
 
             await asyncio.sleep(0.2)
 
-        bus.emit("focus_failed", {"target": target_title})
+        await bus.emit("focus_failed", {"target": target_title})
         return False
 
     async def _focus_once(self, target_title):
@@ -62,5 +62,5 @@ class FocusManager:
             return False
 
         except Exception as e:
-            bus.emit("focus_error", {"error": str(e)})
+            await bus.emit("focus_error", {"error": str(e)})
             return False
