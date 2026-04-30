@@ -4,10 +4,28 @@ panel/hotkey_listener.py
 Registers a global hotkey that works across all applications.
 Uses pynput; the key combination is read from PanelConfig (never hardcoded).
 
-When triggered it publishes 'panel_toggle_requested' on the EventBus.
-The panel_window.py subscribes and shows/hides itself.
+When triggered it:
+  1. Captures the current window context (title, pid, cwd) BEFORE the panel
+     is shown — this is the only moment we know what the user was working in.
+     The snapshot is stored in PanelState.pre_panel_context so that
+     input_adapter can attach it to every query published while the panel
+     is open.
+  2. Publishes 'panel_toggle_requested' on the EventBus.
 
 The listener runs in a daemon thread so it never blocks the Qt event loop.
+
+FIX CHANGELOG
+─────────────
+BUG — cwd was captured AFTER the panel stole focus, so xdotool reported
+      the panel window instead of the user's actual working app.
+
+FIX — _fire() now calls WindowDetector._get_<os>_info() and
+      _get_window_cwd() synchronously (both are blocking OS calls, safe
+      to run in the pynput daemon thread) and writes the result into
+      PanelState.pre_panel_context *before* emitting panel_toggle_requested.
+      input_adapter reads that field and injects it into every
+      "text_query_received" payload, so the orchestrator always receives the
+      correct cwd regardless of which window is active when the user submits.
 """
 from __future__ import annotations
 
@@ -40,7 +58,9 @@ def _parse_hotkey(hotkey_str: str) -> set[Any]:
             try:
                 keys.add(getattr(_kb.Key, key_name))
             except AttributeError:
-                log.warning("hotkey_listener: unknown key '%s' in hotkey '%s'", part, hotkey_str)
+                log.warning(
+                    "hotkey_listener: unknown key '%s' in hotkey '%s'", part, hotkey_str
+                )
         else:
             keys.add(_kb.KeyCode.from_char(part))
     return keys
@@ -51,13 +71,25 @@ class HotkeyListener:
     Listens for a configurable global hotkey and fires an EventBus event.
 
     Args:
-        hotkey_str: pynput-style string, e.g. '<ctrl>+<space>'
-        event_bus:  EventBus instance
+        hotkey_str:      pynput-style string, e.g. '<ctrl>+<space>'
+        event_bus:       EventBus instance (must have .publish())
+        window_detector: WindowDetector instance — used to snapshot the
+                         active window *before* the panel is shown.
+        panel_state:     PanelState instance — pre_panel_context is written
+                         here so input_adapter can read it later.
     """
 
-    def __init__(self, hotkey_str: str, event_bus: Any) -> None:
+    def __init__(
+        self,
+        hotkey_str: str,
+        event_bus: Any,
+        window_detector: Any,
+        panel_state: Any,
+    ) -> None:
         self._hotkey_str = hotkey_str
         self._bus = event_bus
+        self._window_detector = window_detector
+        self._panel_state = panel_state
         self._target_keys: set[Any] = _parse_hotkey(hotkey_str)
         self._pressed: set[Any] = set()
         self._listener: Any = None
@@ -118,7 +150,64 @@ class HotkeyListener:
             return _kb.KeyCode.from_char(key.char.lower())
         return key
 
+    def _snapshot_current_context(self) -> dict | None:
+        """
+        Synchronously read the active window title + pid + cwd using the
+        same OS methods that WindowDetector uses.
+
+        This runs in the pynput daemon thread — both _get_<os>_info() and
+        _get_window_cwd() are ordinary blocking calls, which is fine here.
+
+        Returns a minimal context dict or None if the detector is unavailable.
+        """
+        wd = self._window_detector
+        if wd is None:
+            return None
+
+        try:
+            os_name = wd.os_name
+
+            if os_name == "Linux":
+                title, pid = wd._get_linux_info()
+            elif os_name == "Windows":
+                title, pid = wd._get_windows_info()
+            elif os_name == "Darwin":
+                title, pid = wd._get_macos_info()
+            else:
+                return None
+
+            # If somehow our own window is already focused, fall back to
+            # the last known external snapshot rather than recording ourselves.
+            if wd._is_own_window(title):
+                return wd._last_external_snapshot
+
+            cwd = wd._get_window_cwd(pid)
+
+            return {
+                "window_title": title,
+                "window_pid":   pid,
+                "cwd":          cwd,
+            }
+
+        except Exception as exc:
+            log.warning("hotkey_listener: context snapshot failed — %s", exc)
+            # Fall back to whatever the detector last saw externally.
+            return getattr(wd, "_last_external_snapshot", None)
+
     def _fire(self) -> None:
+        # ── Step 1: capture context NOW, before the panel window appears ──
+        context = self._snapshot_current_context()
+        if context:
+            self._panel_state.pre_panel_context = context
+            log.debug(
+                "hotkey_listener: pre-panel context saved — cwd=%s window='%s'",
+                context.get("cwd"),
+                context.get("window_title"),
+            )
+        else:
+            log.debug("hotkey_listener: no pre-panel context available.")
+
+        # ── Step 2: ask the panel to toggle ───────────────────────────────
         try:
             self._bus.publish("panel_toggle_requested", {"source": "hotkey"})
         except Exception as exc:  # noqa: BLE001
