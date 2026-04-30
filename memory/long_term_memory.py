@@ -41,6 +41,15 @@ class LongTermMemory:
         task_data = event.data
         task_id = task_data.get("task_id")
 
+        # Guard: skip if task_id is missing or not a valid string.
+        # A None task_id means the ID was lost between session_memory and here —
+        # writing with a bad key would corrupt the JSONL index and break retrieval.
+        if not task_id or not isinstance(task_id, str):
+            self.logger.warning(
+                f"LongTermMemory: skipping save — invalid task_id: {task_id!r}"
+            )
+            return
+
         # We only want to memorize successful or completed tasks for long-term optimization
         if task_data.get("status") != "completed":
             self.logger.debug(
