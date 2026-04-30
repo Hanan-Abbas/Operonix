@@ -21,6 +21,16 @@ FIX CHANGELOG (Step 2):
 
   • stop() uses bridge.sig_request_quit to post QApplication.quit()
     onto the Qt thread safely.
+
+FIX CHANGELOG (Bug #1 — wrong cwd when panel is active):
+  • HotkeyListener now receives window_detector and panel_state so it can
+    snapshot the active window context the instant the hotkey fires, before
+    the panel window appears on screen. The snapshot is stored in
+    panel_state.pre_panel_context (a runtime-only, non-persisted attribute).
+
+  • _on_query_submitted() reads panel_state.pre_panel_context and injects
+    its cwd into the "text_query_received" payload so the orchestrator always
+    receives the user's real working directory, not the Operonix panel's cwd.
 """
 from __future__ import annotations
 
@@ -124,9 +134,16 @@ class PanelController:
         self._renderer: PanelRenderer | None = None
         self._bridge: _QtBridge | None = None
 
+        # Import here to avoid circular imports at module level.
+        # window_detector is the singleton created at the bottom of
+        # context/window_detector.py — the same instance the orchestrator uses.
+        from context.window_detector import window_detector as _wd
+
         self._hotkey = HotkeyListener(
             hotkey_str=self._config.hotkey,
             event_bus=event_bus,
+            window_detector=_wd,
+            panel_state=self._state,
         )
 
         self._last_result: Any = None
@@ -357,11 +374,26 @@ class PanelController:
             log.warning("panel_controller: history.record failed — %s", exc)
             self._pending_row_id = None
 
-        try:
-            self._bus.publish(
-                "text_query_received",
-                {"query": query, "source": "panel", "preferred_method": chosen_method},
+        # Build the query payload. Inject the pre-panel context captured by
+        # HotkeyListener so the orchestrator receives the user's real cwd
+        # rather than re-snapshotting when the panel window is already active.
+        payload: dict[str, Any] = {
+            "query":            query,
+            "source":           "panel",
+            "preferred_method": chosen_method,
+        }
+
+        pre_context = self._state.pre_panel_context
+        if pre_context is not None:
+            payload["cwd"]               = pre_context.get("cwd")
+            payload["pre_panel_context"] = pre_context
+            log.debug(
+                "panel_controller: injecting pre-panel cwd=%r into query payload",
+                pre_context.get("cwd"),
             )
+
+        try:
+            self._bus.publish("text_query_received", payload)
         except Exception as exc:
             log.error("panel_controller: failed to publish query — %s", exc)
 
