@@ -13,6 +13,21 @@
                 "usage_count": 5,
                 "step_count": 1
             }
+        ],
+        "create_dir": [
+            {
+                "steps": [
+                    {
+                        "action": "create_dir",
+                        "args": {
+                            "path": "<PATH>",
+                            "dir_name": "<DIR_NAME>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
+                "step_count": 1
+            }
         ]
     }
 }
