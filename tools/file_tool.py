@@ -23,9 +23,20 @@ class FileTool:
  
     async def run(self, action: str, args: dict):
         path_str = args.get("path")
+
+        # For mkdir: build path from cwd_resolved + dir_name when no explicit
+        # path is given. This also prevents double-nesting: the planner already
+        # resolves the full path into args["path"], so we trust that value as-is
+        # and never append dir_name on top of it again.
+        if not path_str and action == "mkdir":
+            base = args.get("cwd_resolved") or args.get("location") or os.getcwd()
+            dir_name = args.get("dir_name", "")
+            if dir_name:
+                path_str = str(Path(base) / dir_name)
+
         if not path_str:
             return False, "No path provided."
- 
+
         safe_path = Path(path_str).resolve()
         await bus.emit("file_op_started", {"action": action, "path": str(safe_path)}, source="file_tool")
  
@@ -99,4 +110,3 @@ class FileTool:
  
  
 file_tool = FileTool()
- 
