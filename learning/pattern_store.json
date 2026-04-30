@@ -27,6 +27,21 @@
                 ],
                 "usage_count": 1,
                 "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "create_dir",
+                        "args": {
+                            "dir_name": "<DIR_NAME>",
+                            "location": "<LOCATION>",
+                            "cwd_resolved": "<CWD_RESOLVED>",
+                            "path": "<PATH>"
+                        }
+                    }
+                ],
+                "usage_count": 3,
+                "step_count": 1
             }
         ]
     }
