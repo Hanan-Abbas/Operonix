@@ -13,12 +13,13 @@ Changes from original
        {"success": bool, "result": <value>, "intent": <name>}
    The executor checks the "success" key and surfaces the result.
 
-3. `create_dir` resolves the directory path from context before executing:
-   - If args contain an explicit "path", use it.
-   - If args contain "location": "current window", read the active window's
-     working directory from context["cwd"] (set by window_detector) and
-     join dir_name to it.
-   - Falls back to the OS home directory so it never silently no-ops.
+3. `create_dir` resolves the directory path from context before executing.
+   _resolve_path() now correctly handles the common LLM output pattern
+   {'path': '.', 'dir_name': 'ali'} where '.' is a placeholder meaning
+   "current directory" — previously '.' was treated as an explicit path
+   and dir_name was silently ignored so no directory was ever created.
+   Fix: any path value in _RELATIVE_PLACEHOLDERS {".", "./", ""} does NOT
+   suppress dir_name; dir_name is always joined onto the resolved base.
 
 4. CAPABILITY_METADATA dict — read by CapabilityMapper._resolve_suggested_tool()
    so that suggested_tool is populated correctly and the DecisionEngine does
@@ -50,31 +51,56 @@ CAPABILITY_METADATA: dict[str, dict] = {
 
 # ── Path resolver ─────────────────────────────────────────────────────── #
 
+# These values are LLM placeholders meaning "current directory".
+# They must NOT suppress dir_name resolution.
+_RELATIVE_PLACEHOLDERS: frozenset[str] = frozenset({".", "./", ""})
+
+
 def _resolve_path(args: dict, context: dict) -> str:
     """
     Determine the real filesystem path for a file/dir operation.
 
     Resolution order:
-      1. Explicit "path" in args — use as-is.
-      2. "dir_name" + location hint "current window" -> context["cwd"] / dir_name.
-      3. "dir_name" alone -> home directory / dir_name.
-      4. Fallback: current working directory.
-    """
-    explicit = args.get("path", "").strip()
-    if explicit:
-        return explicit
+      1. "dir_name" present — always join it onto the correct base:
+           a. "path" is a real absolute/rooted path  -> path / dir_name
+           b. "path" is a placeholder (".", "./", "")  -> context["cwd"] / dir_name
+           c. No "path" at all, location=="current window" -> context["cwd"] / dir_name
+           d. No "path", no location hint              -> home / dir_name
+      2. No "dir_name" — use "path" as the full target:
+           a. Explicit non-placeholder "path"          -> use as-is
+           b. Placeholder or missing                   -> context["cwd"]
 
-    dir_name = args.get("dir_name", "").strip()
-    location = str(args.get("location", "")).lower()
+    The LLM frequently sends {'path': '.', 'dir_name': 'ali'} to mean
+    "create a directory named ali in the current directory".  Treating '.'
+    as a complete path (step 1 in the old code) silently dropped dir_name
+    and created nothing useful.
+    """
+    raw_path  = args.get("path", "").strip()
+    dir_name  = args.get("dir_name", "").strip()
+    location  = str(args.get("location", "")).lower()
+    cwd       = context.get("cwd") or context.get("window_cwd") or os.getcwd()
 
     if dir_name:
-        if "current window" in location or "current" in location:
-            # window_detector puts the focused window's CWD in context
-            cwd = context.get("cwd") or context.get("window_cwd") or os.getcwd()
-            return str(Path(cwd) / dir_name)
-        return str(Path.home() / dir_name)
+        # We have a dir_name — it must be appended to a base directory.
+        if raw_path and raw_path not in _RELATIVE_PLACEHOLDERS:
+            # Caller supplied a real base path (absolute or relative).
+            base = Path(raw_path)
+            if not base.is_absolute():
+                base = Path(cwd) / base
+            return str(base / dir_name)
 
-    return os.getcwd()
+        # raw_path is empty or a placeholder — resolve against cwd.
+        return str(Path(cwd) / dir_name)
+
+    # No dir_name — use raw_path as the complete target path.
+    if raw_path and raw_path not in _RELATIVE_PLACEHOLDERS:
+        return raw_path
+
+    # raw_path is a placeholder or absent — resolve "here" to cwd.
+    if "current window" in location or "current" in location:
+        return cwd
+
+    return cwd
 
 
 # ── Capabilities ──────────────────────────────────────────────────────── #
