@@ -79,18 +79,21 @@ class SessionMemory:
             )
 
     async def _archive_task(self, event):
-        """Marks a full task as completed and moves it to a cold storage state
-
-        or dumps to a log if needed.
-        """
+        """Marks a full task as completed and broadcasts it for LTM + vector store."""
         task_id = event.data.get("task_id")
         if task_id in self.active_tasks:
             self.active_tasks[task_id]["status"] = "completed"
             self.active_tasks[task_id]["end_time"] = time.time()
+
+            # FIX: task_id was never stored inside the task dict itself, so
+            # long_term_memory and vector_store received a payload where
+            # task_data.get("task_id") returned None, causing the vector
+            # store add() to fail with "Expected ID to be a str, got None".
+            # Inject it here so every downstream consumer gets a valid ID.
+            self.active_tasks[task_id]["task_id"] = task_id
+
             self.logger.debug(f"Archived memory for completed task: {task_id}")
 
-            # Here is the bridge to your learning system!
-            # Once a task is successfully completed, we can broadcast it for the learner.
             bus.publish(
                 "task_memory_archived",
                 self.active_tasks[task_id],
