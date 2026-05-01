@@ -159,7 +159,8 @@ if _HAS_QT:
             hidden()  — emitted when the panel is hidden
             pinned(bool) — emitted when the pin state changes
         """
-        hidden = pyqtSignal()
+        hidden = pyqtSignal()   # emitted when the panel is hidden
+        shown  = pyqtSignal()   # emitted when the panel becomes visible
         pinned = pyqtSignal(bool)
 
         def __init__(self, tokens: ThemeTokens, state: Any) -> None:
@@ -240,12 +241,13 @@ if _HAS_QT:
             self.show()
             self.raise_()
             # Do NOT call activateWindow() — that would steal focus.
+            self.shown.emit()
             log.debug("panel_window: shown")
 
         def hide_panel(self) -> None:
             if not self._is_pinned:
                 self.hide()
-                self.hidden.emit()
+                self.hidden.emit()  # → panel_controller._on_panel_hidden
                 log.debug("panel_window: hidden")
 
         def toggle(self) -> None:
