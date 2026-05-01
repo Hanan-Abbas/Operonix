@@ -31,38 +31,6 @@ BUG 2 — own-window guard silently dropped the snapshot when
     HotkeyListener). When the own-window guard fires and
     _last_external_snapshot is None, we use pre_panel_context as the
     fallback so the orchestrator always gets a valid cwd.
-
-BUG 3 — screenshots (and any file created via a file manager) were placed
-         inside the Operonix folder instead of the folder the user was
-         browsing (e.g. ~/Screenshots).
-
-    ROOT CAUSE: File managers (Nautilus, Nemo, Thunar, Dolphin, PCManFM)
-    never call chdir() when the user navigates folders.  Their process cwd
-    stays at '/' or their install prefix, so /proc/<pid>/cwd always
-    returned the wrong directory.  The browsed path only exists in the
-    application's internal GTK/Qt widget state.
-
-    FIX: _get_window_cwd() now accepts the window title as a second
-    argument.  Before falling through to /proc/<pid>/cwd it checks whether
-    the active app is a known file manager and, if so, delegates to the new
-    _resolve_file_manager_path() method which tries three strategies in
-    order of reliability:
-
-      A. D-Bus query to Nautilus / Nemo for the current folder URI.
-         Most reliable — returns the exact path regardless of title format.
-
-      B. Window-title search: Nautilus sets its title to the display name
-         of the open folder (e.g. "Screenshots").  We search common parent
-         directories (home, /media/$USER, /mnt, /tmp) for a subdirectory
-         with that name.
-
-      C. /proc/<pid>/fd scan: iterate the process's open file descriptors
-         and find the most-recently-accessed directory fd that is not a
-         system path.  Works for Thunar, PCManFM, and other GTK managers
-         that do not expose a D-Bus API.
-
-    The call site in capture_snapshot() passes current_title to
-    _get_window_cwd() so the file-manager detection has access to it.
 """
 from __future__ import annotations
 
@@ -84,28 +52,11 @@ _OWN_WINDOW_SUBSTRINGS = [
     "command panel",
 ]
 
-# Known file-manager process / window-title substrings.
-# Used to detect when the focused window is a file browser so that we
-# bypass /proc/<pid>/cwd (which is useless for file managers) and instead
-# extract the actually-browsed path.
-_FILE_MANAGER_SUBSTRINGS = [
-    "nautilus",
-    "nemo",
-    "thunar",
-    "dolphin",
-    "pcmanfm",
-    "files",        # GNOME Files — Nautilus rebranded in newer Ubuntu/Fedora
-    "file manager",
-]
-
-# System directories that are never the "real" browsed folder.
-_SKIP_DIRS = {"/", "/proc", "/sys", "/dev", "/run", "/tmp"}
-
 
 class WindowDetector:
     def __init__(self) -> None:
-        self.os_name  = platform.system()
-        self.ewmh     = None
+        self.os_name = platform.system()
+        self.ewmh    = None
         self.win32gui = None
         self.last_title: str | None = None
         self._last_external_snapshot: dict | None = None
@@ -207,8 +158,8 @@ class WindowDetector:
     def _get_macos_info(self) -> tuple[str, int | None]:
         """Returns (window_title, pid)."""
         try:
-            curr_app    = self.NSWorkspace.sharedWorkspace().frontmostApplication()
-            pid         = curr_app.processIdentifier()
+            curr_app = self.NSWorkspace.sharedWorkspace().frontmostApplication()
+            pid      = curr_app.processIdentifier()
             window_list = self.CGWindowListCopyWindowInfo(1 << 0, 0)
             for window in window_list:
                 if window["kCGWindowOwnerPID"] == pid:
@@ -217,148 +168,47 @@ class WindowDetector:
         except Exception:
             return "Unknown Mac Window", None
 
-    # ── File-manager path resolution ───────────────────────────────────────
-
-    def _resolve_file_manager_path(self, pid: int | None, window_title: str) -> str | None:
-        """
-        Extract the directory currently being browsed by a file manager.
-
-        File managers (Nautilus, Nemo, Thunar, Dolphin, PCManFM …) never
-        call chdir() when the user navigates, so /proc/<pid>/cwd is always
-        wrong for them.  This method tries three strategies:
-
-        A. D-Bus query (Nautilus / Nemo on Linux GNOME/Cinnamon desktops).
-           Returns the exact URI — most reliable, zero guessing.
-
-        B. Window-title folder-name search.
-           Nautilus sets its title to the display name of the open folder
-           (e.g. "Screenshots").  We search standard parent directories for
-           a child with that name.
-
-        C. /proc/<pid>/fd scan (Linux fallback for Thunar / PCManFM).
-           Iterates open file descriptors of the file manager process and
-           picks the most-recently-accessed directory that is not a system
-           path.
-
-        Returns an absolute path string, or None if all strategies fail.
-        """
-        # ── Strategy A: D-Bus (Nautilus / Nemo) ───────────────────────────
-        if self.os_name == "Linux":
-            for dbus_dest in (
-                "org.gnome.Nautilus",
-                "org.Nemo",
-            ):
-                try:
-                    raw = subprocess.check_output(
-                        [
-                            "gdbus", "call", "--session",
-                            "--dest", dbus_dest,
-                            "--object-path", "/org/gnome/Nautilus/SearchProvider",
-                            "--method",
-                            "org.gnome.Nautilus.Application.GetActiveFolderUri",
-                        ],
-                        stderr=subprocess.DEVNULL,
-                        timeout=1,
-                    ).decode().strip()
-                    # response looks like: ('file:///home/user/Screenshots',)
-                    if "file://" in raw:
-                        uri  = raw.split("'")[1]
-                        path = uri.replace("file://", "")
-                        if os.path.isdir(path):
-                            logger.debug(
-                                "File-manager cwd via D-Bus (%s): %s", dbus_dest, path
-                            )
-                            return path
-                except Exception:
-                    pass
-
-        # ── Strategy B: window-title folder-name search ────────────────────
-        candidate_name = window_title.strip()
-
-        # If the title already looks like an absolute path, trust it directly.
-        if candidate_name.startswith("/") and os.path.isdir(candidate_name):
-            logger.debug("File-manager cwd via absolute title: %s", candidate_name)
-            return candidate_name
-
-        # Otherwise treat the title as a folder display name and search
-        # common parent directories.
-        search_roots = [
-            Path.home(),
-            Path("/media") / os.environ.get("USER", ""),
-            Path("/mnt"),
-            Path("/tmp"),
-        ]
-        for root in search_roots:
-            candidate = root / candidate_name
-            if candidate.is_dir():
-                logger.debug(
-                    "File-manager cwd via title search ('%s' under %s): %s",
-                    candidate_name, root, candidate,
-                )
-                return str(candidate)
-
-        # ── Strategy C: /proc/<pid>/fd scan ───────────────────────────────
-        if self.os_name == "Linux" and pid:
-            try:
-                fd_dir   = Path(f"/proc/{pid}/fd")
-                dir_fds: list[tuple[float, str]] = []
-
-                for fd_path in fd_dir.iterdir():
-                    try:
-                        target = fd_path.resolve()
-                        if target.is_dir() and str(target) not in _SKIP_DIRS:
-                            atime = fd_path.stat().st_atime
-                            dir_fds.append((atime, str(target)))
-                    except Exception:
-                        continue
-
-                if dir_fds:
-                    dir_fds.sort(reverse=True)
-                    best = dir_fds[0][1]
-                    logger.debug("File-manager cwd via fd scan: %s", best)
-                    return best
-
-            except Exception as exc:
-                logger.debug("fd scan failed for pid=%s: %s", pid, exc)
-
-        return None
-
     # ── CWD resolution ─────────────────────────────────────────────────────
 
-    def _get_window_cwd(self, pid: int | None, window_title: str = "") -> str:
+    def _get_window_cwd(
+        self,
+        pid: int | None,
+        app_type: str = "",
+        window_title: str = "",
+    ) -> str:
         """
-        Resolve the working directory of the focused window's process.
+        Resolve the TRUE working directory for the focused window.
 
-        For file managers the process cwd is meaningless (they never chdir
-        on navigation), so we delegate to _resolve_file_manager_path() first.
-        For all other apps we use /proc/<pid>/cwd (Linux) or
-        psutil.Process(pid).cwd() (Windows / macOS).
+        This is app-type-aware.  Reading /proc/<pid>/cwd for a file manager
+        gives the manager's install dir, NOT the folder the user is browsing.
+        Each app type needs a different strategy:
 
-        Falls back to os.getcwd() if everything else fails so that nothing
-        downstream ever receives None.
-
-        Priority:
-          1. File-manager–specific resolution   (if app is a known file manager)
-          2. /proc/<pid>/cwd                    (Linux, non–file-manager apps)
-          3. psutil.Process(pid).cwd()          (Windows / macOS)
-          4. os.getcwd()                        (last resort)
+          file_manager  → parse window title / query D-Bus / AppleScript
+          terminal      → read cwd of the shell child process
+          browser       → skip (URL ≠ filesystem path); return os.getcwd()
+          code_editor   → /proc/<pid>/cwd  (editor sets cwd to project root)
+          everything else → /proc/<pid>/cwd or psutil fallback
         """
-        # ── Step 1: file-manager special case ─────────────────────────────
-        title_lower    = (window_title or "").lower()
-        is_file_manager = any(fm in title_lower for fm in _FILE_MANAGER_SUBSTRINGS)
-
-        if is_file_manager:
-            resolved = self._resolve_file_manager_path(pid, window_title)
-            if resolved:
-                return resolved
-            # Fall through — maybe the manager is open at a path we can still
-            # find via /proc/<pid>/cwd (unlikely but harmless to try).
-
         if not pid:
             return os.getcwd()
 
-        # ── Step 2 / 3: normal process cwd ────────────────────────────────
         try:
+            if app_type == "file_manager":
+                cwd = self._cwd_from_file_manager(pid, window_title)
+                if cwd:
+                    return cwd
+                # fall through to process cwd as last resort
+
+            elif app_type == "terminal":
+                cwd = self._cwd_from_terminal_child(pid)
+                if cwd:
+                    return cwd
+                # fall through
+
+            elif app_type == "browser":
+                return os.getcwd()
+
+            # Default: process's own cwd
             if self.os_name == "Linux":
                 cwd_link = Path(f"/proc/{pid}/cwd")
                 if cwd_link.exists():
@@ -368,9 +218,150 @@ class WindowDetector:
                 return psutil.Process(pid).cwd()
 
         except Exception as exc:
-            logger.debug("CWD resolution failed for pid=%s: %s", pid, exc)
+            logger.debug(
+                "CWD resolution failed pid=%s app_type=%s: %s", pid, app_type, exc
+            )
 
         return os.getcwd()
+
+    def _cwd_from_file_manager(self, pid: int, window_title: str) -> str | None:
+        """
+        Resolve the folder currently displayed in a file manager.
+
+        Linux strategies (tried in order):
+          1. Nautilus D-Bus — exact location, no parsing needed
+          2. Window title starts with '/' — it is the path (Thunar, Nemo)
+          3. Match title word against XDG standard dirs and a bounded find
+
+        Windows: SHGetFolderPath
+        macOS:   AppleScript Finder target
+        """
+        if self.os_name == "Linux":
+            # Strategy 1: Nautilus D-Bus
+            try:
+                gio = subprocess.run(
+                    [
+                        "gdbus", "call", "--session",
+                        "--dest", "org.gnome.Nautilus",
+                        "--object-path", "/org/gnome/Nautilus/window/1",
+                        "--method", "org.freedesktop.DBus.Properties.Get",
+                        "org.gnome.Nautilus.Window", "Location",
+                    ],
+                    capture_output=True, text=True, timeout=1,
+                )
+                if gio.returncode == 0 and "file://" in gio.stdout:
+                    import urllib.parse
+                    raw = gio.stdout.split("file://")[1].split("'")[0]
+                    decoded = urllib.parse.unquote(raw).strip()
+                    if decoded and Path(decoded).is_dir():
+                        return decoded
+            except Exception:
+                pass
+
+            # Strategy 2: title is a full path (Thunar / Nemo / Dolphin)
+            candidate = window_title.strip().split(" ")[0]
+            if candidate.startswith("/") and Path(candidate).is_dir():
+                return candidate
+
+            # Strategy 3: match title word against known dirs + bounded find
+            title_word = (
+                window_title.strip()
+                .split("—")[0].split("–")[0].split("-")[0]
+                .strip()
+            )
+            if title_word:
+                return self._search_folder_by_name(title_word)
+
+        elif self.os_name == "Windows":
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(260)
+                ctypes.windll.shell32.SHGetFolderPathW(0, 0, 0, 0, buf)
+                return buf.value or None
+            except Exception:
+                pass
+
+        elif self.os_name == "Darwin":
+            try:
+                script = (
+                    'tell application "Finder" to get POSIX path '
+                    'of (target of front window as alias)'
+                )
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if result.returncode == 0:
+                    path = result.stdout.strip()
+                    if path and Path(path).is_dir():
+                        return path
+            except Exception:
+                pass
+
+        return None
+
+    def _search_folder_by_name(self, name: str) -> str | None:
+        """
+        Given a display name (e.g. 'Screenshots'), find its real path by
+        checking XDG standard locations first, then a bounded find.
+        """
+        if not name or len(name) < 2:
+            return None
+
+        home = Path.home()
+        priority_parents = [
+            home,
+            home / "Pictures",
+            home / "Documents",
+            home / "Downloads",
+            home / "Desktop",
+            home / "Videos",
+            home / "Music",
+            Path("/tmp"),
+        ]
+        for parent in priority_parents:
+            candidate = parent / name
+            if candidate.is_dir():
+                return str(candidate)
+
+        # Broader bounded search — depth 4 stays fast (<3 s on most systems)
+        try:
+            result = subprocess.run(
+                ["find", str(home), "-maxdepth", "4", "-type", "d", "-name", name],
+                capture_output=True, text=True, timeout=3,
+            )
+            hits = [h for h in result.stdout.strip().splitlines() if h]
+            if hits:
+                return hits[0]
+        except Exception:
+            pass
+
+        return None
+
+    def _cwd_from_terminal_child(self, pid: int) -> str | None:
+        """
+        Terminal emulators spawn a shell as a child.  The shell's cwd is
+        what matters, not the terminal's own cwd.
+        """
+        try:
+            if self.os_name == "Linux":
+                result = subprocess.run(
+                    ["pgrep", "--parent", str(pid)],
+                    capture_output=True, text=True, timeout=1,
+                )
+                children = [c for c in result.stdout.strip().splitlines() if c.isdigit()]
+                if children:
+                    cwd_link = Path(f"/proc/{children[-1]}/cwd")
+                    if cwd_link.exists():
+                        return str(cwd_link.resolve())
+            else:
+                import psutil
+                kids = psutil.Process(pid).children(recursive=False)
+                if kids:
+                    return kids[-1].cwd()
+        except Exception:
+            pass
+        return None
 
     # ── Snapshot capture ───────────────────────────────────────────────────
 
@@ -417,19 +408,21 @@ class WindowDetector:
                     )
                 return
 
-            # Skip unchanged titles during background polls.
+            # Skip unchanged titles during background polls
             if current_title == self.last_title and task_id == "background_poll":
                 return
 
             self.last_title = current_title
 
-            # Classify window.
+            # Classify window
             app_context = await classifier.classify_async(current_title)
 
-            # Resolve CWD — pass current_title so file managers are handled
-            # correctly (they never chdir on navigation).
+            # Resolve CWD using app-type-aware strategy.
+            # file_manager → D-Bus/title parse; terminal → child shell cwd;
+            # everything else → /proc/<pid>/cwd or psutil.
             cwd = await asyncio.get_running_loop().run_in_executor(
-                None, self._get_window_cwd, pid, current_title
+                None, self._get_window_cwd, pid,
+                app_context.category, current_title,
             )
 
             snapshot = {
