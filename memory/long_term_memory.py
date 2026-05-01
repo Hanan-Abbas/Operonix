@@ -37,36 +37,33 @@ class LongTermMemory:
         )
 
     async def save_task_to_disk(self, event):
-        """Appends a completed task snapshot to a JSON lines file on the disk."""
+        """Appends a completed task snapshot to a JSONL file on disk."""
         task_data = event.data
         task_id = task_data.get("task_id")
 
-        # Guard: skip if task_id is missing or not a valid string.
-        # A None task_id means the ID was lost between session_memory and here —
-        # writing with a bad key would corrupt the JSONL index and break retrieval.
+        # FIX: guard against None task_id (was caused by session_memory not
+        # injecting task_id into its payload dict — fixed there, guarded here).
         if not task_id or not isinstance(task_id, str):
             self.logger.warning(
-                f"LongTermMemory: skipping save — invalid task_id: {task_id!r}"
+                "save_task_to_disk: skipping — invalid task_id %r", task_id
             )
             return
 
-        # We only want to memorize successful or completed tasks for long-term optimization
         if task_data.get("status") != "completed":
             self.logger.debug(
                 f"Skipping long-term storage for task {task_id} (Status: {task_data.get('status')})"
             )
             return
 
-        # Structure the data cleanly for future search queries
         record = {
-            "task_id": task_id,
-            "timestamp": time.time(),
+            "task_id":     task_id,
+            "timestamp":   time.time(),
+            "intent":      task_data.get("intent", "unknown"),
             "steps_count": len(task_data.get("steps", [])),
-            "data": task_data,
+            "data":        task_data,
         }
 
         try:
-            # Append as a single line in a JSONL file (very fast, prevents corrupting the whole file)
             with open(self.history_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")
 
@@ -74,7 +71,6 @@ class LongTermMemory:
                 f"💾 Long-Term Memory: Successfully persisted task [{task_id}] to disk."
             )
 
-            # Let the learning system know there is fresh data to analyze!
             bus.publish(
                 "long_term_memory_updated",
                 {"task_id": task_id},
