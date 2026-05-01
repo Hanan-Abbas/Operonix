@@ -1,65 +1,95 @@
 from __future__ import annotations
- 
+
 import asyncio
+import logging
 import os
 import shutil
 from pathlib import Path
- 
+
 from core.event_bus import bus
- 
- 
+
+logger = logging.getLogger("FileTool")
+
+# Maps intent/action strings → internal handler keys.
+# This means the executor can pass either the intent name ("create_dir")
+# or the short alias ("mkdir") and both route correctly — no more
+# "Unknown action" fallthrough and no double-nesting from a second
+# dir_name append.
+_ACTION_ALIASES: dict[str, str] = {
+    "write_file":  "write",
+    "append_file": "append",
+    "read_file":   "read",
+    "delete_file": "delete",
+    "list_dir":    "list",
+    "create_dir":  "mkdir",   # FIX: intent name now maps to mkdir handler
+    "delete_dir":  "rmdir",
+    "move_file":   "move",
+    "exists":      "exists",
+}
+
+
 class FileTool:
     name = "file_tool"
     tool_type = "file_tool"
- 
-    # Self-declaration: tool_registry uses this for intent routing
+
     supported_intents: set[str] = {
         "write_file", "append_file", "read_file", "delete_file",
         "move_file", "list_dir", "create_dir", "delete_dir",
     }
- 
+
     def can_handle(self, intent: str) -> bool:
         return intent in self.supported_intents
- 
+
     async def run(self, action: str, args: dict):
+        # Normalise action string via alias map
+        resolved_action = _ACTION_ALIASES.get(action, action)
+
+        # FIX: path resolution — trust the fully-built "path" key from
+        # file_ops._resolve_path / planner._resolve_args_for_intent.
+        # Previously, file_tool required "path" to exist and then the
+        # executor would call create_dir with raw args (dir_name + location)
+        # causing a second dir_name append → ali/ali double-nesting.
+        #
+        # Now: if "path" is missing, build it once here from cwd+dir_name
+        # so there is exactly one place that constructs the final path.
         path_str = args.get("path")
-
-        # For mkdir: build path from cwd_resolved + dir_name when no explicit
-        # path is given. This also prevents double-nesting: the planner already
-        # resolves the full path into args["path"], so we trust that value as-is
-        # and never append dir_name on top of it again.
-        if not path_str and action == "mkdir":
-            base = args.get("cwd_resolved") or args.get("location") or os.getcwd()
-            dir_name = args.get("dir_name", "")
-            if dir_name:
-                path_str = str(Path(base) / dir_name)
-
         if not path_str:
-            return False, "No path provided."
+            if resolved_action == "mkdir" and args.get("dir_name"):
+                base = args.get("cwd_resolved") or args.get("cwd") or os.getcwd()
+                path_str = str(Path(base) / args["dir_name"])
+            else:
+                return False, "No path provided."
 
         safe_path = Path(path_str).resolve()
-        await bus.emit("file_op_started", {"action": action, "path": str(safe_path)}, source="file_tool")
- 
+        await bus.emit(
+            "file_op_started",
+            {"action": resolved_action, "path": str(safe_path)},
+            source="file_tool",
+        )
+
         try:
-            if action == "write":
+            if resolved_action == "write":
                 return await asyncio.to_thread(self._write_file, safe_path, args.get("data", ""))
-            elif action == "append":
+            elif resolved_action == "append":
                 return await asyncio.to_thread(self._append_file, safe_path, args.get("data", ""))
-            elif action == "mkdir":
+            elif resolved_action == "mkdir":
                 return await asyncio.to_thread(self._mkdir, safe_path, args.get("exist_ok", True))
-            elif action == "read":
-                return await asyncio.to_thread(self._read_file, safe_path)
-            elif action == "delete":
+            elif resolved_action == "rmdir":
                 return await asyncio.to_thread(self._delete_item, safe_path)
-            elif action == "list":
+            elif resolved_action == "read":
+                return await asyncio.to_thread(self._read_file, safe_path)
+            elif resolved_action == "delete":
+                return await asyncio.to_thread(self._delete_item, safe_path)
+            elif resolved_action == "list":
                 return await asyncio.to_thread(self._list_directory, safe_path)
-            elif action == "exists":
+            elif resolved_action == "exists":
                 return await asyncio.to_thread(self._check_exists, safe_path)
-            elif action == "move":
+            elif resolved_action == "move":
                 return await asyncio.to_thread(self._move_item, safe_path, args.get("destination"))
-            return False, f"Unknown action: {action}"
-        except Exception as e:
-            return False, f"File Error: {str(e)}"
+            return False, f"Unknown action: {action!r}"
+        except Exception as exc:
+            logger.error("FileTool error (action=%s path=%s): %s", action, safe_path, exc)
+            return False, f"File Error: {exc}"
  
     def _write_file(self, path, data):
         path.parent.mkdir(parents=True, exist_ok=True)
