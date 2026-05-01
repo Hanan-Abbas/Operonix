@@ -58,10 +58,7 @@ class VectorStore:
             )
 
     async def save_vector_experience(self, event):
-        """Converts an archived task into a vector and stores it in the
-
-        database.
-        """
+        """Converts an archived task into a vector and stores it."""
         task_data = event.data
         task_id = task_data.get("task_id")
         intent = task_data.get("intent")
@@ -69,14 +66,32 @@ class VectorStore:
         if task_data.get("status") != "completed":
             return
 
+        # FIX: task_id arrives as None when session_memory didn't inject it
+        # into the payload dict (now fixed in session_memory._archive_task).
+        # Guard here as a second line of defence so ChromaDB never receives
+        # a non-string ID, which raises "Expected ID to be a str, got None".
+        if not task_id or not isinstance(task_id, str):
+            self.logger.warning(
+                "save_vector_experience: skipping — invalid task_id %r", task_id
+            )
+            return
+
+        # intent may also be absent from the session_memory payload (it lives
+        # in the orchestrator's active_tasks but wasn't forwarded into the
+        # archived dict).  Fall back gracefully so we at least store something.
+        if not intent:
+            self.logger.debug(
+                "save_vector_experience: task %s has no intent field, storing as 'unknown'",
+                task_id,
+            )
+            intent = "unknown"
+
         steps = task_data.get("steps", [])
         steps_summary = ", ".join(
             [step.get("action", "") for step in steps if "action" in step]
         )
 
-        content_to_vectorize = (
-            f"Intent: {intent}. Actions performed: {steps_summary}."
-        )
+        content_to_vectorize = f"Intent: {intent}. Actions performed: {steps_summary}."
 
         try:
             self.collection.add(
@@ -85,11 +100,10 @@ class VectorStore:
                 ids=[task_id],
             )
             self.logger.debug(
-                f"Saved vector embedding for task [{task_id}] -> '{intent}'"
+                "Saved vector embedding for task [%s] -> '%s'", task_id, intent
             )
-
-        except Exception as e:
-            self.logger.error(f"Failed to save vector for task {task_id}: {e}")
+        except Exception as exc:
+            self.logger.error("Failed to save vector for task %s: %s", task_id, exc)
 
     def query_similar_experiences(self, current_intent: str, limit: int = 3):
         """Searches the database for the closest semantic matches to a new
