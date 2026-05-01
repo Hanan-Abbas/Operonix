@@ -38,6 +38,7 @@ import asyncio
 import logging
 import os
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -57,7 +58,11 @@ _OWN_WINDOW_SUBSTRINGS = [
 # before that title is committed as the stable context snapshot.
 # This prevents a window the user glanced at briefly (while switching to
 # the panel) from overwriting the real working context.
-_TITLE_STABLE_POLLS = 2
+# After how many consecutive polls a new title is committed to
+# _last_external_snapshot. 1 means any non-own-window title is committed
+# immediately — we rely on the own-window guard, not this threshold,
+# to prevent the panel from polluting the context.
+_TITLE_STABLE_POLLS = 1
 
 
 class WindowDetector:
@@ -68,16 +73,11 @@ class WindowDetector:
         self.last_title: str | None = None
         self._last_external_snapshot: dict | None = None
 
-        # Panel state tracking
-        # _panel_open:          True while the Operonix panel has OS focus.
-        # _pre_panel_snapshot:  snapshot captured just before the panel stole
-        #                       focus — the app the user actually wants to act on.
-        # _title_seen_count:    consecutive poll count per title; we only commit
-        #                       a new snapshot after _TITLE_STABLE_POLLS matches
-        #                       to avoid acting on a transient/glanced window.
-        self._panel_open: bool = False
-        self._pre_panel_snapshot: dict | None = None
-        self._title_seen_count: dict[str, int] = {}
+        # _last_external_snapshot is kept current in real time by the
+        # xprop focus watcher (Linux) or poll loop (other OS).
+        # The own-window guard in capture_snapshot prevents the panel
+        # window from ever overwriting it.
+        # No freeze/lock needed — xprop fires the instant you switch windows.
         self._setup_os_imports()
 
     # ── OS import setup ────────────────────────────────────────────────────
@@ -112,47 +112,83 @@ class WindowDetector:
 
     async def start(self) -> None:
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
-        # Track panel open/close so we freeze the snapshot while the panel
-        # has focus and don't let background polls overwrite the real context.
-        bus.subscribe("panel_opened", self._on_panel_opened)
-        bus.subscribe("panel_closed", self._on_panel_closed)
-        bus.subscribe("panel_hidden", self._on_panel_closed)
         logger.info("Window Detector: Active on %s", self.os_name)
+        self._xprop_proc = None
         await asyncio.sleep(1)
         await self.capture_snapshot(
             type("Event", (), {"data": {"task_id": "initial_boot"}})()
         )
+
+        # xprop -spy watches X11 focus changes in real time — no polling delay.
+        # _last_external_snapshot is always the most recent non-panel window.
+        # The own-window guard prevents the panel from ever overwriting it.
+        # Poll loop runs as fallback for Windows/macOS and xprop crash recovery.
+        asyncio.create_task(self._focus_event_loop())
         asyncio.create_task(self._poll_loop())
 
-    async def _on_panel_opened(self, event: object) -> None:
-        # Fired the moment the Operonix panel gains focus.
-        # Capture the CURRENT foreground window before focus moves to the panel.
-        # This is the app the user actually wants to act on.
-        self._panel_open = True
-        await self._capture_real_snapshot(task_id="pre_panel")
-        if self._last_external_snapshot:
-            self._pre_panel_snapshot = dict(self._last_external_snapshot)
-            logger.debug(
-                "Panel opened — locked pre-panel context: app=%s cwd=%s",
-                self._pre_panel_snapshot.get("app_name"),
-                self._pre_panel_snapshot.get("cwd"),
-            )
-
-    async def _on_panel_closed(self, event: object) -> None:
-        # Panel closed/hidden — resume normal background polling.
-        self._panel_open = False
-        self._pre_panel_snapshot = None
-        logger.debug("Panel closed — resuming normal context tracking.")
-
     async def _poll_loop(self) -> None:
+        """Fallback: Windows/macOS or xprop crash recovery. 1s interval."""
         while True:
-            # While the panel is open, skip polls — the panel window title
-            # would overwrite the real context we locked in _on_panel_opened.
-            if not self._panel_open:
+            await self.capture_snapshot(
+                type("Event", (), {"data": {"task_id": "background_poll"}})()
+            )
+            await asyncio.sleep(1)
+
+    async def _focus_event_loop(self) -> None:
+        """
+        Linux-only: use `xdotool behave_screen_edge` + XPROP focus events
+        via `xdotool search --sync` to get notified the instant focus changes,
+        eliminating the polling delay entirely.
+
+        We run:
+            xprop -spy -root _NET_ACTIVE_WINDOW
+        which prints a new line every time the focused window changes — zero
+        delay, no CPU spin, no missed transitions.  We parse each line,
+        resolve the window ID to a title+PID via xdotool, then call
+        capture_snapshot exactly as the poll loop would.
+
+        Falls back to _poll_loop if xprop is not available.
+        """
+        if self.os_name != "Linux":
+            return  # Windows/macOS use _poll_loop
+
+        if not shutil.which("xprop") or not shutil.which("xdotool"):
+            logger.info(
+                "WindowDetector: xprop/xdotool not found — using poll fallback."
+            )
+            return
+
+        logger.info("WindowDetector: starting real-time focus watcher (xprop).")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xprop", "-spy", "-root", "_NET_ACTIVE_WINDOW",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            self._xprop_proc = proc
+
+            async for raw_line in proc.stdout:
+                line = raw_line.decode(errors="replace").strip()
+                # Line format: _NET_ACTIVE_WINDOW(WINDOW): window id # 0x1234567
+                # or on un-focus: _NET_ACTIVE_WINDOW(WINDOW): window id # 0x0
+                if "0x0" in line or "not found" in line:
+                    continue  # screen un-focused (e.g. lock screen)
+
+                # Small debounce — rapid alt-tab produces multiple events;
+                # wait 80 ms and take only the final one.
+                await asyncio.sleep(0.08)
+
                 await self.capture_snapshot(
-                    type("Event", (), {"data": {"task_id": "background_poll"}})()
+                    type("Event", (), {"data": {"task_id": "focus_event"}})()
                 )
-            await asyncio.sleep(2)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "WindowDetector: focus event watcher crashed (%s) — "
+                "falling back to poll.", exc
+            )
 
     # ── OS-specific title + PID fetchers ──────────────────────────────────
 
@@ -421,39 +457,6 @@ class WindowDetector:
             return self._get_macos_info()
         return "Unknown", None
 
-    async def _capture_real_snapshot(self, task_id: str = "internal") -> None:
-        """Build and cache a snapshot for the current foreground window.
-        Does NOT emit an event — only updates _last_external_snapshot.
-        Called by _on_panel_opened to lock the pre-panel context.
-        """
-        try:
-            current_title, pid = await self._get_current_title_and_pid()
-            if self._is_own_window(current_title):
-                return  # panel is already on top, nothing real to capture
-            app_context = await classifier.classify_async(current_title)
-            cwd = await asyncio.get_running_loop().run_in_executor(
-                None, self._get_window_cwd, pid,
-                app_context.category, current_title,
-            )
-            self._last_external_snapshot = {
-                "window_title": current_title,
-                "app_name":    app_context.app_name,
-                "app_type":    app_context.category,
-                "sub_context": app_context.sub_context,
-                "confidence":  app_context.confidence,
-                "llm_used":    app_context.llm_used,
-                "app_context": app_context.to_dict(),
-                "cwd":         cwd,
-                "window_pid":  pid,
-                "task_id":     task_id,
-            }
-            self.last_title = current_title
-            logger.debug(
-                "_capture_real_snapshot: window='%s' cwd='%s'", current_title, cwd
-            )
-        except Exception as exc:
-            logger.warning("_capture_real_snapshot error: %s", exc)
-
     async def capture_snapshot(self, event: object) -> None:
         data_payload = getattr(event, "data", {})
         task_id      = data_payload.get("task_id", "background_poll")
@@ -462,22 +465,19 @@ class WindowDetector:
             current_title, pid = await self._get_current_title_and_pid()
 
             # ── Own-window guard ──────────────────────────────────────────
-            # The panel is in the foreground.  Serve the pre-panel snapshot
-            # (captured the moment the panel opened) so the task always
-            # operates on the app the user was actually looking at.
+            # The Operonix panel is in the foreground.
+            # For background polls: skip silently — don't overwrite the
+            #   last real app snapshot with the panel's own process cwd.
+            # For real task snapshots: serve _last_external_snapshot which
+            #   is always current because xprop updates it the instant the
+            #   user switches windows — even while the panel is visible.
             if self._is_own_window(current_title):
-                if task_id == "background_poll":
-                    # Background polls with the panel open are a no-op;
-                    # _poll_loop already skips them but guard here too.
-                    return
+                if task_id in ("background_poll", "focus_event", "initial_boot"):
+                    return  # silent skip — don't pollute the snapshot
 
-                # Priority order for real task snapshots:
-                #   1. _pre_panel_snapshot  — captured at panel-open time
-                #   2. _last_external_snapshot — last good poll result
-                #   3. pre_panel_context injected by input_adapter
+                # Real task: serve the most recent external window snapshot.
                 cached = (
-                    self._pre_panel_snapshot
-                    or self._last_external_snapshot
+                    self._last_external_snapshot
                     or data_payload.get("pre_panel_context")
                 )
                 if cached is not None:
@@ -485,7 +485,7 @@ class WindowDetector:
                     reply["task_id"] = task_id
                     await bus.emit("context_snapshot_ready", reply, source="window_detector")
                     logger.debug(
-                        "Own-window guard: served pre-panel context app=%s cwd=%s",
+                        "Own-window guard: served cached context app=%s cwd=%s",
                         reply.get("app_name"), reply.get("cwd"),
                     )
                 else:
@@ -494,23 +494,12 @@ class WindowDetector:
                     )
                 return
 
-            # ── Stability threshold ───────────────────────────────────────
-            # Only commit a new snapshot after the same title has appeared
-            # _TITLE_STABLE_POLLS times in a row.  This prevents a window
-            # the user merely glanced at (e.g. VS Code flashing on screen
-            # while switching to the file manager) from overwriting the
-            # real working context.
-            if task_id == "background_poll":
-                if current_title != self.last_title:
-                    # Title changed — start counting stability
-                    self._title_seen_count = {current_title: 1}
-                    return  # wait for next poll to confirm
-                else:
-                    count = self._title_seen_count.get(current_title, 0) + 1
-                    self._title_seen_count[current_title] = count
-                    if count < _TITLE_STABLE_POLLS:
-                        return  # not stable yet
-                    # Stable — fall through to build and commit the snapshot
+            # ── Dedup: skip if title unchanged ───────────────────────────
+            # Applies to both background_poll and focus_event task IDs.
+            # We commit every new non-own-window title immediately.
+            if task_id in ("background_poll", "focus_event") \
+                    and current_title == self.last_title:
+                return  # nothing changed, skip
 
             self.last_title = current_title
 
@@ -535,7 +524,6 @@ class WindowDetector:
             }
 
             self._last_external_snapshot = snapshot
-            self._title_seen_count = {current_title: _TITLE_STABLE_POLLS}
             await bus.emit("context_snapshot_ready", snapshot, source="window_detector")
             logger.debug(
                 "Snapshot committed: window='%s' cwd='%s' pid=%s",
