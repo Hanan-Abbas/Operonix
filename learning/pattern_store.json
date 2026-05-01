@@ -40,7 +40,19 @@
                         }
                     }
                 ],
-                "usage_count": 5,
+                "usage_count": 7,
+                "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "create_dir",
+                        "args": {
+                            "dir_name": "<DIR_NAME>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
                 "step_count": 1
             }
         ]
