@@ -9,7 +9,7 @@ Pipeline (triggered by "capability_gap_detected" event):
   3. Generate plugin code + tests via DeepSeek (llm_client.generate)
   4. Run full sandbox pipeline (sandbox_runner)
   5. If pipeline fails → apply Gemini critique feedback → retry (max 3x)
-  6. If all passes → write to installed/ → request user approval
+  6. If all passes → write to installedgenerator/ → request user approval
   7. On approval → loader hot-reloads → capability registered
 
 Structured output expected from LLM:
