@@ -83,10 +83,14 @@ def _resolve_path(args: dict, context: dict) -> str:
     if dir_name:
         # We have a dir_name — it must be appended to a base directory.
         if raw_path and raw_path not in _RELATIVE_PLACEHOLDERS:
-            # Caller supplied a real base path (absolute or relative).
             base = Path(raw_path)
             if not base.is_absolute():
                 base = Path(cwd) / base
+            # FIX: if the planner already built path = cwd/dir_name, don't
+            # append dir_name again — that produces cwd/dir_name/dir_name.
+            # Check whether the path already ends with dir_name.
+            if base.name == dir_name:
+                return str(base)  # already fully resolved
             return str(base / dir_name)
 
         # raw_path is empty or a placeholder — resolve against cwd.
