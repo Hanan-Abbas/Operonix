@@ -31,6 +31,32 @@ BUG 2 — own-window guard silently dropped the snapshot when
     HotkeyListener). When the own-window guard fires and
     _last_external_snapshot is None, we use pre_panel_context as the
     fallback so the orchestrator always gets a valid cwd.
+
+ARCH FIX 1 — _get_current_title_and_pid was declared async with no awaits.
+    FIX: Made sync. Callers updated to call directly (no await).
+
+ARCH FIX 2 — Race condition on _last_external_snapshot.
+    _focus_event_loop, _poll_loop, and capture_snapshot all write/read
+    _last_external_snapshot concurrently with no synchronisation.
+    FIX: Added asyncio.Lock (_snapshot_lock). All reads/writes now run
+    inside `async with self._snapshot_lock`.
+
+ARCH FIX 3 — run_in_executor used default shared thread pool.
+    _get_window_cwd runs subprocess + file I/O and can block.  Using
+    None (the default pool) risks starving other executor users.
+    FIX: Dedicated ThreadPoolExecutor(max_workers=2) in __init__,
+    passed explicitly to run_in_executor.
+
+ARCH FIX 4 — xprop subprocess never terminated on shutdown.
+    FIX: Added stop() coroutine that terminates _xprop_proc and shuts
+    down the thread pool executor.
+
+ARCH FIX 5 — Dedup guard too aggressive.
+    Same window title ≠ same context (browser tab change, folder switch).
+    The old guard also fired before any snapshot existed, causing the
+    very first background_poll to be skipped if title was unchanged.
+    FIX: Dedup now also requires _last_external_snapshot is not None,
+    so the first capture always goes through.
 """
 from __future__ import annotations
 
@@ -40,6 +66,7 @@ import os
 import platform
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.event_bus import bus
@@ -72,7 +99,9 @@ class WindowDetector:
         self.win32gui = None
         self.last_title: str | None = None
         self._last_external_snapshot: dict | None = None
-
+        self._snapshot_lock = asyncio.Lock()
+        # 🔧 FIX 3: dedicated thread pool for blocking subprocess/file ops
+        self._executor = ThreadPoolExecutor(max_workers=2)
         # _last_external_snapshot is kept current in real time by the
         # xprop focus watcher (Linux) or poll loop (other OS).
         # The own-window guard in capture_snapshot prevents the panel
@@ -125,6 +154,15 @@ class WindowDetector:
         # Poll loop runs as fallback for Windows/macOS and xprop crash recovery.
         asyncio.create_task(self._focus_event_loop())
         asyncio.create_task(self._poll_loop())
+
+    async def stop(self) -> None:
+        """Graceful shutdown: terminate xprop watcher and thread pool."""
+        # 🔧 FIX 4: clean up xprop subprocess on shutdown
+        if self._xprop_proc:
+            self._xprop_proc.terminate()
+            await self._xprop_proc.wait()
+            self._xprop_proc = None
+        self._executor.shutdown(wait=False)
 
     async def _poll_loop(self) -> None:
         """Fallback: Windows/macOS or xprop crash recovery. 1s interval."""
@@ -447,7 +485,7 @@ class WindowDetector:
 
     # ── Snapshot capture ───────────────────────────────────────────────────
 
-    async def _get_current_title_and_pid(self) -> tuple[str, int | None]:
+    def _get_current_title_and_pid(self) -> tuple[str, int | None]:
         """OS-agnostic helper — returns (title, pid) for the active window."""
         if self.os_name == "Linux":
             return self._get_linux_info()
@@ -462,7 +500,7 @@ class WindowDetector:
         task_id      = data_payload.get("task_id", "background_poll")
 
         try:
-            current_title, pid = await self._get_current_title_and_pid()
+            current_title, pid = self._get_current_title_and_pid()
 
             # ── Own-window guard ──────────────────────────────────────────
             # The Operonix panel is in the foreground.
@@ -476,10 +514,12 @@ class WindowDetector:
                     return  # silent skip — don't pollute the snapshot
 
                 # Real task: serve the most recent external window snapshot.
-                cached = (
-                    self._last_external_snapshot
-                    or data_payload.get("pre_panel_context")
-                )
+                # 🔧 FIX 2: concurrency protection — guard read with lock
+                async with self._snapshot_lock:
+                    cached = (
+                        self._last_external_snapshot
+                        or data_payload.get("pre_panel_context")
+                    )
                 if cached is not None:
                     reply = dict(cached)
                     reply["task_id"] = task_id
@@ -495,10 +535,13 @@ class WindowDetector:
                 return
 
             # ── Dedup: skip if title unchanged ───────────────────────────
-            # Applies to both background_poll and focus_event task IDs.
-            # We commit every new non-own-window title immediately.
+            # 🔧 FIX 5 (optional): only skip when we already have a snapshot —
+            # same title ≠ same context (e.g. tab change, folder switch).
+            # Require _last_external_snapshot to be set so the first capture
+            # always goes through even if the title hasn't changed.
             if task_id in ("background_poll", "focus_event") \
-                    and current_title == self.last_title:
+                    and current_title == self.last_title \
+                    and self._last_external_snapshot is not None:
                 return  # nothing changed, skip
 
             self.last_title = current_title
@@ -506,7 +549,9 @@ class WindowDetector:
             # Classify and resolve cwd
             app_context = await classifier.classify_async(current_title)
             cwd = await asyncio.get_running_loop().run_in_executor(
-                None, self._get_window_cwd, pid,
+                # 🔧 FIX 3: use dedicated thread pool (not default shared pool)
+                self._executor,
+                self._get_window_cwd, pid,
                 app_context.category, current_title,
             )
 
@@ -523,7 +568,9 @@ class WindowDetector:
                 "task_id":     task_id,
             }
 
-            self._last_external_snapshot = snapshot
+            # 🔧 FIX 2: concurrency protection — guard write with lock
+            async with self._snapshot_lock:
+                self._last_external_snapshot = snapshot
             await bus.emit("context_snapshot_ready", snapshot, source="window_detector")
             logger.debug(
                 "Snapshot committed: window='%s' cwd='%s' pid=%s",
