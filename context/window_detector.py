@@ -290,135 +290,86 @@ class WindowDetector:
 
     # ── CWD resolution ─────────────────────────────────────────────────────
 
-    def _get_window_cwd(
-        self,
-        pid: int | None,
-        app_type: str = "",
-        window_title: str = "",
-    ) -> str:
+    def _get_window_cwd(self,pid: int | None,app_type: str = "",window_title: str = "",
+) -> str:
         """
-        Resolve the TRUE working directory for the focused window.
+        CWD Resolver v2 (Context-aware OS resolver)
 
-        This is app-type-aware.  Reading /proc/<pid>/cwd for a file manager
-        gives the manager's install dir, NOT the folder the user is browsing.
-        Each app type needs a different strategy:
-
-          file_manager  → parse window title / query D-Bus / AppleScript
-          terminal      → read cwd of the shell child process
-          browser       → skip (URL ≠ filesystem path); return os.getcwd()
-          code_editor   → /proc/<pid>/cwd  (editor sets cwd to project root)
-          everything else → /proc/<pid>/cwd or psutil fallback
+        Strategy:
+        1. Terminal → shell process cwd (highest accuracy)
+        2. File manager → actual GUI path (DBus / Finder / heuristics)
+        3. Code editor → project root via process cwd
+        4. Folder-like window title → resolve in HOME
+        5. Fallback → os.getcwd()
         """
+
         if not pid:
             return os.getcwd()
 
+        title = (window_title or "").strip()
+
         try:
+            # ─────────────────────────────────────────────
+            # 1. TERMINAL (MOST RELIABLE)
+            # ─────────────────────────────────────────────
+            if app_type == "terminal":
+                cwd = self._cwd_from_terminal_child(pid)
+                if cwd:
+                    return cwd
+
+            # ─────────────────────────────────────────────
+            # 2. FILE MANAGER (REAL GUI DIRECTORY)
+            # ─────────────────────────────────────────────
             if app_type == "file_manager":
                 cwd = self._cwd_from_file_manager(pid, window_title)
                 if cwd:
                     return cwd
-                # fall through to process cwd as last resort
 
-            elif app_type == "terminal":
-                cwd = self._cwd_from_terminal_child(pid)
-                if cwd:
-                    return cwd
-                # fall through
+                # 🔧 NEW: folder-as-window fallback (Screenshots, Downloads, etc.)
+                home = Path.home()
+                candidate = home / title
 
-            elif app_type == "browser":
+                if title and len(title) < 80:
+                    if candidate.exists() and candidate.is_dir():
+                        return str(candidate)
+
+            # ─────────────────────────────────────────────
+            # 3. CODE EDITORS (PROJECT ROOT)
+            # ─────────────────────────────────────────────
+            if app_type == "code_editor":
+                if self.os_name == "Linux":
+                    link = Path(f"/proc/{pid}/cwd")
+                    if link.exists():
+                        return str(link.resolve())
+                else:
+                    import psutil
+                    return psutil.Process(pid).cwd()
+
+            # ─────────────────────────────────────────────
+            # 4. BROWSER (NO REAL FS CONTEXT)
+            # ─────────────────────────────────────────────
+            if app_type == "browser":
                 return os.getcwd()
 
-            # Default: process's own cwd
+            # ─────────────────────────────────────────────
+            # 5. GENERIC PROCESS FALLBACK
+            # ─────────────────────────────────────────────
             if self.os_name == "Linux":
-                cwd_link = Path(f"/proc/{pid}/cwd")
-                if cwd_link.exists():
-                    return str(cwd_link.resolve())
+                link = Path(f"/proc/{pid}/cwd")
+                if link.exists():
+                    return str(link.resolve())
+
             else:
                 import psutil
                 return psutil.Process(pid).cwd()
 
         except Exception as exc:
             logger.debug(
-                "CWD resolution failed pid=%s app_type=%s: %s", pid, app_type, exc
+                "CWD resolver v2 failed pid=%s app_type=%s: %s",
+                pid, app_type, exc
             )
 
         return os.getcwd()
-
-    def _cwd_from_file_manager(self, pid: int, window_title: str) -> str | None:
-        """
-        Resolve the folder currently displayed in a file manager.
-
-        Linux strategies (tried in order):
-          1. Nautilus D-Bus — exact location, no parsing needed
-          2. Window title starts with '/' — it is the path (Thunar, Nemo)
-          3. Match title word against XDG standard dirs and a bounded find
-
-        Windows: SHGetFolderPath
-        macOS:   AppleScript Finder target
-        """
-        if self.os_name == "Linux":
-            # Strategy 1: Nautilus D-Bus
-            try:
-                gio = subprocess.run(
-                    [
-                        "gdbus", "call", "--session",
-                        "--dest", "org.gnome.Nautilus",
-                        "--object-path", "/org/gnome/Nautilus/window/1",
-                        "--method", "org.freedesktop.DBus.Properties.Get",
-                        "org.gnome.Nautilus.Window", "Location",
-                    ],
-                    capture_output=True, text=True, timeout=1,
-                )
-                if gio.returncode == 0 and "file://" in gio.stdout:
-                    import urllib.parse
-                    raw = gio.stdout.split("file://")[1].split("'")[0]
-                    decoded = urllib.parse.unquote(raw).strip()
-                    if decoded and Path(decoded).is_dir():
-                        return decoded
-            except Exception:
-                pass
-
-            # Strategy 2: title is a full path (Thunar / Nemo / Dolphin)
-            candidate = window_title.strip().split(" ")[0]
-            if candidate.startswith("/") and Path(candidate).is_dir():
-                return candidate
-
-            # Strategy 3: match title word against known dirs + bounded find
-            title_word = (
-                window_title.strip()
-                .split("—")[0].split("–")[0].split("-")[0]
-                .strip()
-            )
-            if title_word:
-                return self._search_folder_by_name(title_word)
-
-        elif self.os_name == "Windows":
-            try:
-                import ctypes
-                buf = ctypes.create_unicode_buffer(260)
-                ctypes.windll.shell32.SHGetFolderPathW(0, 0, 0, 0, buf)
-                return buf.value or None
-            except Exception:
-                pass
-
-        elif self.os_name == "Darwin":
-            try:
-                script = (
-                    'tell application "Finder" to get POSIX path '
-                    'of (target of front window as alias)'
-                )
-                result = subprocess.run(
-                    ["osascript", "-e", script],
-                    capture_output=True, text=True, timeout=2,
-                )
-                if result.returncode == 0:
-                    path = result.stdout.strip()
-                    if path and Path(path).is_dir():
-                        return path
-            except Exception:
-                pass
-
-        return None
 
     def _search_folder_by_name(self, name: str) -> str | None:
         """
