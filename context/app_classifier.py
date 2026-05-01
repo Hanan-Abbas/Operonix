@@ -11,6 +11,38 @@ Design goals:
       2. Optional LLM fallback via the Anthropic API for ambiguous titles where
          the heuristic returns LOW confidence.
   • Returns a rich AppContext dataclass consumed by the rest of the pipeline.
+
+FIX CHANGELOG (this revision)
+──────────────────────────────
+ARCH FIX 1 — Cache was not concurrency-safe.
+    _cache was read and written from multiple concurrent async tasks
+    (window_detector runs _focus_event_loop + _poll_loop concurrently).
+    FIX: Added _cache_lock (asyncio.Lock, lazy-initialised). All reads
+    and writes in classify_async are now guarded with `async with _get_cache_lock()`.
+    The sync classify() path uses a plain dict.get / pop which is atomic
+    in CPython — best-effort safety without blocking the event loop.
+
+ARCH FIX 2 — Cache had no size limit (memory leak for dynamic titles).
+    Browser tabs, terminal prompts, and log viewers produce unbounded
+    unique titles, causing _cache to grow forever.
+    FIX: Added _MAX_CACHE_SIZE = 500. When the limit is reached the oldest
+    entry is evicted (insertion-order FIFO via dict iteration) before the
+    new entry is written — in both sync and async paths.
+
+ARCH FIX 3 — LLM was triggered for junk low-signal titles.
+    "New Tab", "Untitled", "—" etc. are low-confidence but also carry
+    zero information — the LLM call is wasted.
+    FIX: Added _is_low_value_title() guard. LLM is skipped when the title
+    is shorter than 4 characters or matches a known zero-value string.
+
+ARCH FIX 4 — _extract_app_name fallback produced misleading names.
+    Titles like "README.md" or "localhost:3000" yielded "Readme.md" /
+    "Localhost:3000" as the app_name, which confused downstream consumers.
+    FIX: Fallback now returns "Unknown" — category already carries the signal.
+
+OPTIONAL FIX — Title normalisation prevents duplicate cache entries.
+    Titles that differ only in whitespace (copy-paste artefacts, OS quirks)
+    now share a single cache entry via _normalize_title().
 """
 
 from __future__ import annotations
@@ -178,8 +210,10 @@ def _extract_app_name(title: str) -> str:
             # Reasonable app name: 2-50 chars, no newlines
             if 2 <= len(candidate) <= 50 and "\n" not in candidate:
                 return candidate
-    # Fallback: first word (capitalised)
-    return title.split()[0].capitalize() if title.split() else "Unknown"
+    # 🔧 FIX 4: don't guess app name from first word — filenames and hostnames
+    # look like app names after capitalisation (e.g. "Readme.md", "Localhost:3000").
+    # category already carries the signal; a bad app_name just misleads downstream.
+    return "Unknown"
 
 
 def _local_classify(title: str) -> tuple[str, str, str, str]:
@@ -273,12 +307,40 @@ async def _llm_classify(title: str) -> Optional[tuple[str, str, Optional[str]]]:
 _cache: dict[str, AppContext] = {}
 _llm_lock: asyncio.Lock | None = None   # initialised lazily in async context
 
+# 🔧 FIX 2: cap cache size to prevent unbounded memory growth
+_MAX_CACHE_SIZE = 500
+
+# 🔧 FIX 1: dedicated lock for concurrency-safe cache reads/writes
+_cache_lock: asyncio.Lock | None = None  # initialised lazily in async context
+
 
 def _get_llm_lock() -> asyncio.Lock:
     global _llm_lock
     if _llm_lock is None:
         _llm_lock = asyncio.Lock()
     return _llm_lock
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    global _cache_lock
+    if _cache_lock is None:
+        _cache_lock = asyncio.Lock()
+    return _cache_lock
+
+
+# 🔧 OPTIONAL FIX: collapse runs of whitespace so titles that differ only in
+# spacing (e.g. copy-pasted vs typed) share a single cache entry.
+def _normalize_title(title: str) -> str:
+    return re.sub(r"\s+", " ", title.strip())
+
+
+# 🔧 FIX 3: guard against wasting LLM calls on inherently low-value titles
+def _is_low_value_title(title: str) -> bool:
+    t = title.strip().lower()
+    return (
+        len(t) < 4
+        or t in {"new tab", "untitled", "settings", "home", "start"}
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -298,8 +360,13 @@ class AppClassifier:
 
     # ── Synchronous classify (heuristic only, always instant) ─────────────────
     def classify(self, title: str) -> AppContext:
-        if title in _cache:
-            return _cache[title]
+        # 🔧 OPTIONAL FIX: normalise whitespace so "a  b" and "a b" share cache
+        title = _normalize_title(title)
+
+        # 🔧 FIX 1: safe read (dict lookup is atomic in CPython, but be explicit)
+        ctx = _cache.get(title)
+        if ctx:
+            return ctx
 
         app_name, category, sub_context, confidence = _local_classify(title)
         ctx = AppContext(
@@ -310,26 +377,37 @@ class AppClassifier:
             confidence=confidence,
             llm_used=False,
         )
+        # 🔧 FIX 2: evict oldest entry when cap is reached (best-effort, no lock)
+        if len(_cache) >= _MAX_CACHE_SIZE:
+            _cache.pop(next(iter(_cache)))
+        # 🔧 FIX 1: write
         _cache[title] = ctx
         return ctx
 
     # ── Async classify (heuristic + optional LLM fallback) ────────────────────
     async def classify_async(self, title: str) -> AppContext:
-        # Return cached result immediately
-        if title in _cache:
-            cached = _cache[title]
-            # Re-resolve if low confidence and LLM hasn't run yet
+        # 🔧 OPTIONAL FIX: normalise before any cache lookup
+        title = _normalize_title(title)
+
+        # 🔧 FIX 1: safe read — acquire lock before inspecting cache
+        async with _get_cache_lock():
+            cached = _cache.get(title)
+        if cached:
+            # Re-resolve only if low confidence and LLM hasn't run yet
             if cached.confidence != "low" or cached.llm_used:
                 return cached
 
         app_name, category, sub_context, confidence = _local_classify(title)
 
         llm_used = False
-        if confidence == "low":
+        # 🔧 FIX 3: skip LLM for titles that carry no useful signal
+        if confidence == "low" and not _is_low_value_title(title):
             async with _get_llm_lock():
                 # Double-check cache after acquiring lock
-                if title in _cache and (_cache[title].llm_used or _cache[title].confidence != "low"):
-                    return _cache[title]
+                async with _get_cache_lock():
+                    rechecked = _cache.get(title)
+                if rechecked and (rechecked.llm_used or rechecked.confidence != "low"):
+                    return rechecked
 
                 result = await _llm_classify(title)
                 if result:
@@ -345,7 +423,11 @@ class AppClassifier:
             confidence=confidence,
             llm_used=llm_used,
         )
-        _cache[title] = ctx
+        # 🔧 FIX 1+2: lock-guarded write with LRU eviction
+        async with _get_cache_lock():
+            if len(_cache) >= _MAX_CACHE_SIZE:
+                _cache.pop(next(iter(_cache)))  # evict oldest
+            _cache[title] = ctx
         return ctx
 
     def clear_cache(self) -> None:
