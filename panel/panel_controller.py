@@ -80,6 +80,9 @@ if _HAS_QT:
         sig_toggle              = _pyqtSignal()
         sig_apply_theme         = _pyqtSignal()
         sig_request_quit        = _pyqtSignal()
+        # Fires on the Qt thread after the panel becomes visible so
+        # _emit_panel_opened() can publish panel_opened on the bus.
+        sig_panel_became_visible = _pyqtSignal()
 
         def __init__(self, parent: QObject | None = None) -> None:
             super().__init__(parent)
@@ -189,8 +192,9 @@ class PanelController:
         self._bridge.sig_set_resolved_intent.connect(self._renderer.set_resolved_intent)
         self._bridge.sig_update_suggestions.connect(self._renderer.update_suggestions)
         self._bridge.sig_set_active_mode.connect(self._renderer.set_active_mode)
-        self._bridge.sig_toggle.connect(self._window.toggle)
+        self._bridge.sig_toggle.connect(self._toggle_with_event)
         self._bridge.sig_apply_theme.connect(self._apply_current_theme)
+        self._bridge.sig_panel_became_visible.connect(self._emit_panel_opened)
 
         if _HAS_QT:
             from PyQt6.QtWidgets import QApplication
@@ -222,8 +226,13 @@ class PanelController:
         self._subscribe()
         self._hotkey.start()
 
+        # Wire panel visibility → EventBus so window_detector can freeze
+        # its context snapshot while the panel is open (fixes wrong-cwd bug).
         if self._window:
-            self._window.show_panel()
+            # Both signals run on the Qt thread — safe to call bus.publish directly.
+            self._window.hidden.connect(self._on_panel_hidden)
+            self._window.shown.connect(self._emit_panel_opened)
+            self._window.show_panel()  # show_panel() emits shown → panel_opened
 
         log.info("panel_controller: started (theme=%s)", self._state.theme)
 
@@ -253,6 +262,40 @@ class PanelController:
         log.info("panel_controller: stopped.")
 
     # ------------------------------------------------------------------
+    # Panel visibility helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_with_event(self) -> None:
+        """Wraps window.toggle() and fires the correct bus event after.
+        Runs on Qt thread (connected via Qt signal), so window.isVisible()
+        reflects the TRUE post-toggle state.
+        """
+        if self._window:
+            self._window.toggle()
+            if self._window.isVisible():
+                self._emit_panel_opened()
+            else:
+                self._on_panel_hidden()
+
+    def _on_panel_hidden(self) -> None:
+        """Called when the panel window is hidden (Qt signal → Qt thread).
+        Publishes panel_closed so window_detector resumes normal polling.
+        """
+        try:
+            self._bus.publish("panel_closed", {}, source="panel")
+            log.debug("panel_controller: panel_closed published")
+        except Exception as exc:
+            log.warning("panel_controller: could not publish panel_closed — %s", exc)
+
+    def _emit_panel_opened(self) -> None:
+        """Publishes panel_opened so window_detector locks the pre-panel context."""
+        try:
+            self._bus.publish("panel_opened", {}, source="panel")
+            log.debug("panel_controller: panel_opened published")
+        except Exception as exc:
+            log.warning("panel_controller: could not publish panel_opened — %s", exc)
+
+    # ------------------------------------------------------------------
     # EventBus subscriptions
     # ------------------------------------------------------------------
 
@@ -277,6 +320,8 @@ class PanelController:
     def _on_toggle(self, _payload: Any) -> None:
         if self._bridge:
             self._bridge.sig_toggle.emit()
+        # panel_opened/panel_closed are emitted by the window's
+        # show_panel/hide_panel hooks wired in start() below.
 
     def _on_action_completed(self, event: Any) -> None:
         payload = event.data if hasattr(event, "data") else event
