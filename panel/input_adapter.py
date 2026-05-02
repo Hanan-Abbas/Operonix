@@ -150,23 +150,11 @@ class PanelInputAdapter:
                 restore_context = None
 
         if restore_context is not None:
-            # Restore _last_external_snapshot so window_detector's own-window
-            # guard serves the correct cwd for this task.
-            # This runs synchronously before bus.publish so the snapshot is
-            # in place when capture_snapshot fires for this task_id.
-            try:
-                from context.window_detector import window_detector as _wd
-                _wd._last_external_snapshot = dict(restore_context)
-                logger.debug(
-                    "PanelInputAdapter: restored context cwd=%r window=%r",
-                    restore_context.get("cwd"),
-                    restore_context.get("window_title"),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "PanelInputAdapter: could not restore snapshot — %s", exc
-                )
-
+            # Pass restore_context directly in the payload.
+            # window_detector.capture_snapshot() reads "pre_panel_context"
+            # from the event payload for task (non-poll) requests and serves
+            # it directly — bypassing _last_external_snapshot which xprop
+            # can overwrite between now and when capture_snapshot runs.
             payload["pre_panel_context"] = restore_context
             logger.info(
                 "PanelInputAdapter: publishing query (method=%r, cwd=%r): %r",
