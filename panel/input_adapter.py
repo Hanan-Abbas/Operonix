@@ -136,26 +136,42 @@ class PanelInputAdapter:
             "source":           "panel",
         }
 
-        if pre_context is not None:
+        # Resolve the best available context to restore before the query runs.
+        # Priority:
+        #   1. pre_panel_context from HotkeyListener (hotkey-triggered open)
+        #   2. _last_real_context from WindowDetector (always-on tracking,
+        #      never overwritten by fake VS Code focus from panel clicks)
+        restore_context = pre_context
+        if restore_context is None:
             try:
                 from context.window_detector import window_detector as _wd
-                _wd._last_external_snapshot = dict(pre_context)
+                restore_context = _wd._last_real_context
+            except Exception:
+                restore_context = None
+
+        if restore_context is not None:
+            # Restore _last_external_snapshot so window_detector's own-window
+            # guard serves the correct cwd for this task.
+            # This runs synchronously before bus.publish so the snapshot is
+            # in place when capture_snapshot fires for this task_id.
+            try:
+                from context.window_detector import window_detector as _wd
+                _wd._last_external_snapshot = dict(restore_context)
                 logger.debug(
-                    "PanelInputAdapter: restored _last_external_snapshot "
-                    "cwd=%r window=%r",
-                    pre_context.get("cwd"),
-                    pre_context.get("window_title"),
+                    "PanelInputAdapter: restored context cwd=%r window=%r",
+                    restore_context.get("cwd"),
+                    restore_context.get("window_title"),
                 )
             except Exception as exc:
                 logger.warning(
                     "PanelInputAdapter: could not restore snapshot — %s", exc
                 )
 
-            payload["pre_panel_context"] = pre_context
+            payload["pre_panel_context"] = restore_context
             logger.info(
                 "PanelInputAdapter: publishing query (method=%r, cwd=%r): %r",
                 chosen_method,
-                pre_context.get("cwd"),
+                restore_context.get("cwd"),
                 query,
             )
         else:
