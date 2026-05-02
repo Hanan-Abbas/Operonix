@@ -176,16 +176,36 @@ class HotkeyListener:
             else:
                 return None
 
-            # If somehow our own window is already focused, fall back to
-            # the last known external snapshot rather than recording ourselves.
+            # If our own window is already focused (panel clicked before
+            # hotkey — edge case), fall back to last known external snapshot.
             if wd._is_own_window(title):
-                return wd._last_external_snapshot
+                snap = wd._last_external_snapshot
+                log.debug(
+                    "hotkey_listener: own-window at fire time — using last external: %s",
+                    snap,
+                )
+                return snap
 
-            cwd = wd._get_window_cwd(pid)
+            # Classify the window so _get_window_cwd uses the right strategy.
+            # _infer_file_manager covers Nautilus-style folder-name titles
+            # that the classifier returns 'unknown' for.
+            try:
+                from context.app_classifier import classifier as _clf
+                app_ctx = _clf.classify(title)  # sync path, safe in thread
+                app_type = app_ctx.category
+            except Exception:
+                app_type = "unknown"
+
+            # Override 'unknown' with file_manager when applicable
+            if app_type == "unknown":
+                app_type = wd._infer_file_manager(pid, title)
+
+            cwd = wd._get_window_cwd(pid, app_type, title)
 
             return {
                 "window_title": title,
                 "window_pid":   pid,
+                "app_type":     app_type,
                 "cwd":          cwd,
             }
 
