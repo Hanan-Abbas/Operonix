@@ -137,10 +137,21 @@ class PanelInputAdapter:
         }
 
         if pre_context is not None:
-            # Inject cwd directly at the top level so orchestrator/planner
-            # can read it without knowing about pre_panel_context.
+            try:
+                from context.window_detector import window_detector as _wd
+                _wd._last_external_snapshot = dict(pre_context)
+                logger.debug(
+                    "PanelInputAdapter: restored _last_external_snapshot "
+                    "cwd=%r window=%r",
+                    pre_context.get("cwd"),
+                    pre_context.get("window_title"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PanelInputAdapter: could not restore snapshot — %s", exc
+                )
+
             payload["pre_panel_context"] = pre_context
-            payload["cwd"] = pre_context.get("cwd")
             logger.info(
                 "PanelInputAdapter: publishing query (method=%r, cwd=%r): %r",
                 chosen_method,
