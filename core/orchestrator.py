@@ -1,31 +1,5 @@
 """
 core/orchestrator.py — Operonix AI OS Agent
-═════════════════════════════════════════════
-
-FIX CHANGELOG (this revision)
-──────────────────────────────
-BUG 1 — inject_task_metadata ordering race (event_bus concurrent dispatch)
-    event_bus.run() fires ALL subscribers to the same event as concurrent
-    asyncio tasks — there is no guaranteed order.  inject_task_metadata was
-    subscribed to "request_planning" hoping to run before the planner, but
-    both tasks were spawned simultaneously so the planner always saw the
-    un-enriched payload.
-
-    FIX: inject_task_metadata is now subscribed to "capability_mapped".
-    The orchestrator sees capability_mapped, enriches event.data with
-    preferred_method and context IN PLACE, then the decision_engine's
-    enqueue_task (also subscribed to capability_mapped) picks up the already-
-    enriched payload.  Because both run concurrently, enrichment is done via
-    a direct dict mutation on event.data — the decision_engine reads the same
-    dict object so it always has the full context regardless of task order.
-
-    The chain then becomes:
-      capability_mapped  →  orchestrator enriches event.data  (concurrent)
-                         →  decision_engine queues enriched task
-      decision_engine    →  request_planning  (enriched payload)
-      planner            →  task_dispatched   (enriched payload)
-      validator          →  task_safety_cleared
-      executor           →  executes with full context + preferred_method
 """
 from __future__ import annotations
 
@@ -65,7 +39,7 @@ def _build_panel_controller() -> Any:
             except Exception:
                 return []
     except Exception:
-        learned_ranking = None  # type: ignore[assignment]
+        learned_ranking = None
 
     return PanelController(
         event_bus=bus,
@@ -97,8 +71,6 @@ class Orchestrator:
         self._panel_thread:     Optional[threading.Thread] = None
         self._panel_ready = threading.Event()
 
-    # ── Lifecycle ──────────────────────────────────────────────────────────
-
     async def start(self) -> None:
         self.is_running = True
         loop = asyncio.get_running_loop()
@@ -107,18 +79,9 @@ class Orchestrator:
         bus.subscribe("wake_word_detected",    self.handle_wake_word)
         bus.subscribe("text_query_received",   self._handle_panel_input)
         bus.subscribe("user_input_received",   self.handle_new_task)
-
-        # Capture window context into active_tasks as soon as it arrives
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
-
-        # Route parsed intent to capability mapper
         bus.subscribe("intent_parsed",         self.route_to_mapper)
-
-        # BUG 1 FIX: inject preferred_method + context on capability_mapped,
-        # not on request_planning, to avoid the concurrent-dispatch race.
         bus.subscribe("capability_mapped",     self.inject_task_metadata)
-
-        # Task lifecycle
         bus.subscribe("task_failed",           self.handle_failure)
         bus.subscribe("task_completed",        self.finalize_task)
 
@@ -141,8 +104,6 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("panel stop error: %s", exc)
         logger.info("Orchestrator stopped.")
-
-    # ── Panel bootstrap ────────────────────────────────────────────────────
 
     def _start_panel(self) -> None:
         if self._panel_thread is not None and self._panel_thread.is_alive():
@@ -192,8 +153,6 @@ class Orchestrator:
             logger.error("panel thread crashed: %s", exc, exc_info=True)
             self._panel_ready.set()
 
-    # ── Background loops ───────────────────────────────────────────────────
-
     async def _background_wake_loop(self) -> None:
         loop = asyncio.get_running_loop()
         while self.is_running:
@@ -204,7 +163,7 @@ class Orchestrator:
             try:
                 await asyncio.wait_for(asyncio.shield(future), timeout=1.0)
             except asyncio.TimeoutError:
-                pass  # re-enters loop → re-checks _voice_active immediately
+                pass
             await asyncio.sleep(0.005)
 
     async def _emit_app_context_loop(self) -> None:
@@ -224,8 +183,6 @@ class Orchestrator:
                     )
             except Exception as exc:
                 logger.debug("app_profiler error: %s", exc)
-
-    # ── Input handlers ─────────────────────────────────────────────────────
 
     async def handle_wake_word(self, event: Any) -> None:
         score = event.data.get("score", 0.0)
@@ -258,18 +215,21 @@ class Orchestrator:
         await bus.emit(
             "user_input_received",
             {
-                "text":             query,
-                "source":           "panel",
-                "stt":              {},
-                "stt_provider":     None,
-                "confidence":       1.0,
-                "duration":         0,
-                "preferred_method": event.data.get("preferred_method"),
+                "text":               query,
+                "source":             "panel",
+                "stt":                {},
+                "stt_provider":       None,
+                "confidence":         1.0,
+                "duration":           0,
+                "preferred_method":   event.data.get("preferred_method"),
+                # FIX: forward pre_panel_context so handle_new_task can attach
+                # it to request_context_snapshot. It must travel in the event
+                # payload — shared fields like _last_external_snapshot get
+                # overwritten by xprop before capture_snapshot runs.
+                "pre_panel_context":  event.data.get("pre_panel_context"),
             },
             source="orchestrator",
         )
-
-    # ── Task lifecycle ─────────────────────────────────────────────────────
 
     async def handle_new_task(self, event: Any) -> None:
         task_id   = str(uuid.uuid4())[:8]
@@ -290,7 +250,20 @@ class Orchestrator:
             task_id, self.active_tasks[task_id]["source"], user_text,
         )
 
-        await bus.emit("request_context_snapshot", {"task_id": task_id}, source="orchestrator")
+        # FIX: forward pre_panel_context in the snapshot request payload.
+        # window_detector.capture_snapshot reads it directly from the event
+        # payload — bypassing _last_external_snapshot which xprop overwrites
+        # between bus.publish and when capture_snapshot actually runs.
+        pre_panel_context = event.data.get("pre_panel_context")
+        snapshot_payload = {"task_id": task_id}
+        if pre_panel_context:
+            snapshot_payload["pre_panel_context"] = pre_panel_context
+            logger.debug(
+                "Task [%s] forwarding pre_panel_context cwd=%s",
+                task_id, pre_panel_context.get("cwd"),
+            )
+
+        await bus.emit("request_context_snapshot", snapshot_payload, source="orchestrator")
         await bus.emit(
             "request_intent_parsing",
             {
@@ -304,11 +277,6 @@ class Orchestrator:
         )
 
     async def handle_context_snapshot(self, event: Any) -> None:
-        """
-        Merge window_detector snapshot into active_tasks[task_id]["context"].
-        The snapshot contains window_title, app_name, app_type etc. but NOT cwd.
-        cwd is resolved separately by window_detector (see window_detector.py fix).
-        """
         task_id = event.data.get("task_id")
         if not task_id or task_id not in self.active_tasks:
             return
@@ -327,7 +295,6 @@ class Orchestrator:
         )
 
     async def route_to_mapper(self, event: Any) -> None:
-        """intent_parsed → request_capability_mapping. Also stores intent."""
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
         if event.data.get("intent"):
@@ -335,19 +302,6 @@ class Orchestrator:
         await bus.emit("request_capability_mapping", event.data, source="orchestrator")
 
     async def inject_task_metadata(self, event: Any) -> None:
-        """
-        BUG 1 FIX: subscribed to "capability_mapped".
-
-        Mutates event.data IN PLACE before the decision_engine's enqueue_task
-        coroutine reads it.  Both handlers are spawned concurrently by the
-        event bus, but because this is a direct dict mutation (not a re-publish),
-        whichever coroutine runs second will see the updated values.
-
-        To guarantee the decision_engine always sees the enriched data we use
-        a short yield (await asyncio.sleep(0)) which allows this coroutine to
-        complete the mutation before the decision_engine's enqueue_task awaits
-        its own queue.put().
-        """
         task_id = event.data.get("task_id")
         if not task_id or task_id not in self.active_tasks:
             return
@@ -356,16 +310,12 @@ class Orchestrator:
         ctx      = task.get("context") or {}
         pmethod  = task.get("preferred_method")
 
-        # Inject preferred_method
         if pmethod and not event.data.get("preferred_method"):
             event.data["preferred_method"] = pmethod
 
-        # Inject context — merge so any keys already set survive
         existing = event.data.get("context") or {}
         event.data["context"] = {**ctx, **existing}
 
-        # Yield to allow this mutation to settle before the decision_engine
-        # reads the dict inside its own enqueue_task coroutine.
         await asyncio.sleep(0)
 
         logger.debug(
@@ -374,8 +324,6 @@ class Orchestrator:
             event.data.get("preferred_method"),
             event.data["context"].get("cwd", "<not set>"),
         )
-
-    # ── Task completion ────────────────────────────────────────────────────
 
     async def handle_failure(self, event: Any) -> None:
         task_id    = event.data.get("task_id")
