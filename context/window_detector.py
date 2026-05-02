@@ -38,8 +38,16 @@ import asyncio
 import logging
 import os
 import platform
+import os
 import shutil
 import subprocess
+
+# PID of the Operonix process itself. The panel runs as a Tool window
+# parented to VS Code in X11 — clicking the panel fires a focus_event
+# for VS Code's window (same pid as ours). We use this to exclude
+# that window from _last_real_context updates.
+_OWN_PID = os.getpid()
+
 from pathlib import Path
 
 from core.event_bus import bus
@@ -192,6 +200,13 @@ class WindowDetector:
                     and not self._is_own_window(
                         self._last_external_snapshot.get("window_title", "")
                     )
+                    # Do NOT save main.py/VS Code as real context — it is
+                    # the panel's X11 parent window. Every panel click
+                    # fires a focus_event for it. Saving it here would
+                    # overwrite the real previous app (e.g. Screenshots).
+                    # We detect it by checking if the snapshot's pid matches
+                    # our own process pid (Operonix runs inside VS Code).
+                    and self._last_external_snapshot.get("window_pid") != _OWN_PID
                 ):
                     self._last_real_context = dict(self._last_external_snapshot)
                     logger.debug(
@@ -596,10 +611,16 @@ class WindowDetector:
                 if task_id in ("background_poll", "focus_event", "initial_boot"):
                     return  # silent skip — don't pollute the snapshot
 
-                # Real task: serve the most recent external window snapshot.
+                # Real task: serve the correct context.
+                # Priority:
+                #   1. pre_panel_context in the payload — set by input_adapter
+                #      from _last_real_context. This is xprop-proof because
+                #      it travels in the event payload, not in a shared field
+                #      that xprop can overwrite between publish and serve.
+                #   2. _last_external_snapshot — best available fallback.
                 cached = (
-                    self._last_external_snapshot
-                    or data_payload.get("pre_panel_context")
+                    data_payload.get("pre_panel_context")
+                    or self._last_external_snapshot
                 )
                 if cached is not None:
                     reply = dict(cached)
@@ -662,7 +683,10 @@ class WindowDetector:
             # focus_event does NOT update here — it's handled in
             # _focus_event_loop BEFORE the new window is processed, capturing
             # the window being LEFT rather than the window being entered.
-            if task_id == "background_poll":
+            # background_poll: update _last_real_context unless this window
+            # is the Operonix process itself (shouldn't happen in polls,
+            # but guard anyway for safety).
+            if task_id == "background_poll" and pid != _OWN_PID:
                 last_real_title = (
                     self._last_real_context.get("window_title")
                     if self._last_real_context else None
