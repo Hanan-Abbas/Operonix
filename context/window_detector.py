@@ -78,16 +78,11 @@ class WindowDetector:
         # own-window guard. xprop overwrites this when VS Code gains focus
         # because the panel click focuses VS Code in X11.
 
-        # _last_real_context: the last window the user was INTENTIONALLY
-        # working in — never overwritten while the panel is the target.
-        # Updated only when focus changes to a non-panel window AND the
-        # previous focus was also a non-panel window (i.e. not a panel click).
-        # input_adapter reads this to restore context before a query runs.
+        # _last_real_context: captures the window being LEFT on each focus
+        # switch (saved in _focus_event_loop before the new window is processed).
+        # This is always the last real app the user was in before clicking
+        # the panel. input_adapter reads it to restore context at query time.
         self._last_real_context: dict | None = None
-        # True while the Operonix panel window is visible.
-        # Set by panel_opened / panel_closed events subscribed in start().
-        # Used to block fake VS Code focus events caused by panel clicks.
-        self._panel_visible: bool = False
         self._setup_os_imports()
 
     # ── OS import setup ────────────────────────────────────────────────────
@@ -123,14 +118,6 @@ class WindowDetector:
     async def start(self) -> None:
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
 
-        # Track panel visibility to block fake VS Code focus events.
-        # When the panel is visible and user clicks into it, X11 fires
-        # a focus_event for VS Code — _panel_visible=True blocks that
-        # from overwriting _last_real_context.
-        bus.subscribe("panel_opened", self._on_panel_visible)
-        bus.subscribe("panel_closed", self._on_panel_hidden_flag)
-        bus.subscribe("panel_hidden", self._on_panel_hidden_flag)
-
         logger.info("Window Detector: Active on %s", self.os_name)
         self._xprop_proc = None
         await asyncio.sleep(1)
@@ -152,16 +139,6 @@ class WindowDetector:
                 type("Event", (), {"data": {"task_id": "background_poll"}})()
             )
             await asyncio.sleep(1)
-
-    async def _on_panel_visible(self, event: object) -> None:
-        """Panel became visible — block fake VS Code focus events."""
-        self._panel_visible = True
-        logger.debug("WindowDetector: panel_visible=True")
-
-    async def _on_panel_hidden_flag(self, event: object) -> None:
-        """Panel hidden — resume updating _last_real_context."""
-        self._panel_visible = False
-        logger.debug("WindowDetector: panel_visible=False")
 
     async def _focus_event_loop(self) -> None:
         """
@@ -202,6 +179,27 @@ class WindowDetector:
                 # or on un-focus: _NET_ACTIVE_WINDOW(WINDOW): window id # 0x0
                 if "0x0" in line or "not found" in line:
                     continue  # screen un-focused (e.g. lock screen)
+
+                # Save the CURRENT snapshot as _last_real_context BEFORE
+                # processing the new focus event.
+                # At this moment _last_external_snapshot = the window being
+                # LEFT (e.g. Screenshots). After capture_snapshot runs it
+                # will become the new window (e.g. main.py / VS Code).
+                # Saving here gives us exactly "the window before the switch"
+                # without any panel_visible flag or timing heuristics.
+                if (
+                    self._last_external_snapshot is not None
+                    and not self._is_own_window(
+                        self._last_external_snapshot.get("window_title", "")
+                    )
+                ):
+                    self._last_real_context = dict(self._last_external_snapshot)
+                    logger.debug(
+                        "focus_event_loop: saved real context before switch: "
+                        "window='%s' cwd='%s'",
+                        self._last_real_context.get("window_title"),
+                        self._last_real_context.get("cwd"),
+                    )
 
                 # Small debounce — rapid alt-tab produces multiple events;
                 # wait 80 ms and take only the final one.
@@ -659,18 +657,12 @@ class WindowDetector:
 
             self._last_external_snapshot = snapshot
 
-            # _last_real_context tracks the last window the user was
-            # intentionally working in.
-            #
-            # Rule: update ONLY when the panel is NOT visible.
-            # When the panel is visible and the user clicks into it,
-            # X11 fires a focus_event for VS Code (the panel's X11 parent).
-            # That fake focus event must NOT overwrite the real context
-            # (e.g. Screenshots) that was active before the panel click.
-            #
-            # _panel_visible is set True by panel_opened and False by
-            # panel_closed — subscribed in start() below.
-            if not self._panel_visible:
+            # background_poll updates _last_real_context directly — poll
+            # events fire on a timer and cannot be triggered by panel clicks.
+            # focus_event does NOT update here — it's handled in
+            # _focus_event_loop BEFORE the new window is processed, capturing
+            # the window being LEFT rather than the window being entered.
+            if task_id == "background_poll":
                 last_real_title = (
                     self._last_real_context.get("window_title")
                     if self._last_real_context else None
@@ -678,7 +670,7 @@ class WindowDetector:
                 if current_title != last_real_title:
                     self._last_real_context = dict(snapshot)
                     logger.debug(
-                        "Real context updated: window='%s' cwd='%s'",
+                        "Real context updated via poll: window='%s' cwd='%s'",
                         current_title, cwd,
                     )
 
