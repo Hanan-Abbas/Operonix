@@ -31,32 +31,6 @@ BUG 2 — own-window guard silently dropped the snapshot when
     HotkeyListener). When the own-window guard fires and
     _last_external_snapshot is None, we use pre_panel_context as the
     fallback so the orchestrator always gets a valid cwd.
-
-ARCH FIX 1 — _get_current_title_and_pid was declared async with no awaits.
-    FIX: Made sync. Callers updated to call directly (no await).
-
-ARCH FIX 2 — Race condition on _last_external_snapshot.
-    _focus_event_loop, _poll_loop, and capture_snapshot all write/read
-    _last_external_snapshot concurrently with no synchronisation.
-    FIX: Added asyncio.Lock (_snapshot_lock). All reads/writes now run
-    inside `async with self._snapshot_lock`.
-
-ARCH FIX 3 — run_in_executor used default shared thread pool.
-    _get_window_cwd runs subprocess + file I/O and can block.  Using
-    None (the default pool) risks starving other executor users.
-    FIX: Dedicated ThreadPoolExecutor(max_workers=2) in __init__,
-    passed explicitly to run_in_executor.
-
-ARCH FIX 4 — xprop subprocess never terminated on shutdown.
-    FIX: Added stop() coroutine that terminates _xprop_proc and shuts
-    down the thread pool executor.
-
-ARCH FIX 5 — Dedup guard too aggressive.
-    Same window title ≠ same context (browser tab change, folder switch).
-    The old guard also fired before any snapshot existed, causing the
-    very first background_poll to be skipped if title was unchanged.
-    FIX: Dedup now also requires _last_external_snapshot is not None,
-    so the first capture always goes through.
 """
 from __future__ import annotations
 
@@ -66,7 +40,6 @@ import os
 import platform
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.event_bus import bus
@@ -99,14 +72,22 @@ class WindowDetector:
         self.win32gui = None
         self.last_title: str | None = None
         self._last_external_snapshot: dict | None = None
-        self._snapshot_lock = asyncio.Lock()
-        # 🔧 FIX 3: dedicated thread pool for blocking subprocess/file ops
-        self._executor = ThreadPoolExecutor(max_workers=2)
-        # _last_external_snapshot is kept current in real time by the
-        # xprop focus watcher (Linux) or poll loop (other OS).
-        # The own-window guard in capture_snapshot prevents the panel
-        # window from ever overwriting it.
-        # No freeze/lock needed — xprop fires the instant you switch windows.
+
+        # _last_external_snapshot: always the most recent non-panel window.
+        # Updated by every focus_event and background_poll that passes the
+        # own-window guard. xprop overwrites this when VS Code gains focus
+        # because the panel click focuses VS Code in X11.
+
+        # _last_real_context: the last window the user was INTENTIONALLY
+        # working in — never overwritten while the panel is the target.
+        # Updated only when focus changes to a non-panel window AND the
+        # previous focus was also a non-panel window (i.e. not a panel click).
+        # input_adapter reads this to restore context before a query runs.
+        self._last_real_context: dict | None = None
+        # True while the Operonix panel window is visible.
+        # Set by panel_opened / panel_closed events subscribed in start().
+        # Used to block fake VS Code focus events caused by panel clicks.
+        self._panel_visible: bool = False
         self._setup_os_imports()
 
     # ── OS import setup ────────────────────────────────────────────────────
@@ -141,6 +122,15 @@ class WindowDetector:
 
     async def start(self) -> None:
         bus.subscribe("request_context_snapshot", self.capture_snapshot)
+
+        # Track panel visibility to block fake VS Code focus events.
+        # When the panel is visible and user clicks into it, X11 fires
+        # a focus_event for VS Code — _panel_visible=True blocks that
+        # from overwriting _last_real_context.
+        bus.subscribe("panel_opened", self._on_panel_visible)
+        bus.subscribe("panel_closed", self._on_panel_hidden_flag)
+        bus.subscribe("panel_hidden", self._on_panel_hidden_flag)
+
         logger.info("Window Detector: Active on %s", self.os_name)
         self._xprop_proc = None
         await asyncio.sleep(1)
@@ -155,15 +145,6 @@ class WindowDetector:
         asyncio.create_task(self._focus_event_loop())
         asyncio.create_task(self._poll_loop())
 
-    async def stop(self) -> None:
-        """Graceful shutdown: terminate xprop watcher and thread pool."""
-        # 🔧 FIX 4: clean up xprop subprocess on shutdown
-        if self._xprop_proc:
-            self._xprop_proc.terminate()
-            await self._xprop_proc.wait()
-            self._xprop_proc = None
-        self._executor.shutdown(wait=False)
-
     async def _poll_loop(self) -> None:
         """Fallback: Windows/macOS or xprop crash recovery. 1s interval."""
         while True:
@@ -171,6 +152,16 @@ class WindowDetector:
                 type("Event", (), {"data": {"task_id": "background_poll"}})()
             )
             await asyncio.sleep(1)
+
+    async def _on_panel_visible(self, event: object) -> None:
+        """Panel became visible — block fake VS Code focus events."""
+        self._panel_visible = True
+        logger.debug("WindowDetector: panel_visible=True")
+
+    async def _on_panel_hidden_flag(self, event: object) -> None:
+        """Panel hidden — resume updating _last_real_context."""
+        self._panel_visible = False
+        logger.debug("WindowDetector: panel_visible=False")
 
     async def _focus_event_loop(self) -> None:
         """
@@ -290,86 +281,229 @@ class WindowDetector:
 
     # ── CWD resolution ─────────────────────────────────────────────────────
 
-    def _get_window_cwd(self,pid: int | None,app_type: str = "",window_title: str = "",
-) -> str:
+    def _infer_file_manager(self, pid: int | None, title: str) -> str:
         """
-        CWD Resolver v2 (Context-aware OS resolver)
+        Detect when a window is a file manager showing a folder, even though
+        the classifier returned 'unknown' (because the title is just a folder
+        name like 'Screenshots' with no recognisable app-name signal).
 
         Strategy:
-        1. Terminal → shell process cwd (highest accuracy)
-        2. File manager → actual GUI path (DBus / Finder / heuristics)
-        3. Code editor → project root via process cwd
-        4. Folder-like window title → resolve in HOME
-        5. Fallback → os.getcwd()
+          1. Check the process name of the window's PID — if it's a known
+             file manager binary, return 'file_manager'.
+          2. Title heuristic: single word, no file extension, no separator
+             (dash/pipe/bracket) → likely a folder name → 'file_manager'.
+        Returns the original 'unknown' if neither test passes.
         """
+        _FILE_MANAGER_BINARIES = {
+            "nautilus", "thunar", "nemo", "dolphin", "pcmanfm",
+            "caja", "krusader", "ranger", "yazi", "midnight-commander",
+        }
 
+        # Check process name
+        if pid:
+            try:
+                comm_path = Path(f"/proc/{pid}/comm")
+                if comm_path.exists():
+                    proc_name = comm_path.read_text().strip().lower()
+                    if proc_name in _FILE_MANAGER_BINARIES:
+                        logger.debug(
+                            "_infer_file_manager: pid=%s proc=%s → file_manager",
+                            pid, proc_name,
+                        )
+                        return "file_manager"
+            except Exception:
+                pass
+
+        # Title heuristic: bare word with no extension or separator
+        # e.g. 'Screenshots', 'Pictures', 'Downloads', 'Documents'
+        t = title.strip()
+        has_separator = any(c in t for c in ("-", "–", "—", "|", "[", "("))
+        has_extension = "." in t.split()[-1] if t.split() else False
+        is_short_word = len(t.split()) <= 2 and len(t) <= 40
+        if is_short_word and not has_separator and not has_extension:
+            logger.debug(
+                "_infer_file_manager: title=%r looks like folder name → file_manager",
+                t,
+            )
+            return "file_manager"
+
+        return "unknown"
+
+    def _get_window_cwd(
+        self,
+        pid: int | None,
+        app_type: str = "",
+        window_title: str = "",
+    ) -> str:
+        """
+        Resolve the TRUE working directory for the focused window.
+
+        This is app-type-aware.  Reading /proc/<pid>/cwd for a file manager
+        gives the manager's install dir, NOT the folder the user is browsing.
+        Each app type needs a different strategy:
+
+          file_manager  → parse window title / query D-Bus / AppleScript
+          terminal      → read cwd of the shell child process
+          browser       → skip (URL ≠ filesystem path); return os.getcwd()
+          code_editor   → /proc/<pid>/cwd  (editor sets cwd to project root)
+          everything else → /proc/<pid>/cwd or psutil fallback
+        """
         if not pid:
             return os.getcwd()
 
-        title = (window_title or "").strip()
-
         try:
-            # ─────────────────────────────────────────────
-            # 1. TERMINAL (MOST RELIABLE)
-            # ─────────────────────────────────────────────
-            if app_type == "terminal":
-                cwd = self._cwd_from_terminal_child(pid)
-                if cwd:
-                    return cwd
-
-            # ─────────────────────────────────────────────
-            # 2. FILE MANAGER (REAL GUI DIRECTORY)
-            # ─────────────────────────────────────────────
             if app_type == "file_manager":
                 cwd = self._cwd_from_file_manager(pid, window_title)
                 if cwd:
                     return cwd
+                # fall through to process cwd as last resort
 
-                # 🔧 NEW: folder-as-window fallback (Screenshots, Downloads, etc.)
-                home = Path.home()
-                candidate = home / title
+            elif app_type == "terminal":
+                cwd = self._cwd_from_terminal_child(pid)
+                if cwd:
+                    return cwd
+                # fall through
 
-                if title and len(title) < 80:
-                    if candidate.exists() and candidate.is_dir():
-                        return str(candidate)
-
-            # ─────────────────────────────────────────────
-            # 3. CODE EDITORS (PROJECT ROOT)
-            # ─────────────────────────────────────────────
-            if app_type == "code_editor":
-                if self.os_name == "Linux":
-                    link = Path(f"/proc/{pid}/cwd")
-                    if link.exists():
-                        return str(link.resolve())
-                else:
-                    import psutil
-                    return psutil.Process(pid).cwd()
-
-            # ─────────────────────────────────────────────
-            # 4. BROWSER (NO REAL FS CONTEXT)
-            # ─────────────────────────────────────────────
-            if app_type == "browser":
+            elif app_type == "browser":
                 return os.getcwd()
 
-            # ─────────────────────────────────────────────
-            # 5. GENERIC PROCESS FALLBACK
-            # ─────────────────────────────────────────────
+            # Default: process's own cwd
             if self.os_name == "Linux":
-                link = Path(f"/proc/{pid}/cwd")
-                if link.exists():
-                    return str(link.resolve())
-
+                cwd_link = Path(f"/proc/{pid}/cwd")
+                if cwd_link.exists():
+                    return str(cwd_link.resolve())
             else:
                 import psutil
                 return psutil.Process(pid).cwd()
 
         except Exception as exc:
             logger.debug(
-                "CWD resolver v2 failed pid=%s app_type=%s: %s",
-                pid, app_type, exc
+                "CWD resolution failed pid=%s app_type=%s: %s", pid, app_type, exc
             )
 
         return os.getcwd()
+
+    def _cwd_from_file_manager(self, pid: int, window_title: str) -> str | None:
+        """
+        Resolve the folder currently displayed in a file manager.
+
+        Linux strategies (tried in order):
+          1. /proc/<pid>/fd scan — read symlinks of open file descriptors;
+             the file manager holds an open fd to the directory it shows.
+             This works for ALL file managers with zero D-Bus dependency.
+          2. Nautilus D-Bus via gio info on the active window URI.
+          3. Window title starts with '/' — full path (Thunar, Nemo).
+          4. Match title word against XDG standard dirs + bounded find.
+        """
+        if self.os_name == "Linux":
+            # Strategy 1: /proc/<pid>/fd scan
+            # The file manager keeps an open fd to the directory it's showing.
+            # We find the fd symlink that points to an existing directory
+            # under the user's home — that's the browsed folder.
+            if pid:
+                try:
+                    home = str(Path.home())
+                    fd_dir = Path(f"/proc/{pid}/fd")
+                    if fd_dir.exists():
+                        candidates: list[str] = []
+                        for fd_link in fd_dir.iterdir():
+                            try:
+                                target = str(fd_link.resolve())
+                                if (
+                                    Path(target).is_dir()
+                                    and target.startswith(home)
+                                    and target != home
+                                    and "proc" not in target
+                                ):
+                                    candidates.append(target)
+                            except Exception:
+                                continue
+                        if candidates:
+                            # Prefer the path whose name matches the window title
+                            title_clean = window_title.strip()
+                            for c in candidates:
+                                if Path(c).name == title_clean:
+                                    logger.debug(
+                                        "_cwd_from_file_manager: fd match: %s", c
+                                    )
+                                    return c
+                            # No title match — return deepest path (most specific)
+                            best = max(candidates, key=lambda p: p.count("/"))
+                            logger.debug(
+                                "_cwd_from_file_manager: fd best: %s", best
+                            )
+                            return best
+                except Exception as exc:
+                    logger.debug("fd scan failed for pid=%s: %s", pid, exc)
+
+            # Strategy 2: Nautilus D-Bus via gio
+            try:
+                # 'gio' is the GNOME I/O library CLI — reliable on Ubuntu/Fedora
+                result = subprocess.run(
+                    ["gdbus", "call", "--session",
+                     "--dest", "org.gnome.Nautilus",
+                     "--object-path", "/org/gnome/Nautilus",
+                     "--method", "org.gnome.Nautilus.Application.OpenLocations"],
+                    capture_output=True, text=True, timeout=1,
+                )
+                # Try the simpler 'xdg-open --print-reply' approach
+                gio_result = subprocess.run(
+                    ["gio", "info", "-a", "standard::target-uri",
+                     f"computer:///{pid}"],
+                    capture_output=True, text=True, timeout=1,
+                )
+                # Parse any file:// URI in output
+                for output in [result.stdout, gio_result.stdout]:
+                    if "file://" in output:
+                        import urllib.parse
+                        raw = output.split("file://")[1].split("'")[0].split('"')[0]
+                        decoded = urllib.parse.unquote(raw).strip()
+                        if decoded and Path(decoded).is_dir():
+                            return decoded
+            except Exception:
+                pass
+
+            # Strategy 3: title is a full path
+            candidate = window_title.strip().split(" ")[0]
+            if candidate.startswith("/") and Path(candidate).is_dir():
+                return candidate
+
+            # Strategy 4: match title word against XDG dirs + bounded find
+            title_word = (
+                window_title.strip()
+                .split("—")[0].split("–")[0].split("-")[0]
+                .strip()
+            )
+            if title_word:
+                return self._search_folder_by_name(title_word)
+
+        elif self.os_name == "Windows":
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(260)
+                ctypes.windll.shell32.SHGetFolderPathW(0, 0, 0, 0, buf)
+                return buf.value or None
+            except Exception:
+                pass
+
+        elif self.os_name == "Darwin":
+            try:
+                script = (
+                    'tell application "Finder" to get POSIX path '
+                    'of (target of front window as alias)'
+                )
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if result.returncode == 0:
+                    path = result.stdout.strip()
+                    if path and Path(path).is_dir():
+                        return path
+            except Exception:
+                pass
+
+        return None
 
     def _search_folder_by_name(self, name: str) -> str | None:
         """
@@ -436,7 +570,7 @@ class WindowDetector:
 
     # ── Snapshot capture ───────────────────────────────────────────────────
 
-    def _get_current_title_and_pid(self) -> tuple[str, int | None]:
+    async def _get_current_title_and_pid(self) -> tuple[str, int | None]:
         """OS-agnostic helper — returns (title, pid) for the active window."""
         if self.os_name == "Linux":
             return self._get_linux_info()
@@ -451,7 +585,7 @@ class WindowDetector:
         task_id      = data_payload.get("task_id", "background_poll")
 
         try:
-            current_title, pid = self._get_current_title_and_pid()
+            current_title, pid = await self._get_current_title_and_pid()
 
             # ── Own-window guard ──────────────────────────────────────────
             # The Operonix panel is in the foreground.
@@ -465,12 +599,10 @@ class WindowDetector:
                     return  # silent skip — don't pollute the snapshot
 
                 # Real task: serve the most recent external window snapshot.
-                # 🔧 FIX 2: concurrency protection — guard read with lock
-                async with self._snapshot_lock:
-                    cached = (
-                        self._last_external_snapshot
-                        or data_payload.get("pre_panel_context")
-                    )
+                cached = (
+                    self._last_external_snapshot
+                    or data_payload.get("pre_panel_context")
+                )
                 if cached is not None:
                     reply = dict(cached)
                     reply["task_id"] = task_id
@@ -486,30 +618,36 @@ class WindowDetector:
                 return
 
             # ── Dedup: skip if title unchanged ───────────────────────────
-            # 🔧 FIX 5 (optional): only skip when we already have a snapshot —
-            # same title ≠ same context (e.g. tab change, folder switch).
-            # Require _last_external_snapshot to be set so the first capture
-            # always goes through even if the title hasn't changed.
+            # Applies to both background_poll and focus_event task IDs.
+            # We commit every new non-own-window title immediately.
             if task_id in ("background_poll", "focus_event") \
-                    and current_title == self.last_title \
-                    and self._last_external_snapshot is not None:
+                    and current_title == self.last_title:
                 return  # nothing changed, skip
 
             self.last_title = current_title
 
             # Classify and resolve cwd
             app_context = await classifier.classify_async(current_title)
+
+            # Nautilus (and Thunar/Nemo/Dolphin) set the window title to
+            # the name of the folder being browsed — e.g. "Screenshots",
+            # "Pictures", "Downloads".  The classifier returns 'unknown'
+            # because there are no app-name signals in a plain folder name.
+            # Detect this: low/unknown confidence + no separator in title
+            # + pid maps to a known file manager process name.
+            resolved_app_type = app_context.category
+            if resolved_app_type == "unknown" and current_title:
+                resolved_app_type = self._infer_file_manager(pid, current_title)
+
             cwd = await asyncio.get_running_loop().run_in_executor(
-                # 🔧 FIX 3: use dedicated thread pool (not default shared pool)
-                self._executor,
-                self._get_window_cwd, pid,
-                app_context.category, current_title,
+                None, self._get_window_cwd, pid,
+                resolved_app_type, current_title,
             )
 
             snapshot = {
                 "window_title": current_title,
                 "app_name":    app_context.app_name,
-                "app_type":    app_context.category,
+                "app_type":    resolved_app_type,  # may be overridden above
                 "sub_context": app_context.sub_context,
                 "confidence":  app_context.confidence,
                 "llm_used":    app_context.llm_used,
@@ -519,9 +657,31 @@ class WindowDetector:
                 "task_id":     task_id,
             }
 
-            # 🔧 FIX 2: concurrency protection — guard write with lock
-            async with self._snapshot_lock:
-                self._last_external_snapshot = snapshot
+            self._last_external_snapshot = snapshot
+
+            # _last_real_context tracks the last window the user was
+            # intentionally working in.
+            #
+            # Rule: update ONLY when the panel is NOT visible.
+            # When the panel is visible and the user clicks into it,
+            # X11 fires a focus_event for VS Code (the panel's X11 parent).
+            # That fake focus event must NOT overwrite the real context
+            # (e.g. Screenshots) that was active before the panel click.
+            #
+            # _panel_visible is set True by panel_opened and False by
+            # panel_closed — subscribed in start() below.
+            if not self._panel_visible:
+                last_real_title = (
+                    self._last_real_context.get("window_title")
+                    if self._last_real_context else None
+                )
+                if current_title != last_real_title:
+                    self._last_real_context = dict(snapshot)
+                    logger.debug(
+                        "Real context updated: window='%s' cwd='%s'",
+                        current_title, cwd,
+                    )
+
             await bus.emit("context_snapshot_ready", snapshot, source="window_detector")
             logger.debug(
                 "Snapshot committed: window='%s' cwd='%s' pid=%s",
