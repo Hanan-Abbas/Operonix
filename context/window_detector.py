@@ -597,6 +597,29 @@ class WindowDetector:
         data_payload = getattr(event, "data", {})
         task_id      = data_payload.get("task_id", "background_poll")
 
+        # ── Pre-panel context fast path ───────────────────────────────
+        # If the payload carries pre_panel_context (injected by
+        # panel_controller from _last_real_context), serve it directly
+        # for real task requests — no OS title fetch needed.
+        # This is the xprop-proof path: the context travels in the event
+        # payload so xprop cannot overwrite it between publish and serve.
+        # We do this BEFORE fetching the current window title because by
+        # the time capture_snapshot runs, xprop has already updated
+        # _last_external_snapshot to main.py (the panel's X11 parent).
+        if (
+            task_id not in ("background_poll", "focus_event", "initial_boot")
+            and data_payload.get("pre_panel_context")
+        ):
+            pre = data_payload["pre_panel_context"]
+            reply = dict(pre)
+            reply["task_id"] = task_id
+            await bus.emit("context_snapshot_ready", reply, source="window_detector")
+            logger.debug(
+                "Pre-panel context served directly: app=%s cwd=%s",
+                reply.get("app_name"), reply.get("cwd"),
+            )
+            return
+
         try:
             current_title, pid = await self._get_current_title_and_pid()
 
