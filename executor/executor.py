@@ -408,10 +408,32 @@ class Executor:
     def _resolve_tool_call(
         self, intent: str, args: dict
     ) -> tuple[str, str, dict] | None:
-        """Maps an abstract intent to a registered concrete tool."""
-        for tool_name, tool_obj in tool_registry.list_tools().items():
-            if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
-                return tool_name, intent, args
+        """
+        Maps an abstract intent to a registered concrete tool.
+
+        FIX: tool_registry.list_tools() returns a list of tool objects,
+        not a dict. The old code called .items() on it which raised
+        AttributeError: 'list' object has no attribute 'items'.
+        Now handles both list and dict return types defensively.
+        """
+        tools = tool_registry.list_tools()
+
+        # Handle dict return: {tool_name: tool_obj, ...}
+        if isinstance(tools, dict):
+            for tool_name, tool_obj in tools.items():
+                if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
+                    return tool_name, intent, args
+
+        # Handle list return: [tool_obj, ...]
+        elif isinstance(tools, list):
+            for tool_obj in tools:
+                if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
+                    # Get tool name from the object's name attribute
+                    tool_name = getattr(tool_obj, "name",
+                                getattr(tool_obj, "tool_type",
+                                type(tool_obj).__name__.lower()))
+                    return tool_name, intent, args
+
         return None
 
 
