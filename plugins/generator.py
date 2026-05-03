@@ -42,6 +42,11 @@ from plugins.manifest_schema import (
 from plugins.sandbox_runner import sandbox_runner
 from plugins.template_engine import template_engine
 
+# Auto-approve and deploy low-risk plugins without waiting for user.
+# Set AUTO_APPROVE_PLUGINS=False in .env to require manual approval.
+AUTO_APPROVE_PLUGINS: bool = bool(getattr(settings, "AUTO_APPROVE_PLUGINS", True))
+AUTO_APPROVE_RISK_LEVELS: set[str] = {"low"}  # Only auto-approve low-risk
+
 logger = logging.getLogger("PluginGenerator")
 
 MAX_GENERATION_ATTEMPTS: int = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
@@ -354,23 +359,40 @@ Return ONLY valid JSON with this exact structure:
             f"Awaiting user approval."
         )
 
-        # Publish approval request (safety/confirmation.py handles this)
-        bus.publish(
-            "confirmation_required",
-            {
-                "type": "plugin_approval",
-                "name": plugin_name,
-                "intent": intent,
-                "plugin_dir": plugin_dir,
-                "description": manifest.description,
-                "risk_level": manifest.risk_level.value,
-                "reason": (
-                    f"New plugin '{plugin_name}' generated to handle intent '{intent}'. "
-                    f"Review and approve to deploy."
-                ),
-            },
-            source="plugin_generator",
-        )
+        # Auto-approve low-risk plugins if enabled — agent learns immediately.
+        # High/medium risk plugins still require manual confirmation.
+        risk = manifest.risk_level.value
+        if AUTO_APPROVE_PLUGINS and risk in AUTO_APPROVE_RISK_LEVELS:
+            self.logger.info(
+                f"🤖 Auto-approving low-risk plugin '{plugin_name}' — deploying now."
+            )
+            bus.publish(
+                "plugin_approved",
+                {
+                    "name":       plugin_name,
+                    "intent":     intent,
+                    "plugin_dir": plugin_dir,
+                },
+                source="plugin_generator",
+            )
+        else:
+            # Publish approval request for medium/high risk plugins
+            bus.publish(
+                "confirmation_required",
+                {
+                    "type":        "plugin_approval",
+                    "name":        plugin_name,
+                    "intent":      intent,
+                    "plugin_dir":  plugin_dir,
+                    "description": manifest.description,
+                    "risk_level":  risk,
+                    "reason": (
+                        f"New plugin '{plugin_name}' generated for intent '{intent}'. "
+                        f"Risk: {risk}. Review and approve to deploy."
+                    ),
+                },
+                source="plugin_generator",
+            )
 
     async def _check_existing_plugin(self, intent: str) -> str | None:
         """Check plugin_memory for a similar existing plugin."""
