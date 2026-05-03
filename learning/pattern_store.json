@@ -55,6 +55,35 @@
                 "usage_count": 1,
                 "step_count": 1
             }
+        ],
+        "open_folder": [
+            {
+                "steps": [
+                    {
+                        "action": "open_folder",
+                        "args": {
+                            "folder_name": "<FOLDER_NAME>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
+                "step_count": 1
+            }
+        ],
+        "find_file": [
+            {
+                "steps": [
+                    {
+                        "action": "find_file",
+                        "args": {
+                            "directory": "<DIRECTORY>",
+                            "filename": "<FILENAME>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
+                "step_count": 1
+            }
         ]
     }
 }
