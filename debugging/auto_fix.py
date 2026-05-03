@@ -24,8 +24,15 @@ class AutoFixer:
         file_path = parsed_report.get("file")
 
         # 1. Guard rails
+        if not parsed_report:
+            self.logger.warning("attempt_fix called with empty report")
+            return
         if not file_path or not os.path.exists(file_path):
-            self.logger.warning(f"Invalid file: {file_path}")
+            self.logger.warning(f"Invalid or missing file: {file_path}")
+            return
+        # Guard: skip library/venv files — only fix project source
+        if any(skip in file_path for skip in ("/site-packages/", "/dist-packages/", "/.venv/", "/operonix/lib/")):
+            self.logger.warning(f"Skipping library file: {file_path}")
             return
 
         if any(r in file_path for r in settings.RESTRICTED_PATHS):
@@ -81,7 +88,7 @@ class AutoFixer:
 
                 if success:
                     self.logger.info("🔥 FIX SUCCESSFUL!")
-                    await bus.publish(
+                    bus.publish(
                         "fix_applied",
                         {"file": file_path, "status": "verified"},
                         source="auto_fix",
