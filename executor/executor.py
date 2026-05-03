@@ -411,28 +411,20 @@ class Executor:
         """
         Maps an abstract intent to a registered concrete tool.
 
-        FIX: tool_registry.list_tools() returns a list of tool objects,
-        not a dict. The old code called .items() on it which raised
-        AttributeError: 'list' object has no attribute 'items'.
-        Now handles both list and dict return types defensively.
+        tool_registry.list_tools() returns list[str] (names).
+        tool_registry.get_all_tools() returns dict[str, instance].
+        We use get_all_tools() to get both name and instance.
         """
-        tools = tool_registry.list_tools()
+        try:
+            all_tools = tool_registry.get_all_tools()  # dict[str, instance]
+        except Exception:
+            all_tools = {}
 
-        # Handle dict return: {tool_name: tool_obj, ...}
-        if isinstance(tools, dict):
-            for tool_name, tool_obj in tools.items():
-                if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
-                    return tool_name, intent, args
-
-        # Handle list return: [tool_obj, ...]
-        elif isinstance(tools, list):
-            for tool_obj in tools:
-                if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
-                    # Get tool name from the object's name attribute
-                    tool_name = getattr(tool_obj, "name",
-                                getattr(tool_obj, "tool_type",
-                                type(tool_obj).__name__.lower()))
-                    return tool_name, intent, args
+        for tool_name, tool_obj in all_tools.items():
+            if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
+                return tool_name, intent, args
+            if hasattr(tool_obj, "supported_intents") and intent in tool_obj.supported_intents:
+                return tool_name, intent, args
 
         return None
 
