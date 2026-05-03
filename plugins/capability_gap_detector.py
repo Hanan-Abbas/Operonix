@@ -109,7 +109,9 @@ class CapabilityGapDetector:
     async def _on_mapping_failed(self, event):
         """
         Fires when CapabilityMapper cannot map an intent at all.
-        This is a strong signal of a missing capability.
+        This is the strongest signal of a missing capability —
+        trigger generation immediately on first occurrence, not after
+        3 consecutive failures. The agent should learn right away.
         """
         data        = event.data or {}
         raw_intent  = data.get("raw_intent", "")
@@ -119,11 +121,22 @@ class CapabilityGapDetector:
         if not intent:
             return
 
+        canonical = await self._resolve_canonical(intent)
+
+        if canonical in self._blocked:
+            return
+
         self.logger.info(
-            f"🔍 Unmapped intent detected: '{raw_intent}' → "
-            f"triggering gap analysis."
+            f"🔍 Unmapped intent '{raw_intent}' → immediate gap trigger."
         )
-        await self._process_failure(intent, "No capability registered for this intent")
+
+        # Force threshold bypass — unknown intent = certain gap
+        await self._trigger_gap(
+            intent=canonical,
+            reason="No capability registered for this intent",
+            consecutive=1,
+            window_count=1,
+        )
 
     async def _on_plugin_generation_failed(self, event):
         """
