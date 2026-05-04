@@ -113,6 +113,7 @@ _BUILTIN_DEFS: dict[str, dict[str, Any]] = {
         tag_api="#0891b2",
         tag_command="#059669",
         tag_ui="#d97706",
+        tag_shell="#E8A838",
         scrollbar_color="#3a3a48",
         selection_bg="#6c8ef730",
         shadow="0 8px 32px rgba(0,0,0,0.6)",
