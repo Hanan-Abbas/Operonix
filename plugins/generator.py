@@ -20,7 +20,8 @@ Structured output expected from LLM:
         "name": "...",
         "description": "...",
         "permissions": [],
-        "risk_level": "low|medium|high"
+        "risk_level": "low|medium|high",
+        "capabilities": ["<intent strings this plugin handles>"]
     }
 }
 """
@@ -72,6 +73,7 @@ class PluginGenerator:
         """Subscribe to gap detection events."""
         bus.subscribe("capability_gap_detected", self._on_gap_detected)
         bus.subscribe("plugin_approved",          self._on_plugin_approved)
+        bus.subscribe("plugin_rejected",          self._on_plugin_rejected)
         self.logger.info("🏭 Plugin Generator: Online.")
 
     # ── Event Handlers ─────────────────────────────────────────────────────────
@@ -294,7 +296,8 @@ Return ONLY valid JSON with this exact structure:
         "name": "{plugin_name}",
         "description": "<one sentence description>",
         "permissions": ["<list of permissions needed>"],
-        "risk_level": "low"
+        "risk_level": "low",
+        "capabilities": ["<list of intent strings>"]
     }}
 }}
 """
@@ -336,6 +339,9 @@ Return ONLY valid JSON with this exact structure:
             description=metadata.get("description", f"Plugin for {intent}"),
             intent=intent,
             version="1.0",
+            # capabilities exposed by this plugin — used by loader.list_plugins()
+            # and the dashboard to show what each plugin can do
+            capabilities=metadata.get("capabilities", [intent]),
             permissions=metadata.get("permissions", []),
             risk_level=RiskLevel(metadata.get("risk_level", "medium")),
             status=PluginStatus.PENDING,
@@ -447,6 +453,104 @@ Return ONLY valid JSON with this exact structure:
             if "```" in code:
                 code = code.rsplit("```", 1)[0]
         return code.strip()
+
+
+    async def generate(self, spec: dict) -> dict:
+        """
+        API-facing entry point called by POST /api/plugins/generate.
+
+        Accepts a spec dict:
+            name        – desired plugin/capability name
+            description – natural language description of what it should do
+            intent      – intent string (defaults to name if omitted)
+            capabilities – list of capability tags
+            parameters  – param dict for context
+
+        Returns a result dict with files list and message.
+        """
+        name        = spec.get("name", "").strip()
+        description = spec.get("description", f"Plugin for {name}")
+        intent      = spec.get("intent") or name.replace("-", "_").lower()
+
+        if not intent:
+            return {"files": [], "message": "'name' or 'intent' is required."}
+
+        plugin_name = self._intent_to_plugin_name(intent)
+        plugin_dir  = os.path.join(PLUGINS_INSTALLED_DIR, plugin_name)
+
+        self.logger.info(
+            "🏭 API-triggered generation: intent='%s' plugin='%s'",
+            intent, plugin_name,
+        )
+
+        # Use failure_summary with the description as context
+        failure_context = {
+            "description":          description,
+            "consecutive_failures":  0,
+            "common_reasons":        [f"User requested: {description}"],
+        }
+
+        success = await self.generate_plugin_for_intent(
+            intent=intent,
+            failure_summary=failure_context,
+            reason=f"API request: {description}",
+        )
+
+        plugin_file = os.path.join(plugin_dir, "plugin.py")
+        manifest_file = os.path.join(plugin_dir, "manifest.json")
+        files = []
+        if os.path.exists(plugin_file):
+            files.append(plugin_file)
+        if os.path.exists(manifest_file):
+            files.append(manifest_file)
+
+        return {
+            "files":   files,
+            "plugin":  plugin_name,
+            "intent":  intent,
+            "success": success,
+            "message": (
+                f"Plugin '{plugin_name}' generated and deployed."
+                if success else
+                f"Plugin generation failed after {MAX_GENERATION_ATTEMPTS} attempts."
+            ),
+        }
+
+
+    async def _on_plugin_rejected(self, event):
+        """User rejected a generated plugin. Block further generation for this intent."""
+        data        = event.data or {}
+        plugin_name = data.get("name", "")
+        reason      = data.get("reason", "Rejected by user")
+
+        if not plugin_name:
+            return
+
+        self.logger.warning(
+            "🚫 Plugin '%s' rejected by user: %s. Blocking re-generation.",
+            plugin_name, reason,
+        )
+
+        # Mark as untrusted in registry
+        try:
+            from plugins.registry import plugin_registry
+            from plugins.manifest_schema import PluginStatus
+            plugin_registry.revoke_trust(plugin_name, reason)
+        except Exception as exc:
+            self.logger.debug("Could not revoke trust for '%s': %s", plugin_name, exc)
+
+        # Block in gap detector so it won't re-trigger
+        try:
+            from plugins.capability_gap_detector import capability_gap_detector
+            capability_gap_detector._blocked.add(plugin_name)
+        except Exception as exc:
+            self.logger.debug("Could not block intent '%s': %s", plugin_name, exc)
+
+        bus.publish(
+            "plugin_blocked",
+            {"name": plugin_name, "reason": reason},
+            source="plugin_generator",
+        )
 
 
 # Global instance
