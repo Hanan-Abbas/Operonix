@@ -163,6 +163,86 @@ class ConnectionManager:
             else:
                 await conn.send({"type": "error", "message": "EventBus not attached"})
 
+        # ── Plugin self-evolution commands ────────────────────────────────────
+        # These allow the dashboard to drive the plugin system over WebSocket
+        # without going through HTTP — useful for real-time approval flows.
+
+        elif action == "APPROVE_PLUGIN":
+            # Approve a pending generated plugin and deploy it
+            plugin_name = msg.get("name", "")
+            plugin_dir  = msg.get("plugin_dir", "")
+            intent      = msg.get("intent", plugin_name)
+            if not plugin_name:
+                await conn.send({"type": "error", "message": "'name' required"})
+            elif self._bus:
+                self._bus.publish(
+                    "plugin_approved",
+                    {"name": plugin_name, "intent": intent, "plugin_dir": plugin_dir},
+                    source="dashboard",
+                )
+                await conn.send({"type": "ack", "action": "APPROVE_PLUGIN", "name": plugin_name})
+
+        elif action == "REJECT_PLUGIN":
+            # Reject a pending plugin (mark untrusted, stop generation)
+            plugin_name = msg.get("name", "")
+            reason      = msg.get("reason", "Rejected by user")
+            if not plugin_name:
+                await conn.send({"type": "error", "message": "'name' required"})
+            elif self._bus:
+                self._bus.publish(
+                    "plugin_rejected",
+                    {"name": plugin_name, "reason": reason},
+                    source="dashboard",
+                )
+                await conn.send({"type": "ack", "action": "REJECT_PLUGIN", "name": plugin_name})
+
+        elif action == "GENERATE_PLUGIN":
+            # Manually trigger plugin generation for a specific intent
+            intent  = msg.get("intent", "")
+            reason  = msg.get("reason", "Manual generation request from dashboard")
+            if not intent:
+                await conn.send({"type": "error", "message": "'intent' required"})
+            elif self._bus:
+                self._bus.publish(
+                    "capability_gap_detected",
+                    {
+                        "intent":               intent,
+                        "reason":               reason,
+                        "consecutive_failures":  1,
+                        "window_failures":       1,
+                        "failure_summary":       {},
+                    },
+                    source="dashboard",
+                )
+                await conn.send({"type": "ack", "action": "GENERATE_PLUGIN", "intent": intent})
+
+        elif action == "EVOLVE_PLUGIN":
+            # Manually trigger evolution for an existing plugin
+            plugin_name = msg.get("name", "")
+            reason      = msg.get("reason", "Manual evolution request from dashboard")
+            if not plugin_name:
+                await conn.send({"type": "error", "message": "'name' required"})
+            elif self._bus:
+                self._bus.publish(
+                    "plugin_evolution_requested",
+                    {"name": plugin_name, "reason": reason},
+                    source="dashboard",
+                )
+                await conn.send({"type": "ack", "action": "EVOLVE_PLUGIN", "name": plugin_name})
+
+        elif action == "RELOAD_PLUGIN":
+            # Hot-reload a specific plugin
+            plugin_name = msg.get("name", "")
+            if not plugin_name:
+                await conn.send({"type": "error", "message": "'name' required"})
+            elif self._bus:
+                self._bus.publish(
+                    "plugin_reload_requested",
+                    {"name": plugin_name},
+                    source="dashboard",
+                )
+                await conn.send({"type": "ack", "action": "RELOAD_PLUGIN", "name": plugin_name})
+
         else:
             # Generic passthrough — let the orchestrator decide
             if self._bus:
