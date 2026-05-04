@@ -118,7 +118,7 @@ class PanelInputAdapter:
 
         Args:
             query_text:    The raw text typed by the user.
-            chosen_method: One of "plugin", "api", "command", "ui", or "auto"
+            chosen_method: One of "plugin", "api", "command", "shell", "ui", or "auto"
                            as selected by the user in the strategy list.
         """
         query = query_text.strip()
@@ -130,9 +130,11 @@ class PanelInputAdapter:
         # the panel window appeared. This is the user's real working context.
         pre_context: Optional[dict] = self._panel_state.pre_panel_context
 
+        _VALID_METHODS = {"plugin", "api", "command", "shell", "ui"}
+
         payload: dict[str, Any] = {
             "query":            query,
-            "preferred_method": chosen_method if chosen_method != "auto" else None,
+            "preferred_method": chosen_method if chosen_method in _VALID_METHODS else None,
             "source":           "panel",
         }
 
