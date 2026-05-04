@@ -72,13 +72,14 @@ if _HAS_QT:
             "plugin":  "tag_plugin",
             "api":     "tag_api",
             "command": "tag_command",
+            "shell":   "tag_shell",
             "ui":      "tag_ui",
         }
 
         def __init__(self, method: str, tokens: ThemeTokens) -> None:
             super().__init__(method.upper())
             colour_attr = self._METHOD_KEYS.get(method, "tag_ui")
-            colour = getattr(tokens, colour_attr, tokens.accent)
+            colour = getattr(tokens, colour_attr, None) or tokens.accent
             self.setStyleSheet(
                 f"""
                 QLabel {{
