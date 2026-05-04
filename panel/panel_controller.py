@@ -431,7 +431,19 @@ class PanelController:
             self._apply_current_theme()
 
     def _on_rerun(self, query: str) -> None:
-        self._on_query_submitted(query, "command")
+        """Re-run a history item, preserving its original execution method."""
+        import re
+        method = "command"  # safe default
+        if self._renderer is not None:
+            hist = getattr(self._renderer, "_history_list", None)
+            if hist is not None:
+                item = hist.currentItem()
+                if item:
+                    # History items are formatted as: "✓  [shell]  git status"
+                    m = re.search(r'\[(\w+)\]', item.text())
+                    if m and m.group(1) in ("plugin", "api", "command", "shell", "ui"):
+                        method = m.group(1)
+        self._on_query_submitted(query, method)
 
     # ------------------------------------------------------------------
     # Suggestion pipeline
