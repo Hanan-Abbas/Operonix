@@ -1,1 +1,7 @@
-{}
+{
+    "Main.Py": {
+        "create_dir": {
+            "shell": 1
+        }
+    }
+}
