@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 class ExecutionStrategy:
     """One candidate execution strategy for a query."""
 
-    method: str          # "plugin" | "api" | "command" | "ui"
+    method: str          # "plugin" | "api" | "command" | "shell" | "ui"
     label: str           # human-readable label, e.g. "VS Code Plugin — open file"
     description: str     # what will actually happen
     confidence: float    # 0.0 – 1.0
@@ -39,7 +39,7 @@ class ExecutionStrategy:
     @property
     def method_rank(self) -> int:
         """Lower = preferred in the waterfall."""
-        return {"plugin": 0, "api": 1, "command": 2, "ui": 3}.get(self.method, 99)
+        return {"plugin": 0, "api": 1, "command": 2, "shell": 3, "ui": 4}.get(self.method, 99)
 
 
 @dataclass
@@ -55,6 +55,61 @@ class SuggestionResult:
 
 
 # ---------------------------------------------------------------------------
+# Shell confidence heuristic
+# ---------------------------------------------------------------------------
+
+# Common CLI entry-points that strongly suggest shell execution.
+_SHELL_PREFIXES: frozenset[str] = frozenset({
+    "ls", "cd", "pwd", "cat", "echo", "grep", "find", "sed", "awk",
+    "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown",
+    "git", "docker", "kubectl", "python", "python3", "pip", "pip3",
+    "node", "npm", "yarn", "pnpm", "cargo", "go", "make", "cmake",
+    "sudo", "su", "ssh", "scp", "curl", "wget", "tar", "zip", "unzip",
+    "ps", "kill", "top", "htop", "df", "du", "free", "env", "export",
+    "source", "bash", "sh", "zsh", "fish",
+})
+
+# Intent labels produced by brain/intent_parser.py that map well to shell.
+_SHELL_INTENTS: frozenset[str] = frozenset({
+    "run_command", "execute_script", "file_operation", "git_operation",
+    "package_management", "process_management", "system_info",
+    "network_request", "build", "test", "deploy",
+})
+
+
+def _shell_confidence(intent: str, intent_data: dict[str, Any]) -> float:
+    """
+    Heuristic confidence that a query is best served by a shell command.
+
+    Rules (highest wins, then blended with intent parser confidence):
+      • Query first word is a known CLI prefix  → base 0.82
+      • Query starts with './' or '/'           → base 0.90
+      • intent label is in _SHELL_INTENTS       → base 0.75
+      • Fallback (always available)             → base 0.35
+
+    The base is then blended (geometric mean) with the intent parser's
+    own confidence so low-confidence parses dampen the shell score too.
+    """
+    query: str = intent_data.get("query", intent_data.get("raw", ""))
+    stripped = query.strip()
+    intent_conf: float = float(intent_data.get("confidence", 0.5))
+
+    if stripped.startswith("./") or stripped.startswith("/"):
+        base = 0.90
+    else:
+        first_word = stripped.split()[0].lower() if stripped else ""
+        if first_word in _SHELL_PREFIXES:
+            base = 0.82
+        elif intent in _SHELL_INTENTS:
+            base = 0.75
+        else:
+            base = 0.35
+
+    blended = (base * intent_conf) ** 0.5
+    return round(min(max(blended, 0.1), 1.0), 3)
+
+
+# ---------------------------------------------------------------------------
 # Waterfall logic
 # ---------------------------------------------------------------------------
 
@@ -62,6 +117,7 @@ _METHOD_LABELS = {
     "plugin":  "Plugin",
     "api":     "API",
     "command": "Command",
+    "shell":   "Shell",
     "ui":      "UI Automation",
 }
 
@@ -201,7 +257,7 @@ class SuggestionEngine:
             caps = self._capability_registry(intent)
             for cap in caps:
                 method = cap.get("method", "api")  # capability reports its own method
-                if method not in ("api", "command", "ui"):
+                if method not in ("api", "command", "shell", "ui"):
                     method = "api"
                 strategies.append(ExecutionStrategy(
                     method=method,
@@ -216,7 +272,22 @@ class SuggestionEngine:
         except Exception as exc:  # noqa: BLE001
             log.debug("suggestion_engine: capability lookup failed — %s", exc)
 
-        # 3. Ensure the waterfall always has a UI-automation fallback.
+        # 3. Ensure the waterfall always has a Shell fallback.
+        #    Shell is always available — any query can be attempted as a
+        #    terminal command. Confidence is intentionally moderate so it
+        #    doesn't crowd out plugin/api results that scored well.
+        if not any(s.method == "shell" for s in strategies):
+            # Score shell higher when the query looks like a CLI command,
+            # lower when it reads as natural language / prose.
+            shell_conf = _shell_confidence(intent, intent_data)
+            strategies.append(ExecutionStrategy(
+                method="shell",
+                label=f"{_METHOD_LABELS['shell']} — run in terminal",
+                description="Execute directly as a shell command in the user's terminal",
+                confidence=shell_conf,
+            ))
+
+        # 4. Ensure the waterfall always has a UI-automation fallback.
         if not any(s.method == "ui" for s in strategies):
             strategies.append(ExecutionStrategy(
                 method="ui",
