@@ -220,34 +220,85 @@ class SandboxRunner:
     @staticmethod
     def _patch_plugin_sys_path(plugin_code: str, plugin_dir: str) -> str:
         """
-        Injects a sys.path bootstrap at the top of the plugin code so it can
-        import from the project root (plugins/, capabilities/, core/, etc.)
-        when executed in the sandbox subprocess.
+        Rewrites the top of the plugin file to guarantee the final written
+        file always begins with:
 
-        The project root is 3 levels up from plugin_dir:
-          plugins/installed/<plugin_name>/plugin.py
-          ^── root is here
+            from __future__ import annotations   ← line 1 (Python requirement)
+            import sys as _sys, os as _os        ← sys.path bootstrap
+            ...bootstrap...
+            <module docstring if any>
+            <rest of plugin body>
+
+        Python mandates that `from __future__ import annotations` is the very
+        first non-comment, non-whitespace statement in a file.  The template
+        engine and the LLM both emit it inside the plugin body (after the
+        docstring), which pushes it to line ~20 and causes a SyntaxError in
+        the sandbox subprocess.
+
+        This method is the single owner of the file header.  It:
+          1. Strips ALL existing `from __future__ import annotations` lines
+             from the plugin body so there is never a duplicate.
+          2. Extracts the module docstring (if present) from the remaining body.
+          3. Assembles: future-import → bootstrap → docstring → body.
+
+        The project root is three levels up from plugin_dir:
+          plugins/installed/<plugin_name>/   ← plugin_dir
+          plugins/installed/                 ← dirname(plugin_dir)
+          plugins/                           ← dirname(dirname(...))
+          <project root>                     ← dirname(dirname(dirname(...)))
         """
-        bootstrap = (
-            "import sys as _sys, os as _os\n"
-            "_plugin_dir = _os.path.abspath(_os.path.dirname(__file__))\n"
-            "_project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_plugin_dir)))\n"
-            "if _project_root not in _sys.path:\n"
-            "    _sys.path.insert(0, _project_root)\n"
-            "\n"
+        import re as _re
+
+        # ── 1. Guard: don't double-inject the bootstrap ───────────────────────
+        already_patched = "_project_root" in plugin_code
+
+        # ── 2. Strip every `from __future__ import annotations` from the body.
+        #       The template header and LLM both add one; we own it now.
+        future_line_re = _re.compile(
+            r"^[ \t]*from\s+__future__\s+import\s+annotations[ \t]*\n?",
+            _re.MULTILINE,
         )
+        clean_body = future_line_re.sub("", plugin_code)
 
-        # Don't double-inject if it's already there
-        if "_project_root" in plugin_code:
-            return plugin_code
+        # ── 3. Extract module docstring so it stays readable after the header.
+        #       Python allows a docstring after `from __future__` imports.
+        docstring = ""
+        body_after_doc = clean_body.lstrip("\n")
 
-        # Insert after the module docstring if present, otherwise at the top
-        if plugin_code.startswith('"""') or plugin_code.startswith("'''"):
-            quote = plugin_code[:3]
-            end = plugin_code.find(quote, 3) + 3
-            return plugin_code[:end] + "\n" + bootstrap + plugin_code[end:]
+        if body_after_doc.startswith('"""') or body_after_doc.startswith("'''"):
+            quote = body_after_doc[:3]
+            end_idx = body_after_doc.find(quote, 3)
+            if end_idx != -1:
+                end_idx += 3          # include closing quotes
+                docstring    = body_after_doc[:end_idx].rstrip()
+                body_after_doc = body_after_doc[end_idx:].lstrip("\n")
 
-        return bootstrap + plugin_code
+        # ── 4. Build the sys.path bootstrap (skip if already present) ─────────
+        if already_patched:
+            bootstrap = ""
+        else:
+            bootstrap = (
+                "import sys as _sys, os as _os\n"
+                "_plugin_dir = _os.path.abspath(_os.path.dirname(__file__))\n"
+                "_project_root = _os.path.dirname(\n"
+                "    _os.path.dirname(_os.path.dirname(_plugin_dir)))\n"
+                "if _project_root not in _sys.path:\n"
+                "    _sys.path.insert(0, _project_root)\n"
+            )
+
+        # ── 5. Assemble final file ────────────────────────────────────────────
+        #   from __future__ import annotations   ← MUST be line 1
+        #   <bootstrap>                          ← sys.path fix
+        #   <docstring>                          ← module docstring (optional)
+        #   <body>                               ← rest of plugin code
+        parts = ["from __future__ import annotations\n"]
+        if bootstrap:
+            parts.append(bootstrap)
+        if docstring:
+            parts.append("\n" + docstring + "\n")
+        parts.append("\n" + body_after_doc)
+
+        return "".join(parts)
 
 
 # Global instance
