@@ -58,7 +58,6 @@ class SuggestionResult:
 # Shell confidence heuristic
 # ---------------------------------------------------------------------------
 
-# Common CLI entry-points that strongly suggest shell execution.
 _SHELL_PREFIXES: frozenset[str] = frozenset({
     "ls", "cd", "pwd", "cat", "echo", "grep", "find", "sed", "awk",
     "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown",
@@ -69,7 +68,6 @@ _SHELL_PREFIXES: frozenset[str] = frozenset({
     "source", "bash", "sh", "zsh", "fish",
 })
 
-# Intent labels produced by brain/intent_parser.py that map well to shell.
 _SHELL_INTENTS: frozenset[str] = frozenset({
     "run_command", "execute_script", "file_operation", "git_operation",
     "package_management", "process_management", "system_info",
@@ -80,15 +78,7 @@ _SHELL_INTENTS: frozenset[str] = frozenset({
 def _shell_confidence(intent: str, intent_data: dict[str, Any]) -> float:
     """
     Heuristic confidence that a query is best served by a shell command.
-
-    Rules (highest wins, then blended with intent parser confidence):
-      • Query first word is a known CLI prefix  → base 0.82
-      • Query starts with './' or '/'           → base 0.90
-      • intent label is in _SHELL_INTENTS       → base 0.75
-      • Fallback (always available)             → base 0.35
-
-    The base is then blended (geometric mean) with the intent parser's
-    own confidence so low-confidence parses dampen the shell score too.
+    Blends a rule-based base score with the intent parser's own confidence.
     """
     query: str = intent_data.get("query", intent_data.get("raw", ""))
     stripped = query.strip()
@@ -105,8 +95,7 @@ def _shell_confidence(intent: str, intent_data: dict[str, Any]) -> float:
         else:
             base = 0.35
 
-    blended = (base * intent_conf) ** 0.5
-    return round(min(max(blended, 0.1), 1.0), 3)
+    return round(min(max((base * intent_conf) ** 0.5, 0.10), 1.0), 3)
 
 
 # ---------------------------------------------------------------------------
@@ -234,29 +223,61 @@ class SuggestionEngine:
         app: str,
     ) -> list[ExecutionStrategy]:
         strategies: list[ExecutionStrategy] = []
+        intent_conf: float = float(intent_data.get("confidence", 0.5))
 
-        # 1. Plugin strategies
+        # ── 1. Plugin strategies ──────────────────────────────────────────────
+        # Always attempt the plugin registry. Log at WARNING (not debug) so a
+        # silent failure is immediately visible in the panel logs.
+        plugin_added = False
         try:
             plugins = self._plugin_registry(app, intent)
-            for plug in plugins:
+            log.debug(
+                "suggestion_engine: plugin_registry(%r, %r) → %d result(s)",
+                app, intent, len(plugins) if plugins else 0,
+            )
+            for plug in (plugins or []):
                 strategies.append(ExecutionStrategy(
                     method="plugin",
                     label=f"{_METHOD_LABELS['plugin']} — {plug.get('name', 'unknown')}",
                     description=plug.get("description", "Execute via plugin"),
                     confidence=self._blend_confidence(
-                        plug.get("confidence", 0.7), intent_data.get("confidence", 0.5)
+                        float(plug.get("confidence", 0.7)), intent_conf
                     ),
                     plugin_name=plug.get("name"),
                     metadata=plug,
                 ))
+                plugin_added = True
         except Exception as exc:  # noqa: BLE001
-            log.debug("suggestion_engine: plugin lookup failed — %s", exc)
+            log.warning(
+                "suggestion_engine: plugin_registry raised — plugin strategy unavailable. "
+                "Error: %s", exc,
+            )
 
-        # 2. API / capability strategies
+        # Guaranteed plugin fallback — shown even when no specific plugin matched.
+        # This ensures the Plugin row is ALWAYS visible so the user can manually
+        # choose it. Confidence is intentionally low (0.30) so it sorts below
+        # any specific matches but above nothing.
+        if not plugin_added:
+            strategies.append(ExecutionStrategy(
+                method="plugin",
+                label=f"{_METHOD_LABELS['plugin']} — generic",
+                description="Route to an installed plugin (no specific match found)",
+                confidence=round(min(max(0.30 * intent_conf ** 0.5, 0.10), 1.0), 3),
+            ))
+            log.debug(
+                "suggestion_engine: no plugin matched — inserted generic plugin fallback."
+            )
+
+        # ── 2. API / capability strategies ───────────────────────────────────
         try:
             caps = self._capability_registry(intent)
-            for cap in caps:
-                method = cap.get("method", "api")  # capability reports its own method
+            log.debug(
+                "suggestion_engine: capability_registry(%r) → %d result(s)",
+                intent, len(caps) if caps else 0,
+            )
+            for cap in (caps or []):
+                method = cap.get("method", "api")
+                # Allow all four non-plugin methods through; coerce unknowns to api.
                 if method not in ("api", "command", "shell", "ui"):
                     method = "api"
                 strategies.append(ExecutionStrategy(
@@ -264,21 +285,21 @@ class SuggestionEngine:
                     label=f"{_METHOD_LABELS[method]} — {cap.get('name', intent)}",
                     description=cap.get("description", f"Execute via {method}"),
                     confidence=self._blend_confidence(
-                        cap.get("confidence", 0.6), intent_data.get("confidence", 0.5)
+                        float(cap.get("confidence", 0.6)), intent_conf
                     ),
                     capability_id=cap.get("id"),
                     metadata=cap,
                 ))
         except Exception as exc:  # noqa: BLE001
-            log.debug("suggestion_engine: capability lookup failed — %s", exc)
+            log.warning(
+                "suggestion_engine: capability_registry raised — capability strategies "
+                "unavailable. Error: %s", exc,
+            )
 
-        # 3. Ensure the waterfall always has a Shell fallback.
-        #    Shell is always available — any query can be attempted as a
-        #    terminal command. Confidence is intentionally moderate so it
-        #    doesn't crowd out plugin/api results that scored well.
+        # ── 3. Guaranteed Shell fallback ──────────────────────────────────────
+        # Shell is always available — any query can be attempted as a terminal
+        # command. Scored by heuristic so CLI-like queries rank it higher.
         if not any(s.method == "shell" for s in strategies):
-            # Score shell higher when the query looks like a CLI command,
-            # lower when it reads as natural language / prose.
             shell_conf = _shell_confidence(intent, intent_data)
             strategies.append(ExecutionStrategy(
                 method="shell",
@@ -287,17 +308,21 @@ class SuggestionEngine:
                 confidence=shell_conf,
             ))
 
-        # 4. Ensure the waterfall always has a UI-automation fallback.
+        # ── 4. Guaranteed UI-automation fallback ─────────────────────────────
         if not any(s.method == "ui" for s in strategies):
             strategies.append(ExecutionStrategy(
                 method="ui",
                 label=f"{_METHOD_LABELS['ui']} — fallback",
                 description="Simulate user interactions via screen automation",
-                confidence=max(0.1, intent_data.get("confidence", 0.3) * 0.5),
+                confidence=max(0.10, intent_conf * 0.5),
             ))
 
-        # Sort: first by waterfall rank (plugin→api→cmd→ui), then by confidence desc.
+        # Sort: waterfall rank (plugin→api→cmd→shell→ui), then confidence desc.
         strategies.sort(key=lambda s: (s.method_rank, -s.confidence))
+        log.debug(
+            "suggestion_engine: final waterfall → %s",
+            [(s.method, s.confidence) for s in strategies],
+        )
         return strategies
 
     # ------------------------------------------------------------------
