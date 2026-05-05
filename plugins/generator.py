@@ -10,7 +10,7 @@ Pipeline (triggered by "capability_gap_detected" event):
   4. Run full sandbox pipeline (sandbox_runner)
   5. If pipeline fails → apply Gemini critique feedback → retry (max 3x)
   6. If all passes → write to installedgenerator/ → request user approval
-  7. On approval → loader hot-reloads → capability registered
+  7. On approval → loader hot-reloads → capability registeredGenerate
 
 Structured output expected from LLM:
 {
@@ -285,10 +285,7 @@ TEST SKELETON (fill in with real test cases):
 
 CRITICAL RULES:
 1. The plugin class MUST subclass BasePlugin
-2. Import BasePlugin EXACTLY like this (no other path works in sandbox):
-   import sys, os
-   sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-   from plugins.manifest_schema import BasePlugin
+2. Do NOT add sys.path manipulation or from __future__ imports — these are injected automatically by the runtime before execution.
 3. ALWAYS import asyncio at the top if you use await anywhere
 4. run() MUST return a dict with a "status" key ("success" or "error")
 5. Access ALL services via: capability_registry.get("service_name")
