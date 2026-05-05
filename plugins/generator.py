@@ -221,9 +221,11 @@ class PluginGenerator:
                 )
                 return True
 
-            # Pipeline failed — extract feedback and improve skeleton for next attempt
-            stage  = pipeline_report.get("stage_failed", "unknown")
-            tweaks = pipeline_report.get("llm_audit", {}).get("suggested_tweaks", "")
+            # Pipeline failed — enrich failure_summary with stage feedback
+            # for the next prompt. Keep skeleton CLEAN (no comment injection)
+            # because Python comments embedded in JSON strings break the parser.
+            stage       = pipeline_report.get("stage_failed", "unknown")
+            tweaks      = pipeline_report.get("llm_audit", {}).get("suggested_tweaks", "")
             test_output = pipeline_report.get("pytest", {}).get("output", "")
 
             self.logger.warning(
@@ -231,9 +233,9 @@ class PluginGenerator:
                 f"Applying feedback and retrying..."
             )
 
-            # Feed failure context back into the skeleton for next attempt
-            skeleton = self._apply_generation_feedback(
-                skeleton, stage, tweaks, test_output
+            # Feed failure context back into the PROMPT (not the skeleton)
+            failure_summary = self._build_feedback_context(
+                failure_summary, stage, tweaks, test_output
             )
 
         # All attempts exhausted
@@ -269,6 +271,7 @@ Generate a complete, production-quality plugin to handle the failing intent.
 FAILING INTENT: "{intent}"
 CONSECUTIVE FAILURES: {failure_context.get('consecutive_failures', 0)}
 COMMON FAILURE REASONS: {common_reasons}
+PREVIOUS ATTEMPT FAILURES: {failure_context.get('previous_attempts', [])}
 
 PLUGIN SKELETON (fill in the TODO sections with real logic):
 ```python
@@ -282,11 +285,17 @@ TEST SKELETON (fill in with real test cases):
 
 CRITICAL RULES:
 1. The plugin class MUST subclass BasePlugin
-2. run() MUST return a dict with a "status" key ("success" or "error")
-3. Access ALL services via: capability_registry.get("service_name")
-4. NEVER import from automation/, context/, core/, or safety/ directly
-5. ALL exceptions must be caught and returned as {{"status": "error", "message": str(e)}}
-6. Tests must be runnable standalone with pytest (no external services needed)
+2. Import BasePlugin EXACTLY like this (no other path works in sandbox):
+   import sys, os
+   sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+   from plugins.manifest_schema import BasePlugin
+3. ALWAYS import asyncio at the top if you use await anywhere
+4. run() MUST return a dict with a "status" key ("success" or "error")
+5. Access ALL services via: capability_registry.get("service_name")
+6. NEVER import from automation/, context/, core/, or safety/ directly
+7. ALL exceptions must be caught and returned as {{"status": "error", "message": str(e)}}
+8. Tests must be runnable standalone with pytest (no external services needed)
+9. NEVER put Python comments or special characters inside the JSON string values
 
 Return ONLY valid JSON with this exact structure:
 {{
@@ -416,17 +425,32 @@ Return ONLY valid JSON with this exact structure:
     def _apply_generation_feedback(
         self, skeleton: str, stage: str, tweaks: str, test_output: str
     ) -> str:
-        """Prepends failure feedback to the skeleton for the next generation attempt."""
-        feedback_header = f"""
-# ── PREVIOUS ATTEMPT FAILED ──────────────────────────────────────────────────
-# Stage failed: {stage}
-# LLM audit tweaks required: {tweaks}
-# Pytest output: {test_output[:500] if test_output else 'N/A'}
-# Fix the above issues in your implementation.
-# ─────────────────────────────────────────────────────────────────────────────
+        """
+        FIX: Previously prepended Python comments to the skeleton code.
+        Those comments got embedded as strings inside the JSON payload,
+        causing Groq's json_validate_failed because special characters
+        (quotes, backslashes, newlines) in the error text broke JSON.
 
-"""
-        return feedback_header + skeleton
+        Now returns the skeleton UNCHANGED. Feedback travels in the
+        _build_generation_prompt() failure_context dict as plain text,
+        not inside the code string.
+        """
+        # Skeleton stays clean — feedback is in the prompt text, not the code
+        return skeleton
+
+    def _build_feedback_context(
+        self, base_context: dict, stage: str, tweaks: str, test_output: str
+    ) -> dict:
+        """Build an enriched failure context dict for the retry prompt."""
+        enriched = dict(base_context)
+        prev_failures = enriched.get("previous_attempts", [])
+        prev_failures.append({
+            "stage":       stage,
+            "tweaks":      tweaks,
+            "test_output": (test_output or "")[:300],
+        })
+        enriched["previous_attempts"] = prev_failures
+        return enriched
 
     @staticmethod
     def _intent_to_plugin_name(intent: str) -> str:
