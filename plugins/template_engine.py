@@ -68,7 +68,8 @@ IMPORTANT: Access system services ONLY via the capability registry:
     if not service or not service.is_available():
         return {{"status": "error", "message": "Service unavailable"}}
 """
-from __future__ import annotations
+# NOTE: `from __future__ import annotations` is injected at the top of the
+# final file by sandbox_runner._patch_plugin_sys_path — do NOT add it here.
 from plugins.manifest_schema import BasePlugin
 
 
