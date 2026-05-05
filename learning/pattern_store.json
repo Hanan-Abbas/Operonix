@@ -84,6 +84,20 @@
                 "usage_count": 1,
                 "step_count": 1
             }
+        ],
+        "open_file": [
+            {
+                "steps": [
+                    {
+                        "action": "open_file",
+                        "args": {
+                            "file_name": "<FILE_NAME>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
+                "step_count": 1
+            }
         ]
     }
 }
