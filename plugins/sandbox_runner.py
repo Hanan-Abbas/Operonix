@@ -100,6 +100,13 @@ class SandboxRunner:
         test_file   = os.path.join(test_dir, "test_plugin.py")
 
         os.makedirs(test_dir, exist_ok=True)
+
+        # Patch sys.path bootstrap into the plugin before writing.
+        # The sandbox subprocess has an isolated environment — the project
+        # root is not on sys.path by default, causing 'No module named plugins'.
+        # We inject a sys.path fix at the top of every generated plugin.
+        plugin_code = self._patch_plugin_sys_path(plugin_code, plugin_dir)
+
         with open(plugin_file, "w") as f:
             f.write(plugin_code)
         with open(test_file, "w") as f:
@@ -208,6 +215,39 @@ class SandboxRunner:
             timeout=20,
         )
         return result.to_dict()
+
+
+    @staticmethod
+    def _patch_plugin_sys_path(plugin_code: str, plugin_dir: str) -> str:
+        """
+        Injects a sys.path bootstrap at the top of the plugin code so it can
+        import from the project root (plugins/, capabilities/, core/, etc.)
+        when executed in the sandbox subprocess.
+
+        The project root is 3 levels up from plugin_dir:
+          plugins/installed/<plugin_name>/plugin.py
+          ^── root is here
+        """
+        bootstrap = (
+            "import sys as _sys, os as _os\n"
+            "_plugin_dir = _os.path.abspath(_os.path.dirname(__file__))\n"
+            "_project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_plugin_dir)))\n"
+            "if _project_root not in _sys.path:\n"
+            "    _sys.path.insert(0, _project_root)\n"
+            "\n"
+        )
+
+        # Don't double-inject if it's already there
+        if "_project_root" in plugin_code:
+            return plugin_code
+
+        # Insert after the module docstring if present, otherwise at the top
+        if plugin_code.startswith('"""') or plugin_code.startswith("'''"):
+            quote = plugin_code[:3]
+            end = plugin_code.find(quote, 3) + 3
+            return plugin_code[:end] + "\n" + bootstrap + plugin_code[end:]
+
+        return bootstrap + plugin_code
 
 
 # Global instance
