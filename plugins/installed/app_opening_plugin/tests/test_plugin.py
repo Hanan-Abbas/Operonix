@@ -1,14 +1,7 @@
-"""
-Auto-generated tests for plugin: app_opening_plugin
-Intent: app opening
-"""
+# Auto-generated tests for plugin: app_opening_plugin
+# Intent: app opening
 import asyncio
 import pytest
-import sys
-import os
-
-# Add plugin directory to path for import
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from plugin import AppOpeningPlugin
 
@@ -37,6 +30,11 @@ def test_validate_returns_none_for_valid_args(plugin):
     assert result is None
 
 
+def test_validate_returns_error_for_missing_app_name(plugin):
+    result = plugin.validate({})
+    assert result == 'Missing required argument: app_name'
+
+
 def test_run_returns_dict_with_status(plugin, base_context):
     result = asyncio.run(plugin.run(base_context, {"app_name": "test_app"}))
     assert isinstance(result, dict), "run() must return a dict"
@@ -47,7 +45,7 @@ def test_run_returns_dict_with_status(plugin, base_context):
 
 
 def test_run_handles_empty_args_gracefully(plugin, base_context):
-    """Plugin must not crash on empty args — return error dict instead."""
+    """Plugin must not crash on empty args — return error dict instead.""
     try:
         result = asyncio.run(plugin.run(base_context, {}))
         assert isinstance(result, dict)
@@ -57,7 +55,7 @@ def test_run_handles_empty_args_gracefully(plugin, base_context):
 
 
 def test_run_handles_none_context(plugin):
-    """Plugin must handle None or empty context gracefully."""
+    """Plugin must handle None or empty context gracefully.""
     try:
         result = asyncio.run(plugin.run({}, {"app_name": "test_app"}))
         assert isinstance(result, dict)
