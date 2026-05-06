@@ -244,22 +244,66 @@ class PluginMemory:
         except Exception as e:
             logger.warning(f"Could not index plugin in vector store: {e}")
 
-    async def find_similar_plugin(self, intent: str) -> dict | None:
+    async def find_similar_plugin(self, intent: str, min_similarity: float = 0.85) -> dict | None:
         """
         Searches vector store for a past plugin that handled a similar intent.
-        Returns metadata dict or None.
+        Returns metadata dict only if the match is above min_similarity threshold.
+
+        IMPORTANT: ChromaDB returns distances not similarities. A distance of 0
+        means identical; lower is better. We convert: similarity = 1 - distance.
+        We also check that the matched plugin actually has a manifest on disk —
+        stale vector entries from cleaned-up failed runs must not be returned.
         """
         try:
             from memory.vector_store import vector_store
             if not vector_store.collection:
                 return None
             results = vector_store.collection.query(
-                query_texts=[intent], n_results=1
+                query_texts=[intent], n_results=1,
+                include=["metadatas", "distances"],
             )
-            if results and results["metadatas"] and results["metadatas"][0]:
-                meta = results["metadatas"][0][0]
-                if meta.get("plugin_name"):
-                    return meta
+            if not (results and results["metadatas"] and results["metadatas"][0]):
+                return None
+
+            meta      = results["metadatas"][0][0]
+            distances = results.get("distances", [[]])[0]
+            distance  = distances[0] if distances else 1.0
+
+            # ChromaDB cosine distance: 0 = identical, 2 = opposite
+            # Convert to similarity in [0, 1]
+            similarity = max(0.0, 1.0 - (distance / 2.0))
+
+            plugin_name = meta.get("plugin_name", "")
+            if not plugin_name:
+                return None
+
+            if similarity < min_similarity:
+                logger.debug(
+                    f"Vector match '{plugin_name}' for '{intent}' "
+                    f"below threshold (similarity={similarity:.2f} < {min_similarity}). "
+                    f"Treating as new intent."
+                )
+                return None
+
+            # Verify manifest exists on disk — don't return stale entries
+            from core.config import settings
+            plugins_dir = os.path.join(
+                str(getattr(settings, "PLUGINS_DIR", "plugins")), "installed"
+            )
+            manifest_path = os.path.join(plugins_dir, plugin_name, "manifest.json")
+            if not os.path.exists(manifest_path):
+                logger.debug(
+                    f"Vector store hit '{plugin_name}' has no manifest on disk — "
+                    f"stale entry from a cleaned-up failed run. Ignoring."
+                )
+                return None
+
+            logger.debug(
+                f"Found similar plugin '{plugin_name}' for intent '{intent}' "
+                f"(similarity={similarity:.2f})"
+            )
+            return meta
+
         except Exception as e:
             logger.warning(f"Vector similarity search failed: {e}")
         return None
