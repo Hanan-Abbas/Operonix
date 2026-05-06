@@ -68,6 +68,33 @@ class PluginLoader:
             plugin_dir = os.path.join(self._installed_dir, entry_name)
             if not os.path.isdir(plugin_dir):
                 continue
+
+            plugin_file   = os.path.join(plugin_dir, "plugin.py")
+            manifest_file = os.path.join(plugin_dir, "manifest.json")
+
+            # Silently skip directories that are clearly incomplete —
+            # these are leftovers from failed/in-progress generation runs.
+            # A valid plugin always has BOTH plugin.py AND manifest.json.
+            if not os.path.exists(manifest_file) and not os.path.exists(plugin_file):
+                self.logger.debug(
+                    f"Skipping empty directory (no plugin files): {plugin_dir}"
+                )
+                continue
+
+            if not os.path.exists(manifest_file):
+                # Has plugin.py but no manifest.json.
+                # This is a real broken install (plugin.py exists but manifest
+                # was never written) — warn so the developer knows about it.
+                # Contrast with fully-empty dirs (no plugin.py either) which
+                # are silent generation artefacts handled above.
+                self.logger.warning(
+                    f"⚠️  Plugin dir '{os.path.basename(plugin_dir)}' has plugin.py "
+                    f"but no manifest.json — skipping. "
+                    f"If this is a failed generation artefact, delete the directory: "
+                    f"{plugin_dir}"
+                )
+                continue
+
             success = await self.load_plugin(plugin_dir)
             if success:
                 count += 1
@@ -83,10 +110,17 @@ class PluginLoader:
 
         # Both files must exist
         if not os.path.exists(plugin_file):
-            self.logger.warning(f"Missing plugin.py in {plugin_dir}")
+            self.logger.debug(f"Skipping {plugin_dir}: no plugin.py found.")
             return False
         if not os.path.exists(manifest_file):
-            self.logger.warning(f"Missing manifest.json in {plugin_dir}")
+            # load_all() already guards this — but if load_plugin() is called
+            # directly (e.g. hot_reload) and the manifest is missing, log at
+            # debug not warning since it is an expected transient state during
+            # generation retries.
+            self.logger.debug(
+                f"Skipping {plugin_dir}: no manifest.json — "
+                f"plugin is pending or generation failed."
+            )
             return False
 
         # Load manifest
