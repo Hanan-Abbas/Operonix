@@ -407,12 +407,34 @@ Return ONLY valid JSON with this exact structure:
             )
 
     async def _check_existing_plugin(self, intent: str) -> str | None:
-        """Check plugin_memory for a similar existing plugin."""
+        """
+        Check plugin_memory for a similar existing plugin.
+
+        IMPORTANT: Always verify the plugin actually exists on disk before
+        returning it. The vector store may contain entries for plugins that
+        were cleaned up after failed generation runs. Returning a stale name
+        causes generator to fire plugin_evolution_requested for a non-existent
+        plugin, which the evolver immediately rejects with "plugin.py not found".
+        """
         try:
             from plugins.plugin_memory import plugin_memory
             result = await plugin_memory.find_similar_plugin(intent)
             if result:
-                return result.get("plugin_name")
+                plugin_name = result.get("plugin_name")
+                if not plugin_name:
+                    return None
+                # Verify plugin.py actually exists — vector store entries
+                # survive cleanup of failed generation dirs
+                plugin_file = os.path.join(
+                    PLUGINS_INSTALLED_DIR, plugin_name, "plugin.py"
+                )
+                if not os.path.exists(plugin_file):
+                    self.logger.debug(
+                        f"Vector store found '{plugin_name}' for intent '{intent}' "
+                        f"but plugin.py is missing on disk — generating fresh."
+                    )
+                    return None
+                return plugin_name
         except Exception:
             pass
         return None
@@ -461,7 +483,16 @@ Return ONLY valid JSON with this exact structure:
 
     @staticmethod
     def _strip_code_fences(code: str) -> str:
-        """Remove markdown code fences from LLM output."""
+        """
+        Remove markdown code fences from LLM output and normalize whitespace.
+
+        LLMs sometimes return plugin code with \n\n between every single line
+        (each line gets its own JSON string line). This makes the code appear
+        as an empty class body to the validator — methods look like they are
+        missing because everything is separated by blank lines.
+        We collapse 3+ consecutive newlines to 2 (PEP 8 max between defs).
+        """
+        import re
         if not code:
             return ""
         code = code.strip()
@@ -473,6 +504,11 @@ Return ONLY valid JSON with this exact structure:
             code = code.split("```", 1)[1]
             if "```" in code:
                 code = code.rsplit("```", 1)[0]
+        # Collapse excessive blank lines injected by the LLM
+        code = re.sub(r"
+{3,}", "
+
+", code)
         return code.strip()
 
 
