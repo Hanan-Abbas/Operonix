@@ -64,9 +64,10 @@ Version: {version}
 Generated: {timestamp}
 
 IMPORTANT: Access system services ONLY via the capability registry:
-    service = registry.get("vision_service")
-    if not service or not service.is_available():
+    service = capability_registry.get("vision_service")
+    if service is None:
         return {{"status": "error", "message": "Service unavailable"}}
+    NOTE: capability_registry.get() returns the service or None — no is_available() method exists.
 """
 # NOTE: `from __future__ import annotations` is injected at the top of the
 # final file by sandbox_runner._patch_plugin_sys_path — do NOT add it here.
