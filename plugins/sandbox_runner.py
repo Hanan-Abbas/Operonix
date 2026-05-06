@@ -133,6 +133,7 @@ class SandboxRunner:
                     f"{sandbox_result.error}"
                 )
             report["stage_failed"] = "sandbox_run"
+            self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "sandbox_run")
             bus.publish(
                 "plugin_validation_failed",
                 {
@@ -165,6 +166,7 @@ class SandboxRunner:
                 f"{test_result.get('output', '')[:500]}"
             )
             report["stage_failed"] = "pytest"
+            self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "pytest")
             bus.publish(
                 "plugin_validation_failed",
                 {
@@ -216,6 +218,34 @@ class SandboxRunner:
         )
         return result.to_dict()
 
+
+    def _cleanup_failed_plugin_dir(
+        self, plugin_dir: str, plugin_name: str, stage: str
+    ) -> None:
+        """
+        Removes an incomplete plugin directory left by a failed pipeline run.
+
+        Called after Stage 2 or Stage 3 failures — at those points the
+        directory exists (it was created by generator.py before the pipeline
+        started) but contains no manifest.json yet (that is only written after
+        ALL stages pass).  Leaving it causes the loader to warn
+        "Missing manifest.json" on every restart.
+
+        The generator retries with a fresh directory on the next attempt,
+        so deleting here is always safe.
+        """
+        import shutil
+        try:
+            if os.path.isdir(plugin_dir):
+                shutil.rmtree(plugin_dir, ignore_errors=True)
+                self.logger.debug(
+                    f"🧹 Cleaned up incomplete plugin dir after {stage} failure: "
+                    f"{plugin_dir}"
+                )
+        except Exception as e:
+            self.logger.debug(
+                f"Could not clean up plugin dir '{plugin_dir}': {e}"
+            )
 
     @staticmethod
     def _patch_plugin_sys_path(plugin_code: str, plugin_dir: str) -> str:
