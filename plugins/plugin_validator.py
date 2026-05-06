@@ -88,8 +88,11 @@ AUDIT CHECKLIST — verify ALL of these:
 2. SAFETY CONSTRAINTS
    - Does it avoid direct imports of automation/, context/, core/, safety/?
    - Does it access automation/UI services ONLY via the service registry?
-     (e.g., registry.get("vision_service") NOT from automation.vision_model import vision_model)
-   - Does it handle the case where a service is unavailable (is_available() check)?
+     (e.g., capability_registry.get("vision_service") NOT from automation.vision_model import ...)
+   - Does it check if the service returned is None before using it?
+     (e.g., if service is None: return {{"status": "error", ...}})
+     NOTE: The registry returns the service object directly or None — there is NO
+     is_available() method. A None-check is the ONLY correct availability check.
    - Does it avoid os.system(), subprocess, eval(), exec()?
 
 3. ERROR HANDLING
@@ -99,6 +102,19 @@ AUDIT CHECKLIST — verify ALL of these:
 4. LOGIC CORRECTNESS
    - Does the plugin logic actually address the failing intent: "{intent}"?
    - Is the logic sound and non-trivial (not just returning hardcoded values)?
+
+5. ACCEPTABLE PATTERNS (do NOT reject for these)
+   - Using `threading.Thread` with `daemon=True` for background tasks is CORRECT
+     and safe — do not reject plugins for using threads.
+   - Using `time.sleep()` inside a thread is CORRECT for rate-limiting loops.
+   - Using `asyncio.sleep()` inside an async function is CORRECT.
+   - Using `keyboard`, `pyautogui`, `pynput` libraries for UI automation is CORRECT
+     for automation-category plugins — do not reject for using these libraries.
+   - A None-check on registry.get() is the COMPLETE and CORRECT availability check.
+     Do NOT require is_available() — that method does not exist in this codebase.
+   - Do NOT invent requirements not listed in this checklist.
+   - Do NOT reject a plugin for style preferences or minor improvements.
+     Only reject if a checklist item is genuinely violated.
 
 CRITICAL INSTRUCTION:
 Return STRICTLY valid JSON. No markdown. No text outside the JSON.
