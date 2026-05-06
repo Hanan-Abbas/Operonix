@@ -272,11 +272,12 @@ class PluginLoader:
         }
 
     async def enable(self, name: str) -> str:
-        """Enable a registered plugin (set status to active)."""
+        """Enable a registered plugin (set status to trusted/active)."""
         entry = plugin_registry.entries.get(name)
         if entry is None:
             raise FileNotFoundError(f"Plugin '{name}' not found.")
-        entry.manifest.status = PluginStatus.ACTIVE
+        # PluginStatus has no ACTIVE value — TRUSTED is the live/enabled state
+        entry.manifest.status = PluginStatus.TRUSTED
         self.logger.info("Plugin '%s' enabled.", name)
         return f"Plugin '{name}' enabled."
 
@@ -285,6 +286,7 @@ class PluginLoader:
         entry = plugin_registry.entries.get(name)
         if entry is None:
             raise FileNotFoundError(f"Plugin '{name}' not found.")
+        # RETIRED is the correct disabled state (ACTIVE does not exist)
         entry.manifest.status = PluginStatus.RETIRED
         self.logger.info("Plugin '%s' disabled.", name)
         return f"Plugin '{name}' disabled."
