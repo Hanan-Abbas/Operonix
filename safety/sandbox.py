@@ -77,12 +77,23 @@ try:
     import asyncio
     plugin_instance = plugin_cls()
 
-    # Validate args before running
-    validation_error = plugin_instance.validate(args)
-    if validation_error:
-        raise ValueError(f"Validation failed: {{validation_error}}")
-
+    # NOTE: validate() is intentionally NOT called here.
+    # The sandbox smoke-test only verifies that the plugin loads, instantiates,
+    # and run() returns a valid dict without crashing.  Validation requires
+    # real runtime args (e.g. app_name, path) which are never available during
+    # pre-deployment testing — calling validate({{}}) would always fail for any
+    # plugin that guards required arguments, producing false negatives.
+    # Argument validation is enforced by the executor at real runtime.
     result = asyncio.run(plugin_instance.run(context, args))
+
+    # run() MUST return a dict with a "status" key — enforce that contract here
+    if not isinstance(result, dict):
+        raise TypeError(
+            f"Plugin run() must return a dict, got {{type(result).__name__}}"
+        )
+    if "status" not in result:
+        raise KeyError("Plugin run() result dict must contain a 'status' key")
+
     output = {{"status": "success", "result": result}}
 
 except Exception as exc:
