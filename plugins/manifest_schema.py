@@ -29,8 +29,10 @@ class PluginStatus(str, Enum):
     PENDING   = "pending"    # Generated, not yet tested
     TESTING   = "testing"    # Currently in sandbox tests
     TRUSTED   = "trusted"    # Passed tests + user approved
+    ACTIVE    = "trusted"    # Alias for TRUSTED — "enabled" state
     UNTRUSTED = "untrusted"  # Failed tests or revoked
     RETIRED   = "retired"    # Superseded or permanently disabled
+    DISABLED  = "retired"    # Alias for RETIRED — "disabled" state
 
 
 # ── Manifest Dataclass ────────────────────────────────────────────────────────
@@ -49,7 +51,6 @@ class PluginManifest:
 
     # Capability linkage
     intent: str = ""              # The capability gap intent this plugin fills
-    capabilities: list[str] = field(default_factory=list)  # intent strings this plugin handles
     tags: list[str] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
 
@@ -125,11 +126,13 @@ class BasePlugin:
 
     Plugins access system capabilities ONLY through the service registry:
 
-        service = registry.get("vision_service")
-        if not service or not service.is_available():
+        service = capability_registry.get("vision_service")
+        if service is None:
             return {"status": "error", "message": "vision_service unavailable"}
         result = await service.run(context, args)
 
+    NOTE: capability_registry.get() returns the service object or None.
+    There is NO is_available() method — a None-check is the complete check.
     Direct imports of automation/, context/, or core/ are NOT permitted.
     """
 
