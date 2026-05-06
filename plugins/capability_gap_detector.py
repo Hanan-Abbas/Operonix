@@ -142,18 +142,36 @@ class CapabilityGapDetector:
         """
         If plugin generation itself fails repeatedly, block the intent
         to prevent an infinite generation loop.
+
+        IMPORTANT: Only block on the final 'plugin_generation_failed' event
+        from generator.py (which fires after ALL retry attempts are exhausted),
+        NOT on individual 'plugin_validation_failed' events per attempt.
+
+        Stage 1 (llm_audit) failures are prompt/validator quality issues —
+        blocking on them would permanently prevent generation after a single
+        bad validator response, which defeats the retry mechanism.
         """
         data   = event.data or {}
+        # generator.py publishes plugin_generation_failed with 'intent' key.
+        # sandbox_runner publishes plugin_validation_failed with 'name' key (plugin name).
+        # We only want to block when generator signals total failure — which
+        # includes the 'intent' key. Per-stage failures from sandbox_runner
+        # have only 'name' and 'stage' — we intentionally ignore those here.
+        intent = data.get("intent", "")
         name   = data.get("name", "")
         stage  = data.get("stage", "")
 
-        # We don't have the intent here, but we can infer from plugin name
-        # (plugin names are derived from intent in generator.py)
-        # Mark as blocked after repeated LLM audit failures
-        if stage == "llm_audit" and name:
-            self._blocked.add(name)
+        # Ignore per-stage validation failures — those are handled by the
+        # generator's retry loop. Only act on total generation failure.
+        if stage:
+            return
+
+        # Total generation failure — block the intent (not the plugin name)
+        target = intent or name
+        if target and target not in self._blocked:
+            self._blocked.add(target)
             self.logger.warning(
-                f"⛔ Intent '{name}' blocked from generation (repeated LLM audit failures)."
+                f"⛔ Intent '{target}' blocked after all generation attempts exhausted."
             )
 
     # ── Core Logic ─────────────────────────────────────────────────────────────
