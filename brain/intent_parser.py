@@ -179,11 +179,29 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
 
         if requires_confirmation:
             self.logger.warning("⚠️ High-risk operation detected: %s. Escalating.", resolved_intent)
-            await bus.emit("request_confirmation", {
-                "task_id": task_id,
-                "intent": resolved_intent,
+            # FIX 1: event name must be "confirmation_required" — that is what
+            #         ConfirmationManager.hold_for_confirmation subscribes to.
+            #         The old name "request_confirmation" had no subscriber.
+            # FIX 2: include full_task so ConfirmationManager can re-publish
+            #         the complete payload as task_safety_cleared on Allow.
+            #         Without it, approval re-published an empty envelope and
+            #         the executor received a task with no steps.
+            full_task = {
+                "task_id":    task_id,
+                "intent":     resolved_intent,
+                "parameters": params,
+                "steps": [
+                    {"action": resolved_intent, "args": params}
+                ],
+            }
+            await bus.emit("confirmation_required", {
+                "task_id":    task_id,
+                "intent":     resolved_intent,
                 "parameters": params,
                 "risk_level": "high",
+                "reason":     f"High-risk intent '{resolved_intent}' requires your approval.",
+                "step_data":  {"action": resolved_intent, "args": params},
+                "full_task":  full_task,
             })
         else:
             await bus.emit("intent_validated", {
