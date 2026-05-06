@@ -209,16 +209,30 @@ class SafetyValidator:
 
             elif risk == RiskLevel.HIGH:
                 self.logger.warning(
+                    "⚠️ High-risk operation detected: %s. Escalating.",
+                    intent,
+                )
+                self.logger.warning(
                     "Task [%s] step %d triggered HIGH RISK. Requesting confirmation.",
                     task_id, index,
                 )
+                # FIX 2: include the complete task_data payload so that
+                # ConfirmationManager can re-publish it intact when the user
+                # clicks Allow.  Previously only step-level fields were sent,
+                # so task_safety_cleared carried an incomplete payload that
+                # the executor could not run.
                 bus.publish(
                     "confirmation_required",
                     {
-                        "task_id":    task_id,
-                        "reason":     f"High risk on step {index} intent '{intent}'",
-                        "step_index": index,
-                        "step_data":  step,
+                        "task_id":       task_id,
+                        "reason":        f"High risk on step {index} intent '{intent}'",
+                        "step_index":    index,
+                        "step_data":     step,
+                        "intent":        intent,
+                        "parameters":    args,
+                        "risk_level":    "high",
+                        # Full task payload — needed to resume execution on Allow
+                        "full_task":     task_data,
                     },
                     source="safety_validator",
                 )
