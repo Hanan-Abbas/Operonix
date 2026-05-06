@@ -80,6 +80,11 @@ class SandboxRunner:
                 f"❌ [Stage 1] LLM audit rejected '{plugin_name}': {audit.get('reason')}"
             )
             report["stage_failed"] = "llm_audit"
+            # Clean up the empty plugin dir created by generator.py before
+            # the pipeline started — at Stage 1 no files have been written yet
+            # so plugin_dir contains only the bare directory. Without cleanup
+            # it persists across retries and triggers loader warnings on restart.
+            self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "llm_audit")
             bus.publish(
                 "plugin_validation_failed",
                 {
