@@ -76,24 +76,25 @@ class Orchestrator:
         loop = asyncio.get_running_loop()
         self.wake_detector.loop = loop
 
-        bus.subscribe("wake_word_detected",     self.handle_wake_word)
-        bus.subscribe("text_query_received",    self._handle_panel_input)
-        bus.subscribe("user_input_received",    self.handle_new_task)
+        bus.subscribe("wake_word_detected",    self.handle_wake_word)
+        bus.subscribe("text_query_received",   self._handle_panel_input)
+        bus.subscribe("user_input_received",   self.handle_new_task)
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
-        bus.subscribe("intent_parsed",          self.route_to_mapper)
-        bus.subscribe("capability_mapped",      self.inject_task_metadata)
+        bus.subscribe("intent_parsed",         self.route_to_mapper)
+        bus.subscribe("capability_mapped",     self.inject_task_metadata)
         bus.subscribe("task_failed",            self.handle_failure)
         bus.subscribe("task_completed",         self.finalize_task)
-        # FIX 4: resume execution after user approves a high-risk confirmation
+        # Resume execution after user approves a high-risk confirmation.
         bus.subscribe("task_safety_cleared",    self.handle_safety_cleared)
 
-        # FIX 1: start the safety and confirmation subsystems so they actually
-        # subscribe to their own events.  Without this, confirmation_required
-        # and task_dispatched fire into the void — nothing ever catches them.
+        # Start the three-layer safety stack so each subscribes to its events.
+        # Order matters: permission_guard must be first (fastest gate).
+        from safety.permission_guard import permission_guard
         from safety.validator import safety_validator
         from safety.confirmation import confirmation_manager
-        await safety_validator.start()
-        await confirmation_manager.start()
+        await permission_guard.start()      # gate 1 — fast intent-level check
+        await safety_validator.start()      # gate 2 — deep per-step analysis
+        await confirmation_manager.start()  # human-in-the-loop bridge
 
         asyncio.create_task(self._background_wake_loop())
         asyncio.create_task(self._emit_app_context_loop())
@@ -313,28 +314,20 @@ class Orchestrator:
 
     async def handle_safety_cleared(self, event: Any) -> None:
         """
-        Called when SafetyValidator or ConfirmationManager clears a task.
+        Called when PermissionGuard or ConfirmationManager clears a task.
 
-        Two paths lead here:
-          • SafetyValidator  — task passed all checks automatically (SAFE/LOW)
-          • ConfirmationManager — user clicked Allow on a HIGH-risk prompt
-
-        In both cases the full task_data payload is re-published here so the
-        executor can pick it up via "task_dispatched_safe".  We keep the event
-        name distinct from "task_dispatched" so the safety validator doesn't
-        re-intercept an already-cleared task and loop forever.
+        Routes the approved full-task payload to "task_dispatched_safe" so
+        the executor can run it.  We use a distinct event name to prevent the
+        safety validator from re-intercepting an already-cleared task.
         """
-        task_id   = event.data.get("task_id")
-        task      = self.active_tasks.get(task_id, {})
+        task_id = event.data.get("task_id")
+        task    = self.active_tasks.get(task_id, {})
 
         logger.info(
-            "Task [%s] safety cleared — routing to executor (source=%s).",
-            task_id,
-            event.source if hasattr(event, "source") else "unknown",
+            "Task [%s] safety cleared — routing to executor.", task_id
         )
 
-        # Merge any context the orchestrator accumulated after the original
-        # task_dispatched event (e.g. context_snapshot arrived late).
+        # Merge any context accumulated after the original task_dispatched.
         payload = dict(event.data)
         if task:
             existing_ctx = payload.get("context") or {}
@@ -364,6 +357,31 @@ class Orchestrator:
             task_id,
             event.data.get("preferred_method"),
             event.data["context"].get("cwd", "<not set>"),
+        )
+
+        # FIX: emit task_dispatched so the safety validator (which subscribes
+        # to this event) can evaluate risk and either clear or hold the task.
+        # This event was never emitted before — the safety chain never started.
+        await bus.emit(
+            "task_dispatched",
+            {
+                "task_id":          task_id,
+                "intent":           event.data.get("intent"),
+                "capability":       event.data.get("capability"),
+                "parameters":       event.data.get("parameters", {}),
+                "suggested_tool":   event.data.get("suggested_tool"),
+                "preferred_method": event.data.get("preferred_method"),
+                "context":          event.data["context"],
+                # Include steps if the planner has already built them;
+                # safety validator iterates steps to assess per-step risk.
+                "steps": event.data.get("steps") or [
+                    {
+                        "action": event.data.get("intent"),
+                        "args":   event.data.get("parameters", {}),
+                    }
+                ],
+            },
+            source="orchestrator",
         )
 
     async def handle_failure(self, event: Any) -> None:
