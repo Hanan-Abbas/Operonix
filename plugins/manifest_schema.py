@@ -49,6 +49,7 @@ class PluginManifest:
 
     # Capability linkage
     intent: str = ""              # The capability gap intent this plugin fills
+    capabilities: list[str] = field(default_factory=list)  # intent strings this plugin handles
     tags: list[str] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
 
