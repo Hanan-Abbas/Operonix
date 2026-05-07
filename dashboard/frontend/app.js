@@ -140,6 +140,12 @@ const App = (() => {
   let _confirmTimer    = null;
   let _components      = {};              // name → {mount, onEvent}
 
+  // ── Confirmation state ───────────────────────────────────────────────────
+  // Stores the task_id from the most recent confirmation_required event so
+  // safety.respond() can include it in the dashboard_command message.
+  // websocket.py uses it to emit the correct user_response_received event.
+  let _pendingConfirmTaskId = null;
+
   // ── WS internal ──────────────────────────────────────────────────────────
   let _ws              = null;
   let _wsReady         = false;
@@ -284,8 +290,11 @@ const App = (() => {
     if (msg.type === "event") {
       const etype = msg.event_type;
 
-      // Safety confirmation intercept
+      // Safety confirmation intercept — store task_id before showing modal
       if (etype === "confirmation_required") {
+        // Store the task_id so safety.respond() can send it back to
+        // websocket.py, which needs it to emit user_response_received.
+        _pendingConfirmTaskId = msg.data?.task_id || null;
         safety.show(msg.data);
         return;
       }
@@ -633,7 +642,8 @@ const App = (() => {
       if (taskIdEl)  taskIdEl.textContent  = data.task_id  || "—";
       if (commandEl) commandEl.textContent = data.command  || JSON.stringify(data.payload || {}, null, 2);
 
-      // Callback
+      // Callback (used by system.requestShutdown and similar internal callers
+      // that don't go through the EventBus confirmation flow)
       _confirmCallback = callback || null;
 
       // Start timer
@@ -669,6 +679,19 @@ const App = (() => {
       if (firstBtn) firstBtn.focus();
     },
 
+    /**
+     * Called when the user clicks Allow or Deny (or presses Escape).
+     *
+     * If a _confirmCallback is set (internal callers like requestShutdown),
+     * invoke it directly — no WebSocket message needed.
+     *
+     * Otherwise this is an agent confirmation_required flow:
+     *   Send {"action": "dashboard_command", "type": "confirm_approved"|"confirm_denied",
+     *          "task_id": "<id>"}
+     *   websocket.py receives it, matches the DASHBOARD_COMMAND branch, and
+     *   publishes user_response_received on the EventBus, which
+     *   ConfirmationManager.handle_user_response() then processes.
+     */
     respond(approved) {
       clearTimeout(_confirmTimer);
       const overlay = $("#confirmOverlay");
@@ -677,13 +700,19 @@ const App = (() => {
       if (_confirmCallback) {
         _confirmCallback(approved);
         _confirmCallback = null;
-      } else {
-        // Respond to the agent via WebSocket
-        ws.send({
-          action: "dashboard_command",
-          type:   approved ? "confirm_approved" : "confirm_denied",
-        });
+        return;
       }
+
+      // Agent confirmation flow — include task_id so the backend can
+      // unambiguously match the response to the paused task.
+      ws.send({
+        action:  "dashboard_command",
+        type:    approved ? "confirm_approved" : "confirm_denied",
+        task_id: _pendingConfirmTaskId,   // may be null for legacy callers
+      });
+
+      // Clear local state — the confirmation is resolved from our side.
+      _pendingConfirmTaskId = null;
 
       if (approved) {
         toast.show("success", "Confirmed", "Action approved — agent proceeding.");
