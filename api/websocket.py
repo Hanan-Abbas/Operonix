@@ -71,12 +71,22 @@ class ConnectionManager:
         self._counter: int = 0
         self._bus = None          # injected after startup
 
+        # ── Confirmation state ─────────────────────────────────────────────
+        # Tracks the task_id of the currently pending confirmation so that
+        # confirm_approved / confirm_denied messages from the dashboard can
+        # be translated into the user_response_received event that
+        # ConfirmationManager expects.
+        self._pending_confirmation_task_id: Optional[str] = None
+
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def attach_bus(self, bus) -> None:
         """Attach the internal EventBus so inbound commands can be forwarded."""
         self._bus = bus
         bus.subscribe("*", self._forward_event)
+        # Track pending confirmation task_ids so we can pair them with
+        # dashboard responses.
+        bus.subscribe("confirmation_required", self._track_confirmation)
         logger.info("WebSocketManager attached to EventBus.")
 
     async def connect(self, websocket: WebSocket) -> WSConnection:
@@ -92,6 +102,21 @@ class ConnectionManager:
         self._connections.pop(conn.client_id, None)
         conn.is_alive = False
         logger.info("Client disconnected: %s  (total=%d)", conn.client_id, len(self._connections))
+
+    # ── Confirmation tracking ───────────────────────────────────────────────
+
+    async def _track_confirmation(self, event) -> None:
+        """
+        Listens for confirmation_required events on the bus and stores the
+        task_id so that when the dashboard sends confirm_approved /
+        confirm_denied we know which task to resume.
+        """
+        task_id = event.get("task_id")
+        if task_id:
+            self._pending_confirmation_task_id = task_id
+            logger.debug(
+                "WebSocketManager: tracking confirmation for task_id=%s", task_id
+            )
 
     # ── Outbound (system → dashboard) ──────────────────────────────────────
 
@@ -134,6 +159,8 @@ class ConnectionManager:
           {"action": "RETRY", "task_id": "..."}
           {"action": "SUBSCRIBE", "channels": ["action_taken", "error"]}
           {"action": "PING"}
+          {"action": "dashboard_command", "type": "confirm_approved"}
+          {"action": "dashboard_command", "type": "confirm_denied"}
         """
         try:
             msg: Dict[str, Any] = json.loads(raw)
@@ -163,12 +190,71 @@ class ConnectionManager:
             else:
                 await conn.send({"type": "error", "message": "EventBus not attached"})
 
+        # ── Confirmation responses from the dashboard ─────────────────────
+        # The dashboard sends:
+        #   {"action": "dashboard_command", "type": "confirm_approved"}
+        #   {"action": "dashboard_command", "type": "confirm_denied"}
+        #
+        # We translate these into user_response_received on the EventBus,
+        # which is the event ConfirmationManager.handle_user_response() listens
+        # for. Without this translation the task stays paused forever.
+
+        elif action == "DASHBOARD_COMMAND":
+            msg_type = msg.get("type", "").lower()
+
+            if msg_type in ("confirm_approved", "confirm_denied"):
+                task_id = (
+                    msg.get("task_id")                    # explicit task_id if dashboard sends it
+                    or self._pending_confirmation_task_id  # fallback: last tracked task
+                )
+
+                if not task_id:
+                    logger.warning(
+                        "Received %s but no pending task_id is known. "
+                        "Dashboard should include task_id in the message.",
+                        msg_type,
+                    )
+                    await conn.send({
+                        "type":    "error",
+                        "message": "No pending confirmation task found.",
+                    })
+                    return
+
+                choice = "allow" if msg_type == "confirm_approved" else "deny"
+
+                logger.info(
+                    "Dashboard confirmation response: task_id=%s choice=%s",
+                    task_id, choice,
+                )
+
+                if self._bus:
+                    self._bus.publish(
+                        "user_response_received",
+                        {"task_id": task_id, "choice": choice},
+                        source="dashboard",
+                    )
+                    # Clear the tracked id — the confirmation is resolved.
+                    self._pending_confirmation_task_id = None
+
+                await conn.send({
+                    "type":    "ack",
+                    "action":  "dashboard_command",
+                    "type_":   msg_type,
+                    "task_id": task_id,
+                    "choice":  choice,
+                })
+
+            else:
+                # Generic dashboard_command passthrough
+                if self._bus:
+                    await self._bus.emit("dashboard_message", msg, source="dashboard")
+                await conn.send({"type": "ack", "action": "dashboard_command"})
+
         # ── Plugin self-evolution commands ────────────────────────────────────
         # These allow the dashboard to drive the plugin system over WebSocket
         # without going through HTTP — useful for real-time approval flows.
 
         elif action == "APPROVE_PLUGIN":
-            # Approve a pending generated plugin and deploy it
             plugin_name = msg.get("name", "")
             plugin_dir  = msg.get("plugin_dir", "")
             intent      = msg.get("intent", plugin_name)
@@ -183,7 +269,6 @@ class ConnectionManager:
                 await conn.send({"type": "ack", "action": "APPROVE_PLUGIN", "name": plugin_name})
 
         elif action == "REJECT_PLUGIN":
-            # Reject a pending plugin (mark untrusted, stop generation)
             plugin_name = msg.get("name", "")
             reason      = msg.get("reason", "Rejected by user")
             if not plugin_name:
@@ -197,7 +282,6 @@ class ConnectionManager:
                 await conn.send({"type": "ack", "action": "REJECT_PLUGIN", "name": plugin_name})
 
         elif action == "GENERATE_PLUGIN":
-            # Manually trigger plugin generation for a specific intent
             intent  = msg.get("intent", "")
             reason  = msg.get("reason", "Manual generation request from dashboard")
             if not intent:
@@ -217,7 +301,6 @@ class ConnectionManager:
                 await conn.send({"type": "ack", "action": "GENERATE_PLUGIN", "intent": intent})
 
         elif action == "EVOLVE_PLUGIN":
-            # Manually trigger evolution for an existing plugin
             plugin_name = msg.get("name", "")
             reason      = msg.get("reason", "Manual evolution request from dashboard")
             if not plugin_name:
@@ -231,7 +314,6 @@ class ConnectionManager:
                 await conn.send({"type": "ack", "action": "EVOLVE_PLUGIN", "name": plugin_name})
 
         elif action == "RELOAD_PLUGIN":
-            # Hot-reload a specific plugin
             plugin_name = msg.get("name", "")
             if not plugin_name:
                 await conn.send({"type": "error", "message": "'name' required"})
