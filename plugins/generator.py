@@ -505,10 +505,7 @@ Return ONLY valid JSON with this exact structure:
             if "```" in code:
                 code = code.rsplit("```", 1)[0]
         # Collapse excessive blank lines injected by the LLM
-        code = re.sub(r"
-{3,}", "
-
-", code)
+        code = re.sub(r"\n{3,}", "\n\n", code)
         return code.strip()
 
 
