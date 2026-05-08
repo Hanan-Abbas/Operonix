@@ -21,6 +21,23 @@ FIX CHANGELOG (Step 2):
   • set_active_mode(mode_str) slot added — called via _QtBridge on every
     input_mode_changed event so the correct button stays highlighted
     regardless of whether the switch came from the panel or the dashboard.
+
+FIX CHANGELOG (Step 3 — Confirmation banner):
+  • confirmation_responded = pyqtSignal(str) added.
+    Emits "allow" or "deny" when the user clicks the corresponding button
+    in the inline confirmation banner.
+
+  • show_confirmation(payload: dict) — slot called via _QtBridge.sig_show_confirmation.
+    Populates the banner with the action, risk level, and reason, then makes
+    it visible.  The banner sits between the mode switcher and the tabs so it
+    is impossible to miss.
+
+  • hide_confirmation() — slot called via _QtBridge.sig_hide_confirmation.
+    Hides the banner once the task is resolved (approved, denied, or timed out).
+
+  • _build_confirmation_banner() — builds the QFrame that holds the banner.
+    Hidden by default. Styled with the warning/error accent colour so it
+    stands out from the rest of the panel.
 """
 from __future__ import annotations
 
@@ -173,10 +190,15 @@ if _HAS_QT:
     class PanelRenderer(QWidget):
         """The full panel body."""
 
-        query_submitted      = pyqtSignal(str, str)    # (query_text, chosen_method)
-        setting_changed      = pyqtSignal(str, object) # (key, value)
-        rerun_requested      = pyqtSignal(str)         # query_text from history
-        mode_change_requested = pyqtSignal(str)        # mode value string e.g. "voice"
+        query_submitted       = pyqtSignal(str, str)    # (query_text, chosen_method)
+        setting_changed       = pyqtSignal(str, object) # (key, value)
+        rerun_requested       = pyqtSignal(str)         # query_text from history
+        mode_change_requested = pyqtSignal(str)         # mode value string e.g. "voice"
+
+        # NEW: emitted when the user clicks Allow or Deny in the confirmation
+        # banner.  Value is "allow" or "deny".
+        # panel_controller._on_confirmation_respond() is connected to this.
+        confirmation_responded = pyqtSignal(str)
 
         def __init__(
             self,
@@ -195,6 +217,13 @@ if _HAS_QT:
             self._active_mode: str = "panel"
             # References to the mode buttons for highlight updates.
             self._mode_buttons: dict[str, QPushButton] = {}
+
+            # Confirmation banner widget reference — set in _build_confirmation_banner
+            self._confirm_banner: QFrame | None = None
+            self._confirm_title_label: QLabel | None = None
+            self._confirm_body_label: QLabel | None = None
+            self._confirm_risk_label: QLabel | None = None
+
             self._build()
 
         # ------------------------------------------------------------------
@@ -250,6 +279,11 @@ if _HAS_QT:
             # ── Persistent mode switcher strip ────────────────────────────
             root.addWidget(self._build_mode_switcher())
 
+            # ── Confirmation banner (hidden by default) ────────────────────
+            # Sits between the mode switcher and the tab area so it is
+            # prominent and impossible to miss.
+            root.addWidget(self._build_confirmation_banner())
+
             # ── Tab area ──────────────────────────────────────────────────
             self._tabs = QTabWidget()
             self._tabs.addTab(self._build_command_tab(),  "Command")
@@ -257,6 +291,233 @@ if _HAS_QT:
             self._tabs.addTab(self._build_snippets_tab(), "Snippets")
             self._tabs.addTab(self._build_settings_tab(), "Settings")
             root.addWidget(self._tabs)
+
+        # ------------------------------------------------------------------
+        # Confirmation banner
+        # ------------------------------------------------------------------
+
+        def _build_confirmation_banner(self) -> QFrame:
+            """
+            Inline confirmation banner. Hidden until show_confirmation() is
+            called. Layout:
+
+            ┌─────────────────────────────────────────────────────┐
+            │ ⚠  HIGH RISK  ·  Action requires your approval      │
+            │ The AI wants to run: <action description>           │
+            │ Reason: <reason>                                    │
+            │                   [ ✓ Allow ]  [ ✗ Deny ]          │
+            └─────────────────────────────────────────────────────┘
+            """
+            t = self._tokens
+            sp = t.spacing_unit
+
+            banner = QFrame()
+            banner.setObjectName("confirmBanner")
+            banner.setVisible(False)   # hidden by default
+            banner.setStyleSheet(
+                f"""
+                QFrame#confirmBanner {{
+                    background: {t.bg_secondary};
+                    border: 2px solid {t.warning};
+                    border-radius: {t.radius_md}px;
+                    margin: {sp // 2}px {sp}px;
+                }}
+                """
+            )
+
+            layout = QVBoxLayout(banner)
+            layout.setContentsMargins(sp, sp, sp, sp)
+            layout.setSpacing(sp // 2)
+
+            # ── Header row: icon + risk badge + title ──────────────────────
+            header_row = QHBoxLayout()
+            header_row.setSpacing(sp // 2)
+
+            warn_icon = QLabel("⚠")
+            warn_icon.setStyleSheet(
+                f"color: {t.warning}; font-size: {t.font_size_base + 2}pt;"
+                f" background: transparent; border: none;"
+            )
+            header_row.addWidget(warn_icon)
+
+            self._confirm_risk_label = QLabel("HIGH RISK")
+            self._confirm_risk_label.setStyleSheet(
+                f"""
+                QLabel {{
+                    background: {t.warning};
+                    color: {t.bg_primary};
+                    font-size: {t.font_size_sm}pt;
+                    font-family: {t.font_family};
+                    font-weight: bold;
+                    padding: 1px {sp // 2}px;
+                    border-radius: {t.radius_sm}px;
+                    border: none;
+                }}
+                """
+            )
+            header_row.addWidget(self._confirm_risk_label)
+
+            self._confirm_title_label = QLabel("Action requires your approval")
+            self._confirm_title_label.setStyleSheet(
+                f"color: {t.text_primary}; font-size: {t.font_size_base}pt;"
+                f" font-weight: bold; font-family: {t.font_family};"
+                f" background: transparent; border: none;"
+            )
+            header_row.addWidget(self._confirm_title_label)
+            header_row.addStretch()
+            layout.addLayout(header_row)
+
+            # ── Body: action + reason ──────────────────────────────────────
+            self._confirm_body_label = QLabel("…")
+            self._confirm_body_label.setWordWrap(True)
+            self._confirm_body_label.setStyleSheet(
+                f"color: {t.text_secondary}; font-size: {t.font_size_sm}pt;"
+                f" font-family: {t.font_family}; background: transparent; border: none;"
+            )
+            layout.addWidget(self._confirm_body_label)
+
+            # ── Button row ────────────────────────────────────────────────
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+
+            allow_btn = QPushButton("✓  Allow")
+            allow_btn.setFixedHeight(sp * 4)
+            allow_btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {t.success};
+                    color: {t.accent_text};
+                    border: none;
+                    border-radius: {t.radius_sm}px;
+                    padding: 2px {sp * 2}px;
+                    font-size: {t.font_size_sm}pt;
+                    font-family: {t.font_family};
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background: {t.success};
+                    opacity: 0.85;
+                }}
+                """
+            )
+            allow_btn.clicked.connect(lambda: self._on_confirm_clicked("allow"))
+            btn_row.addWidget(allow_btn)
+
+            deny_btn = QPushButton("✗  Deny")
+            deny_btn.setFixedHeight(sp * 4)
+            deny_btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {t.error};
+                    color: {t.accent_text};
+                    border: none;
+                    border-radius: {t.radius_sm}px;
+                    padding: 2px {sp * 2}px;
+                    font-size: {t.font_size_sm}pt;
+                    font-family: {t.font_family};
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background: {t.error};
+                    opacity: 0.85;
+                }}
+                """
+            )
+            deny_btn.clicked.connect(lambda: self._on_confirm_clicked("deny"))
+            btn_row.addWidget(deny_btn)
+
+            layout.addLayout(btn_row)
+
+            self._confirm_banner = banner
+            return banner
+
+        def _on_confirm_clicked(self, choice: str) -> None:
+            """Allow / Deny button clicked — emit signal to panel_controller."""
+            self.confirmation_responded.emit(choice)
+            # The banner is hidden by hide_confirmation() once the bus
+            # event resolves (task_safety_cleared / task_failed).
+            # We do NOT hide it here to avoid a visual race.
+
+        # ------------------------------------------------------------------
+        # Public confirmation slots (called via _QtBridge — Qt thread)
+        # ------------------------------------------------------------------
+
+        def show_confirmation(self, payload: Any) -> None:
+            """
+            Populate and show the confirmation banner.
+
+            Called from panel_controller via _QtBridge.sig_show_confirmation
+            so this always runs on the Qt thread — direct widget manipulation
+            is safe here.
+
+            payload keys used:
+              task_id     — shown for reference
+              intent      — the action the AI wants to perform
+              risk_level  — "high" / "medium" / "low"
+              reason      — human-readable explanation
+              step_data   — optional dict with action/args detail
+            """
+            if self._confirm_banner is None:
+                return
+
+            if not isinstance(payload, dict):
+                payload = {}
+
+            risk     = (payload.get("risk_level") or "high").upper()
+            reason   = payload.get("reason") or "High-risk operation detected."
+            task_id  = payload.get("task_id", "—")
+            intent   = payload.get("intent", "")
+
+            # Determine action text from intent or step_data
+            step = payload.get("step_data") or {}
+            action_str = intent or step.get("action") or "unknown action"
+
+            # Body text
+            body_parts = [f"Action: {action_str}"]
+            if reason:
+                body_parts.append(f"Reason: {reason}")
+            body_parts.append(f"Task: {task_id}")
+            body = "\n".join(body_parts)
+
+            if self._confirm_title_label:
+                self._confirm_title_label.setText("Action requires your approval")
+
+            if self._confirm_risk_label:
+                self._confirm_risk_label.setText(f"{risk} RISK")
+                t = self._tokens
+                colour = t.error if risk == "HIGH" else t.warning
+                self._confirm_risk_label.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        background: {colour};
+                        color: {t.bg_primary};
+                        font-size: {t.font_size_sm}pt;
+                        font-family: {t.font_family};
+                        font-weight: bold;
+                        padding: 1px {t.spacing_unit // 2}px;
+                        border-radius: {t.radius_sm}px;
+                        border: none;
+                    }}
+                    """
+                )
+
+            if self._confirm_body_label:
+                self._confirm_body_label.setText(body)
+
+            self._confirm_banner.setVisible(True)
+            log.debug("panel_renderer: confirmation banner shown for task=%s", task_id)
+
+        def hide_confirmation(self) -> None:
+            """
+            Hide the confirmation banner.
+
+            Called from panel_controller via _QtBridge.sig_hide_confirmation
+            when the task is resolved (approved / denied / timed out).
+            Always runs on the Qt thread.
+            """
+            if self._confirm_banner is not None:
+                self._confirm_banner.setVisible(False)
+            log.debug("panel_renderer: confirmation banner hidden")
 
         def _build_mode_switcher(self) -> QWidget:
             """
@@ -767,3 +1028,5 @@ else:
         def set_active_mode(self, mode_str: str) -> None: pass
         def set_app_context(self, app: str) -> None: pass
         def set_status(self, msg: str, level: str = "info") -> None: pass
+        def show_confirmation(self, payload: Any) -> None: pass
+        def hide_confirmation(self) -> None: pass
