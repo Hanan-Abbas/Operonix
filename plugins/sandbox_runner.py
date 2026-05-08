@@ -42,9 +42,16 @@ class SandboxRunner:
         plugin_dir: str,
         intent: str,
         failure_summary: dict | None = None,
+        category: str = "generic",
     ) -> dict:
         """
         Runs the complete validation pipeline.
+
+        Args:
+            category: Plugin category from template_engine (background, automation,
+                      web, file, command, system, data, generic). Passed to the
+                      sandbox so it can apply the right execution strategy, and to
+                      the validator so it applies category-aware audit rules.
 
         Returns:
         {
@@ -72,6 +79,7 @@ class SandboxRunner:
             plugin_code=plugin_code,
             intent=intent,
             failure_summary=failure_summary,
+            category=category,
         )
         report["llm_audit"] = audit
 
@@ -124,6 +132,7 @@ class SandboxRunner:
             context={"active_window": "test", "app_type": "sandbox_test"},
             args={},
             timeout=30,
+            category=category,
         )
         report["sandbox_run"] = sandbox_result.to_dict()
 
