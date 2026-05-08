@@ -1,5 +1,22 @@
 """
 core/orchestrator.py — Operonix AI OS Agent
+
+HYBRID EXECUTION CHANGE:
+  profile_hint (from intent_parser) and cwd (from window_detector /
+  pre_panel_context) are now carried through every event in the pipeline
+  so the executor receives both without needing to re-query anything.
+
+  New startup step: terminal_resolver.init() is awaited so the resolver
+  can blacklist its own window before any command arrives.
+
+  Flow additions:
+    _handle_panel_input     → forwards profile_hint from panel payload
+    handle_new_task         → stores profile_hint in active_tasks
+    handle_context_snapshot → stores cwd in active_tasks context
+    route_to_mapper         → stores profile_hint on task, passes it through
+    inject_task_metadata    → merges profile_hint + cwd into task_dispatched
+    handle_safety_cleared   → preserves profile_hint in task_dispatched_safe
+    finalize_task / handle_failure → unchanged (profile_hint not needed there)
 """
 from __future__ import annotations
 
@@ -95,6 +112,16 @@ class Orchestrator:
         await permission_guard.start()      # gate 1 — fast intent-level check
         await safety_validator.start()      # gate 2 — deep per-step analysis
         await confirmation_manager.start()  # human-in-the-loop bridge
+
+        # ── Hybrid execution: initialise terminal resolver ─────────────────
+        # This must happen before any command arrives so the resolver can
+        # blacklist its own window and start the focus-stack polling loop.
+        try:
+            from core.terminal_resolver import terminal_resolver
+            await terminal_resolver.init()
+            logger.info("TerminalResolver initialised.")
+        except Exception as exc:
+            logger.warning("TerminalResolver init failed — commands will use Ghost profile: %s", exc)
 
         asyncio.create_task(self._background_wake_loop())
         asyncio.create_task(self._emit_app_context_loop())
@@ -212,6 +239,7 @@ class Orchestrator:
                         "confidence":       command.get("confidence", 0.0),
                         "duration":         command.get("duration_seconds", 0),
                         "preferred_method": None,
+                        "profile_hint":     None,   # voice has no hint; resolver decides
                     },
                     source="orchestrator",
                 )
@@ -220,9 +248,22 @@ class Orchestrator:
             await bus.emit("voice_capture_error", {"error": str(exc)}, source="orchestrator")
 
     async def _handle_panel_input(self, event: Any) -> None:
+        """
+        Translate text_query_received (from panel) → user_input_received.
+
+        Now also forwards:
+          profile_hint     — set by intent_parser.parse() in the panel's
+                             suggestion engine; carries "ghost"/"bridge"/"lab"
+                             so the executor does not need a second LLM call.
+          cwd              — injected by panel_controller from HotkeyListener's
+                             pre_panel_context so we get the user's real cwd
+                             even after the panel window has taken focus.
+          pre_panel_context — full context snapshot taken at hotkey press time.
+        """
         query = (event.data.get("query") or "").strip()
         if not query:
             return
+
         await bus.emit(
             "user_input_received",
             {
@@ -233,10 +274,13 @@ class Orchestrator:
                 "confidence":         1.0,
                 "duration":           0,
                 "preferred_method":   event.data.get("preferred_method"),
-                # FIX: forward pre_panel_context so handle_new_task can attach
-                # it to request_context_snapshot. It must travel in the event
-                # payload — shared fields like _last_external_snapshot get
-                # overwritten by xprop before capture_snapshot runs.
+                # ── HYBRID EXECUTION ───────────────────────────────────────
+                # profile_hint was computed by intent_parser.parse() during
+                # live suggestion — carry it so validate_and_route doesn't
+                # re-parse and the executor gets it immediately.
+                "profile_hint":       event.data.get("profile_hint"),
+                # cwd and pre_panel_context from HotkeyListener snapshot.
+                "cwd":                event.data.get("cwd"),
                 "pre_panel_context":  event.data.get("pre_panel_context"),
             },
             source="orchestrator",
@@ -253,20 +297,22 @@ class Orchestrator:
             "input":            user_text,
             "source":           event.data.get("source", "unknown"),
             "preferred_method": event.data.get("preferred_method"),
+            # ── HYBRID EXECUTION: store profile_hint and cwd on the task ──
+            "profile_hint":     event.data.get("profile_hint"),
+            "cwd":              event.data.get("cwd"),
             "context":          {},
             "started_at":       time.monotonic(),
         }
         logger.info(
-            "Task [%s] initialised (source=%s): %r",
-            task_id, self.active_tasks[task_id]["source"], user_text,
+            "Task [%s] initialised (source=%s, profile_hint=%s): %r",
+            task_id,
+            self.active_tasks[task_id]["source"],
+            self.active_tasks[task_id]["profile_hint"],
+            user_text,
         )
 
-        # FIX: forward pre_panel_context in the snapshot request payload.
-        # window_detector.capture_snapshot reads it directly from the event
-        # payload — bypassing _last_external_snapshot which xprop overwrites
-        # between bus.publish and when capture_snapshot actually runs.
         pre_panel_context = event.data.get("pre_panel_context")
-        snapshot_payload = {"task_id": task_id}
+        snapshot_payload  = {"task_id": task_id}
         if pre_panel_context:
             snapshot_payload["pre_panel_context"] = pre_panel_context
             logger.debug(
@@ -283,6 +329,10 @@ class Orchestrator:
                 "stt":              event.data.get("stt") or {},
                 "stt_provider":     event.data.get("stt_provider"),
                 "preferred_method": event.data.get("preferred_method"),
+                # ── HYBRID EXECUTION: carry profile_hint into LLM pipeline ─
+                # intent_parser.validate_and_route reads this so it can skip
+                # re-computing the keyword hint when one is already known.
+                "profile_hint":     event.data.get("profile_hint"),
             },
             source="orchestrator",
         )
@@ -298,6 +348,15 @@ class Orchestrator:
             if not current_ctx.get(key):
                 current_ctx[key] = value
 
+        # ── HYBRID EXECUTION: promote cwd from task to context if snapshot
+        # did not provide one (e.g. window_detector had stale data).
+        if not current_ctx.get("cwd") and self.active_tasks[task_id].get("cwd"):
+            current_ctx["cwd"] = self.active_tasks[task_id]["cwd"]
+            logger.debug(
+                "Task [%s] promoted cwd from task store to context: %s",
+                task_id, current_ctx["cwd"],
+            )
+
         logger.debug(
             "Task [%s] context: window='%s' cwd='%s'",
             task_id,
@@ -310,28 +369,56 @@ class Orchestrator:
         task    = self.active_tasks.get(task_id, {})
         if event.data.get("intent"):
             task["intent"] = event.data["intent"]
+
+        # ── HYBRID EXECUTION: store profile_hint on task if the LLM returned
+        # one (intent_parser.validate_and_route injects it into intent_parsed).
+        incoming_hint = event.data.get("profile_hint")
+        if incoming_hint and not task.get("profile_hint"):
+            task["profile_hint"] = incoming_hint
+            logger.debug(
+                "Task [%s] profile_hint set from intent_parsed: %s",
+                task_id, incoming_hint,
+            )
+
         await bus.emit("request_capability_mapping", event.data, source="orchestrator")
 
     async def handle_safety_cleared(self, event: Any) -> None:
         """
-        Called when PermissionGuard or ConfirmationManager clears a task.
-
-        Routes the approved full-task payload to "task_dispatched_safe" so
-        the executor can run it.  We use a distinct event name to prevent the
-        safety validator from re-intercepting an already-cleared task.
+        Called when ConfirmationManager clears a task after user approval.
+        Merges accumulated context and preserves profile_hint so the executor
+        still knows which execution profile to use.
         """
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
 
-        logger.info(
-            "Task [%s] safety cleared — routing to executor.", task_id
-        )
+        logger.info("Task [%s] safety cleared — routing to executor.", task_id)
 
-        # Merge any context accumulated after the original task_dispatched.
         payload = dict(event.data)
+
+        # Merge context
         if task:
             existing_ctx = payload.get("context") or {}
             payload["context"] = {**task.get("context", {}), **existing_ctx}
+
+        # ── HYBRID EXECUTION: ensure profile_hint survives the safety pause ─
+        # When a high-risk command is paused for confirmation, the user may
+        # take several seconds to respond.  During that time nothing changes
+        # the profile decision — preserve it from the original task.
+        if not payload.get("profile_hint") and task.get("profile_hint"):
+            payload["profile_hint"] = task["profile_hint"]
+            logger.debug(
+                "Task [%s] restoring profile_hint=%s after safety clearance",
+                task_id, payload["profile_hint"],
+            )
+
+        # Ensure steps carry profile_hint in their args (executor reads it there)
+        steps = payload.get("steps") or []
+        hint  = payload.get("profile_hint")
+        if hint and steps:
+            for step in steps:
+                step.setdefault("args", {})
+                if "profile_hint" not in step["args"]:
+                    step["args"]["profile_hint"] = hint
 
         await bus.emit("task_dispatched_safe", payload, source="orchestrator")
 
@@ -340,9 +427,9 @@ class Orchestrator:
         if not task_id or task_id not in self.active_tasks:
             return
 
-        task     = self.active_tasks[task_id]
-        ctx      = task.get("context") or {}
-        pmethod  = task.get("preferred_method")
+        task    = self.active_tasks[task_id]
+        ctx     = task.get("context") or {}
+        pmethod = task.get("preferred_method")
 
         if pmethod and not event.data.get("preferred_method"):
             event.data["preferred_method"] = pmethod
@@ -352,16 +439,29 @@ class Orchestrator:
 
         await asyncio.sleep(0)
 
+        # ── HYBRID EXECUTION: inject profile_hint into task_dispatched ─────
+        # The executor reads profile_hint from the task's steps[].args so it
+        # can pass it straight to terminal_resolver.resolve() without a second
+        # LLM round-trip.
+        profile_hint = (
+            event.data.get("profile_hint")      # already on event (from intent_parsed)
+            or task.get("profile_hint")          # stored during handle_new_task
+        )
+
         logger.debug(
-            "Task [%s] metadata injected (preferred_method=%s, cwd=%s)",
+            "Task [%s] metadata injected (preferred_method=%s, cwd=%s, profile_hint=%s)",
             task_id,
             event.data.get("preferred_method"),
             event.data["context"].get("cwd", "<not set>"),
+            profile_hint,
         )
 
-        # FIX: emit task_dispatched so the safety validator (which subscribes
-        # to this event) can evaluate risk and either clear or hold the task.
-        # This event was never emitted before — the safety chain never started.
+        # Build steps — inject profile_hint into args so executor/shell_tool
+        # can read it via args["profile_hint"].
+        base_args = {**event.data.get("parameters", {})}
+        if profile_hint:
+            base_args["profile_hint"] = profile_hint
+
         await bus.emit(
             "task_dispatched",
             {
@@ -371,13 +471,12 @@ class Orchestrator:
                 "parameters":       event.data.get("parameters", {}),
                 "suggested_tool":   event.data.get("suggested_tool"),
                 "preferred_method": event.data.get("preferred_method"),
+                "profile_hint":     profile_hint,
                 "context":          event.data["context"],
-                # Include steps if the planner has already built them;
-                # safety validator iterates steps to assess per-step risk.
                 "steps": event.data.get("steps") or [
                     {
                         "action": event.data.get("intent"),
-                        "args":   event.data.get("parameters", {}),
+                        "args":   base_args,
                     }
                 ],
             },
