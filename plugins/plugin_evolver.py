@@ -174,6 +174,7 @@ class PluginEvolver:
                 plugin_dir=plugin_dir,
                 intent=intent,
                 failure_summary=failure_summary,
+                category=template_engine.get_category(intent),
             )
 
             if pipeline_report["passed"]:
@@ -285,21 +286,29 @@ class PluginEvolver:
         new_version: str,
     ) -> tuple[str, str]:
         """
-        Asks DeepSeek to propose an improved plugin strategy.
+        Asks the LLM to propose an improved plugin strategy.
+
+        Uses separator-based plain-text format (not JSON) to avoid Groq
+        JSON-mode truncation of multi-line code strings — the same fix
+        applied to generator.py's _generate_code().
         """
         history_text = ""
         if evolution_history:
             history_text = "EVOLUTION HISTORY:\n" + "\n".join(
                 f"  v{h['from_version']}→v{h['to_version']}: {h['reason']}"
-                for h in evolution_history[-3:]  # Last 3 evolutions
+                for h in evolution_history[-3:]
             )
 
-        prompt = f"""
-You are an expert Python developer evolving a plugin for a self-evolving AI OS.
+        # Detect category from the current code's header comment or intent
+        category = template_engine.get_category(intent)
+        pattern_library = template_engine.get_pattern_library()
+
+        prompt = f"""You are an expert Python developer evolving a plugin for a self-evolving AI OS.
 The plugin is underperforming. Improve its implementation strategy.
 
 PLUGIN NAME: {plugin_name}
 INTENT: {intent}
+PLUGIN CATEGORY: {category}
 EVOLUTION REASON: {reason}
 NEW VERSION: {new_version}
 
@@ -314,7 +323,10 @@ FAILURE PATTERNS (from episodic memory):
 
 {history_text}
 
-CURRENT PLUGIN CODE:
+PATTERN LIBRARY — working code patterns to use in your evolved implementation:
+{pattern_library}
+
+CURRENT PLUGIN CODE (what is failing):
 ```python
 {current_code}
 ```
@@ -326,32 +338,71 @@ CURRENT TESTS:
 
 EVOLUTION TASK:
 1. Identify WHY the current implementation is failing based on the error patterns
-2. Propose a DIFFERENT, better strategy to handle the intent "{intent}"
+2. Propose a DIFFERENT, better strategy using the pattern library above
 3. Do NOT just fix syntax errors — improve the core approach
 4. Bump the version to {new_version} in the class attribute
-5. Keep all BasePlugin rules (registry access only, no direct imports)
+5. Do NOT use capability_registry for automation — use pyautogui/keyboard directly
+6. For background/loop tasks: use threading.Event + daemon threads (see pattern library)
 
-Return ONLY valid JSON:
-{{
-    "plugin_code": "<improved plugin.py content>",
-    "tests": "<improved test_plugin.py content>",
-    "evolution_rationale": "<one paragraph explaining what changed and why>"
-}}
+One sentence rationale of what changed, then output EXACTLY this format:
+
+===RATIONALE===
+<one sentence explaining the core change>
+===PLUGIN_CODE===
+<complete improved plugin.py content>
+===TEST_CODE===
+<complete improved test_plugin.py content>
+===END===
 """
         try:
-            result = await llm_client.generate(prompt, use_json=True)
-            if isinstance(result, dict):
+            raw = await llm_client.generate(prompt, use_json=False)
+
+            plugin_code = ""
+            tests = ""
+            rationale = ""
+
+            if raw and isinstance(raw, str):
+                # Parse separator format
+                import re as _re
+                rat_m  = _re.search(r"===RATIONALE===\s*(.*?)\s*===PLUGIN_CODE===", raw, _re.DOTALL)
+                code_m = _re.search(r"===PLUGIN_CODE===\s*(.*?)\s*===TEST_CODE===", raw, _re.DOTALL)
+                test_m = _re.search(r"===TEST_CODE===\s*(.*?)\s*===END===", raw, _re.DOTALL)
+
+                if rat_m:
+                    rationale = rat_m.group(1).strip()
+                if code_m:
+                    plugin_code = code_m.group(1).strip()
+                if test_m:
+                    tests = test_m.group(1).strip()
+
+                # Fallback: try JSON dict if LLM ignored the format
+                if not plugin_code:
+                    try:
+                        import json as _json
+                        parsed = _json.loads(raw)
+                        plugin_code = parsed.get("plugin_code", "")
+                        tests       = parsed.get("tests", "")
+                        rationale   = parsed.get("evolution_rationale", "")
+                    except Exception:
+                        pass
+
+                # Strip code fences if present
                 from plugins.generator import PluginGenerator
-                plugin_code = PluginGenerator._strip_code_fences(
-                    result.get("plugin_code", "")
-                )
-                tests = PluginGenerator._strip_code_fences(
-                    result.get("tests", "")
-                )
-                rationale = result.get("evolution_rationale", "")
-                if rationale:
-                    self.logger.info(f"🧬 Evolution rationale: {rationale}")
-                return plugin_code, tests
+                plugin_code = PluginGenerator._strip_code_fences(plugin_code)
+                tests       = PluginGenerator._strip_code_fences(tests)
+
+            elif isinstance(raw, dict):
+                # LLM returned JSON despite use_json=False
+                from plugins.generator import PluginGenerator
+                plugin_code = PluginGenerator._strip_code_fences(raw.get("plugin_code", ""))
+                tests       = PluginGenerator._strip_code_fences(raw.get("tests", ""))
+                rationale   = raw.get("evolution_rationale", "")
+
+            if rationale:
+                self.logger.info(f"🧬 Evolution rationale: {rationale}")
+
+            return plugin_code, tests
+
         except Exception as e:
             self.logger.error(f"Evolution code generation failed: {e}")
 
