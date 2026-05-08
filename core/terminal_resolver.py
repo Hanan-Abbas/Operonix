@@ -154,4 +154,92 @@ class TerminalResolver:
             self._own_window_ids,
         )
 
+    def _discover_own_window(self) -> None:
+        """
+        Walk up the process tree from our PID to find the terminal window
+        that is hosting Operonix, then blacklist it.
+        """
+        own_pid = os.getpid()
+        ancestor_pids: set[int] = {own_pid}
+
+        # Collect all ancestor PIDs up to init (pid=1)
+        pid = own_pid
+        for _ in range(20):
+            try:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("PPid:"):
+                            ppid = int(line.split()[1])
+                            if ppid <= 1:
+                                break
+                            ancestor_pids.add(ppid)
+                            pid = ppid
+                            break
+            except OSError:
+                break
+
+        self._own_pids = ancestor_pids
+
+        # Map ancestor PIDs to X11 window IDs via wmctrl
+        if not shutil.which("wmctrl"):
+            log.warning("wmctrl not found — self-window blacklist may be incomplete")
+            return
+
+        try:
+            out = subprocess.check_output(
+                ["wmctrl", "-l", "-p"], text=True, timeout=3.0
+            )
+            for line in out.splitlines():
+                parts = line.split(None, 4)
+                if len(parts) < 4:
+                    continue
+                win_id = parts[0]
+                try:
+                    win_pid = int(parts[2])
+                except ValueError:
+                    continue
+                if win_pid in ancestor_pids:
+                    self._own_window_ids.add(win_id)
+                    log.debug("Blacklisted own window: %s (pid=%d)", win_id, win_pid)
+        except Exception as exc:
+            log.warning("_discover_own_window: wmctrl failed — %s", exc)
+
+    @staticmethod
+    def _detect_terminal_bin() -> str:
+        """Return the first available terminal emulator binary."""
+        candidates = [
+            "gnome-terminal", "xterm", "konsole",
+            "xfce4-terminal", "lxterminal", "tilix", "alacritty", "kitty",
+        ]
+        for bin_ in candidates:
+            if shutil.which(bin_):
+                return bin_
+        return "xterm"  # last-resort fallback
+
+    # ── Focus-stack polling ───────────────────────────────────────────────────
+
+    async def _poll_focus_loop(self) -> None:
+        """
+        Every 0.5 s, query the active window.  If it is a terminal (and not
+        our own window), push its window ID onto the temporal focus stack.
+        """
+        while True:
+            try:
+                await asyncio.sleep(0.5)
+                win_id = await asyncio.get_running_loop().run_in_executor(
+                    None, self._get_active_window_id
+                )
+                if win_id and win_id not in self._own_window_ids:
+                    # Only push if it looks like a terminal
+                    wm_class = await asyncio.get_running_loop().run_in_executor(
+                        None, self._get_wm_class, win_id
+                    )
+                    if self._is_terminal_class(wm_class):
+                        if not self._focus_stack or self._focus_stack[0] != win_id:
+                            self._focus_stack.appendleft(win_id)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.debug("_poll_focus_loop: %s", exc)
+
     
