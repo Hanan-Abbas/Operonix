@@ -242,4 +242,98 @@ class TerminalResolver:
             except Exception as exc:
                 log.debug("_poll_focus_loop: %s", exc)
 
+    @staticmethod
+    def _get_active_window_id() -> Optional[str]:
+        if shutil.which("xdotool"):
+            try:
+                return subprocess.check_output(
+                    ["xdotool", "getactivewindow"], text=True, timeout=1.0
+                ).strip()
+            except Exception:
+                pass
+        if shutil.which("wmctrl"):
+            try:
+                out = subprocess.check_output(
+                    ["wmctrl", "-l", "-p"], text=True, timeout=1.0
+                )
+                # First line is usually the topmost window
+                first = out.strip().splitlines()
+                if first:
+                    return first[0].split()[0]
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _get_wm_class(win_id: str) -> str:
+        if shutil.which("xprop"):
+            try:
+                out = subprocess.check_output(
+                    ["xprop", "-id", win_id, "WM_CLASS"], text=True, timeout=1.0
+                )
+                return out.lower()
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
+    def _is_terminal_class(wm_class: str) -> bool:
+        terminal_keywords = (
+            "terminal", "konsole", "xterm", "alacritty",
+            "kitty", "tilix", "gnome-terminal", "urxvt", "rxvt",
+            "lxterminal", "xfce4-terminal",
+        )
+        return any(kw in wm_class for kw in terminal_keywords)
+
+    # ── Terminal discovery ────────────────────────────────────────────────────
+
+    def _list_terminals(self) -> list[_TerminalRecord]:
+        """
+        Return all visible terminal windows, sorted by Z-order
+        (topmost first), with our own windows excluded.
+        """
+        if not shutil.which("wmctrl"):
+            return []
+
+        try:
+            out = subprocess.check_output(
+                ["wmctrl", "-l", "-p"], text=True, timeout=3.0
+            )
+        except Exception as exc:
+            log.debug("_list_terminals: wmctrl failed — %s", exc)
+            return []
+
+        records: list[_TerminalRecord] = []
+        for z_order, line in enumerate(out.strip().splitlines()):
+            parts = line.split(None, 4)
+            if len(parts) < 4:
+                continue
+            win_id = parts[0]
+            if win_id in self._own_window_ids:
+                continue
+            try:
+                pid = int(parts[2])
+            except ValueError:
+                continue
+            title = parts[4] if len(parts) > 4 else ""
+
+            # Filter to terminal windows only
+            wm_class = self._get_wm_class(win_id)
+            if not self._is_terminal_class(wm_class):
+                continue
+
+            pts_path = self._find_pts(pid)
+            cwd = self._read_proc_cwd(pid)
+
+            records.append(_TerminalRecord(
+                window_id=win_id,
+                pid=pid,
+                pts_path=pts_path,
+                cwd=cwd,
+                title=title,
+                z_order=z_order,
+            ))
+
+        return records
+
     
