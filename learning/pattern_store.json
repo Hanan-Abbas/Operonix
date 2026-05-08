@@ -98,6 +98,21 @@
                 "usage_count": 1,
                 "step_count": 1
             }
+        ],
+        "run_command": [
+            {
+                "steps": [
+                    {
+                        "action": "run_command",
+                        "args": {
+                            "command": "<COMMAND>",
+                            "options": "<OPTIONS>"
+                        }
+                    }
+                ],
+                "usage_count": 2,
+                "step_count": 1
+            }
         ]
     }
 }
