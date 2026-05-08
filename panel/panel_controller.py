@@ -31,6 +31,26 @@ FIX CHANGELOG (Bug #1 — wrong cwd when panel is active):
   • _on_query_submitted() reads panel_state.pre_panel_context and injects
     its cwd into the "text_query_received" payload so the orchestrator always
     receives the user's real working directory, not the Operonix panel's cwd.
+
+FIX CHANGELOG (Confirmation panel — Step 3):
+  • _QtBridge gains two new signals:
+      sig_show_confirmation(object)   — show the confirmation banner/dialog
+      sig_hide_confirmation()         — dismiss it after the user responds
+
+  • _subscribe() now subscribes to:
+      "confirmation_required"  → _on_confirmation_required
+      "task_safety_cleared"    → _on_confirmation_resolved  (auto-dismiss)
+      "task_failed"            → _on_confirmation_resolved  (auto-dismiss)
+
+  • _on_confirmation_required() stores the task_id locally, then signals
+    the Qt thread to call PanelRenderer.show_confirmation().
+
+  • _on_confirmation_respond() is wired to PanelRenderer.confirmation_responded
+    signal.  It publishes user_response_received on the EventBus with the
+    correct task_id and choice so ConfirmationManager can resume the task.
+
+  • _on_confirmation_resolved() signals the renderer to hide the banner
+    regardless of which path (allow / deny / timeout) resolved the task.
 """
 from __future__ import annotations
 
@@ -80,6 +100,12 @@ if _HAS_QT:
         sig_toggle              = _pyqtSignal()
         sig_apply_theme         = _pyqtSignal()
         sig_request_quit        = _pyqtSignal()
+
+        # ── NEW: confirmation signals ──────────────────────────────────────
+        # sig_show_confirmation carries the full event payload dict so the
+        # renderer can display the action, risk level, and reason to the user.
+        sig_show_confirmation   = _pyqtSignal(object)         # payload dict
+        sig_hide_confirmation   = _pyqtSignal()               # dismiss banner
 
         def __init__(self, parent: QObject | None = None) -> None:
             super().__init__(parent)
@@ -148,6 +174,12 @@ class PanelController:
 
         self._last_result: Any = None
 
+        # ── Confirmation state ─────────────────────────────────────────────
+        # Stores the task_id of the most recent confirmation_required event
+        # so _on_confirmation_respond() can include it when publishing
+        # user_response_received to the EventBus.
+        self._pending_confirm_task_id: str | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -192,6 +224,11 @@ class PanelController:
         self._bridge.sig_toggle.connect(self._window.toggle)
         self._bridge.sig_apply_theme.connect(self._apply_current_theme)
 
+        # ── NEW: wire confirmation signals → renderer ──────────────────────
+        # These cross the asyncio→Qt thread boundary safely via the bridge.
+        self._bridge.sig_show_confirmation.connect(self._renderer.show_confirmation)
+        self._bridge.sig_hide_confirmation.connect(self._renderer.hide_confirmation)
+
         if _HAS_QT:
             from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
@@ -203,6 +240,11 @@ class PanelController:
         self._renderer.setting_changed.connect(self._on_setting_changed)
         self._renderer.rerun_requested.connect(self._on_rerun)
         self._renderer.mode_change_requested.connect(self._on_mode_change_requested)
+
+        # ── NEW: wire confirmation response from renderer → controller ─────
+        # PanelRenderer.confirmation_responded(choice: str) fires when the
+        # user clicks Allow or Deny inside the panel confirmation banner.
+        self._renderer.confirmation_responded.connect(self._on_confirmation_respond)
 
         # ── Pre-populate UI ───────────────────────────────────────────────
         self._renderer.set_theme_selection(self._state.theme)
@@ -263,6 +305,16 @@ class PanelController:
             "app_context_changed":    self._on_app_context_changed,
             "config_changed":         self._on_config_changed,
             "input_mode_changed":     self._on_input_mode_changed,
+
+            # ── Confirmation events ────────────────────────────────────────
+            # confirmation_required  → show the banner in the panel
+            # task_safety_cleared    → task was approved and is now running;
+            #                          dismiss the banner
+            # task_failed            → task was denied / timed out;
+            #                          dismiss the banner
+            "confirmation_required": self._on_confirmation_required,
+            "task_safety_cleared":   self._on_confirmation_resolved,
+            "task_failed":           self._on_confirmation_resolved,
         }
         for event, handler in handlers.items():
             try:
@@ -337,6 +389,66 @@ class PanelController:
         if self._bridge and new_mode:
             self._bridge.sig_set_active_mode.emit(new_mode)
 
+    # ── Confirmation handlers ──────────────────────────────────────────────
+
+    def _on_confirmation_required(self, event: Any) -> None:
+        """
+        EventBus fired confirmation_required.
+
+        Stores the task_id and signals the Qt thread to show the confirmation
+        banner in the panel renderer.
+
+        This handler runs on the asyncio thread — never touch Qt objects
+        directly here; always go through the bridge.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            payload = {}
+
+        task_id = payload.get("task_id")
+        if not task_id:
+            log.warning("panel_controller: confirmation_required with no task_id — ignored")
+            return
+
+        self._pending_confirm_task_id = task_id
+        log.info(
+            "panel_controller: confirmation required for task_id=%s — showing panel banner",
+            task_id,
+        )
+
+        if self._bridge:
+            # Pass the full payload so the renderer can display the action,
+            # risk level, and reason text to the user.
+            self._bridge.sig_show_confirmation.emit(payload)
+
+        # Also make the panel visible if it is currently hidden so the user
+        # notices the confirmation request even when the panel is closed.
+        if self._bridge:
+            self._bridge.sig_toggle.emit() if not self._window or not (
+                self._window.isVisible() if hasattr(self._window, "isVisible") else False
+            ) else None
+
+    def _on_confirmation_resolved(self, event: Any) -> None:
+        """
+        EventBus fired task_safety_cleared or task_failed.
+
+        Either the user responded (via panel or dashboard) and the task was
+        resumed / cancelled, or it timed out.  In all cases we dismiss the
+        confirmation banner.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        task_id = (payload.get("task_id") if isinstance(payload, dict) else None)
+
+        # Only dismiss if this event belongs to our pending task.
+        if task_id and task_id != self._pending_confirm_task_id:
+            return
+
+        self._pending_confirm_task_id = None
+        log.debug("panel_controller: confirmation resolved — hiding banner")
+
+        if self._bridge:
+            self._bridge.sig_hide_confirmation.emit()
+
     # ------------------------------------------------------------------
     # Renderer signal handlers  (Qt thread — direct calls are safe)
     # ------------------------------------------------------------------
@@ -352,6 +464,55 @@ class PanelController:
             )
         except Exception as exc:
             log.error("panel_controller: failed to publish mode switch — %s", exc)
+
+    def _on_confirmation_respond(self, choice: str) -> None:
+        """
+        User clicked Allow or Deny in the panel confirmation banner.
+
+        Publishes user_response_received on the EventBus so
+        ConfirmationManager.handle_user_response() can resume or abort the
+        paused task. The choice must be either "allow" or "deny".
+
+        This slot runs on the Qt thread (connected to a renderer signal) so
+        we use bus.publish() which is thread-safe.
+        """
+        task_id = self._pending_confirm_task_id
+        if not task_id:
+            log.warning(
+                "panel_controller: confirmation_responded('%s') but no pending task — ignored",
+                choice,
+            )
+            return
+
+        choice_normalised = choice.lower().strip()
+        if choice_normalised not in ("allow", "deny"):
+            log.warning(
+                "panel_controller: unexpected confirmation choice '%s' — defaulting to deny",
+                choice,
+            )
+            choice_normalised = "deny"
+
+        log.info(
+            "panel_controller: user %s task [%s] via panel",
+            choice_normalised.upper() + "ED",
+            task_id,
+        )
+
+        try:
+            self._bus.publish(
+                "user_response_received",
+                {"task_id": task_id, "choice": choice_normalised},
+                source="panel",
+            )
+        except Exception as exc:
+            log.error(
+                "panel_controller: failed to publish user_response_received — %s", exc
+            )
+
+        # Clear local state — the bridge's sig_hide_confirmation will fire
+        # when _on_confirmation_resolved() receives task_safety_cleared or
+        # task_failed from the bus.  We don't hide here to avoid a race
+        # where the banner disappears before the bus event arrives.
 
     def _on_query_submitted(self, query: str, chosen_method: str) -> None:
         if self._last_result and self._last_result.top:
