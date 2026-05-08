@@ -107,6 +107,14 @@ if _HAS_QT:
         sig_show_confirmation   = _pyqtSignal(object)         # payload dict
         sig_hide_confirmation   = _pyqtSignal()               # dismiss banner
 
+        # ── NEW: hybrid execution signals ──────────────────────────────────
+        # sig_show_output_snippet — display Ghost command output inline in
+        #   the Command tab so the user gets immediate feedback.
+        # sig_show_target_selection — show Target Selection UI when the
+        #   executor finds multiple equally-matching terminals (AmbiguousTarget).
+        sig_show_output_snippet     = _pyqtSignal(object)    # output payload dict
+        sig_show_target_selection   = _pyqtSignal(object)    # candidates payload dict
+
         def __init__(self, parent: QObject | None = None) -> None:
             super().__init__(parent)
 
@@ -180,6 +188,9 @@ class PanelController:
         # user_response_received to the EventBus.
         self._pending_confirm_task_id: str | None = None
 
+        # ── Target selection state ─────────────────────────────────────────
+        self._pending_target_selection_task_id: str | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -229,6 +240,10 @@ class PanelController:
         self._bridge.sig_show_confirmation.connect(self._renderer.show_confirmation)
         self._bridge.sig_hide_confirmation.connect(self._renderer.hide_confirmation)
 
+        # ── NEW: wire hybrid execution signals → renderer ──────────────────
+        self._bridge.sig_show_output_snippet.connect(self._renderer.show_output_snippet)
+        self._bridge.sig_show_target_selection.connect(self._renderer.show_target_selection)
+
         if _HAS_QT:
             from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
@@ -245,6 +260,11 @@ class PanelController:
         # PanelRenderer.confirmation_responded(choice: str) fires when the
         # user clicks Allow or Deny inside the panel confirmation banner.
         self._renderer.confirmation_responded.connect(self._on_confirmation_respond)
+
+        # ── NEW: wire target selection response from renderer → controller ──
+        # PanelRenderer.target_selection_responded(payload: dict) fires when
+        # the user clicks a terminal in the Target Selection UI.
+        self._renderer.target_selection_responded.connect(self._on_target_selection_respond)
 
         # ── Pre-populate UI ───────────────────────────────────────────────
         self._renderer.set_theme_selection(self._state.theme)
@@ -315,6 +335,15 @@ class PanelController:
             "confirmation_required": self._on_confirmation_required,
             "task_safety_cleared":   self._on_confirmation_resolved,
             "task_failed":           self._on_confirmation_resolved,
+
+            # ── Hybrid execution events ────────────────────────────────────
+            # command_output_ready   → Ghost profile finished; show inline snippet
+            # command_dispatched     → Bridge/Lab dispatched; show note in panel
+            # target_selection_required → executor found ambiguous terminals;
+            #                            show selection UI in panel
+            "command_output_ready":       self._on_command_output_ready,
+            "command_dispatched":         self._on_command_dispatched,
+            "target_selection_required":  self._on_target_selection_required,
         }
         for event, handler in handlers.items():
             try:
@@ -448,6 +477,99 @@ class PanelController:
 
         if self._bridge:
             self._bridge.sig_hide_confirmation.emit()
+
+    # ── Hybrid execution handlers ──────────────────────────────────────────
+
+    def _on_command_output_ready(self, event: Any) -> None:
+        """
+        Ghost profile finished execution.
+        Show the output snippet inline in the panel Command tab.
+        Runs on asyncio thread — use bridge signal.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+        if self._bridge:
+            self._bridge.sig_show_output_snippet.emit(payload)
+
+    def _on_command_dispatched(self, event: Any) -> None:
+        """
+        Bridge or Lab profile dispatched the command.
+        Show a status note — we cannot capture output but the user should
+        know something happened.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+        profile = payload.get("profile", "")
+        if profile == "bridge":
+            msg = f"Injected into terminal: {payload.get('window_title', payload.get('pts', ''))}"
+        else:
+            msg = f"Launched in new terminal window ({payload.get('terminal', 'xterm')})"
+        if self._bridge:
+            self._bridge.sig_set_status.emit(msg, "info")
+
+    def _on_target_selection_required(self, event: Any) -> None:
+        """
+        Executor found ambiguous terminals (AmbiguousTarget).
+        Signal the renderer to show the Target Selection UI.
+        Runs on asyncio thread — use bridge signal.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+
+        task_id = payload.get("task_id")
+        if not task_id:
+            log.warning("panel_controller: target_selection_required with no task_id")
+            return
+
+        # Store task_id so _on_target_selection_respond can include it
+        self._pending_target_selection_task_id = task_id
+        log.info(
+            "panel_controller: target selection required for task [%s] — %d candidates",
+            task_id, len(payload.get("candidates", [])),
+        )
+
+        if self._bridge:
+            self._bridge.sig_show_target_selection.emit(payload)
+            # Make panel visible if hidden
+            if self._window and not (
+                self._window.isVisible() if hasattr(self._window, "isVisible") else True
+            ):
+                self._bridge.sig_toggle.emit()
+
+    def _on_target_selection_respond(self, candidate: dict) -> None:
+        """
+        User clicked a terminal in the Target Selection UI.
+        Publish target_selected on the bus so the executor can resume.
+        Runs on Qt thread (renderer signal) — bus.publish() is thread-safe.
+        """
+        task_id = getattr(self, "_pending_target_selection_task_id", None)
+        if not task_id:
+            log.warning("panel_controller: target_selection_respond but no pending task")
+            return
+
+        self._pending_target_selection_task_id = None
+        log.info(
+            "panel_controller: user selected terminal '%s' (%s) for task [%s]",
+            candidate.get("window_title"), candidate.get("pts_path"), task_id,
+        )
+
+        try:
+            self._bus.publish(
+                "target_selected",
+                {
+                    "task_id":      task_id,
+                    "pts_path":     candidate.get("pts_path", ""),
+                    "window_id":    candidate.get("window_id", ""),
+                    "window_title": candidate.get("window_title", ""),
+                    "cwd":          candidate.get("cwd"),
+                },
+                source="panel",
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish target_selected — %s", exc)
 
     # ------------------------------------------------------------------
     # Renderer signal handlers  (Qt thread — direct calls are safe)
