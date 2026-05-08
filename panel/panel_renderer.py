@@ -200,6 +200,11 @@ if _HAS_QT:
         # panel_controller._on_confirmation_respond() is connected to this.
         confirmation_responded = pyqtSignal(str)
 
+        # NEW: emitted when the user picks a terminal in the Target Selection UI.
+        # Carries the chosen candidate dict: {pts_path, window_id, window_title, cwd}
+        # panel_controller._on_target_selection_respond() is connected to this.
+        target_selection_responded = pyqtSignal(object)
+
         def __init__(
             self,
             tokens: ThemeTokens,
@@ -510,14 +515,171 @@ if _HAS_QT:
         def hide_confirmation(self) -> None:
             """
             Hide the confirmation banner.
-
-            Called from panel_controller via _QtBridge.sig_hide_confirmation
-            when the task is resolved (approved / denied / timed out).
+            Called from panel_controller via _QtBridge.sig_hide_confirmation.
             Always runs on the Qt thread.
             """
             if self._confirm_banner is not None:
                 self._confirm_banner.setVisible(False)
             log.debug("panel_renderer: confirmation banner hidden")
+
+        # ------------------------------------------------------------------
+        # Hybrid execution output slots (called via _QtBridge — Qt thread)
+        # ------------------------------------------------------------------
+
+        def show_output_snippet(self, payload: Any) -> None:
+            """
+            Display Ghost profile command output inline in the Command tab.
+            Called via _QtBridge.sig_show_output_snippet (always Qt thread).
+            """
+            if not isinstance(payload, dict):
+                return
+            snippet = payload.get("snippet") or payload.get("stdout") or ""
+            success = payload.get("success", True)
+            command = payload.get("command", "")
+            profile = payload.get("profile", "ghost")
+
+            level = "success" if success else "error"
+            label = (
+                f"[{profile.upper()}] {command[:60]}{'…' if len(command) > 60 else ''}"
+                f" — {'OK' if success else 'FAILED'}"
+            )
+            self.set_status(label, level)
+
+            if not hasattr(self, "_output_area"):
+                t  = self._tokens
+                sp = t.spacing_unit
+                self._output_area = QTextEdit()
+                self._output_area.setReadOnly(True)
+                self._output_area.setMaximumHeight(sp * 20)
+                self._output_area.setStyleSheet(
+                    f"""
+                    QTextEdit {{
+                        background: {t.bg_secondary};
+                        color: {t.text_primary};
+                        border: 1px solid {t.border_color};
+                        border-radius: {t.radius_sm}px;
+                        font-family: monospace;
+                        font-size: {t.font_size_sm}pt;
+                        padding: {sp // 2}px;
+                    }}
+                    """
+                )
+                if hasattr(self, "_status_label") and self._status_label.parent():
+                    parent_layout = self._status_label.parent().layout()
+                    if parent_layout:
+                        idx = parent_layout.indexOf(self._status_label)
+                        parent_layout.insertWidget(idx + 1, self._output_area)
+
+            self._output_area.setPlainText(snippet or "(no output)")
+            self._output_area.setVisible(True)
+            log.debug("panel_renderer: output snippet shown (%d chars)", len(snippet))
+
+        def show_target_selection(self, payload: Any) -> None:
+            """
+            Show Target Selection UI when executor finds ambiguous terminals.
+            Called via _QtBridge.sig_show_target_selection (always Qt thread).
+            """
+            if not isinstance(payload, dict):
+                return
+            candidates = payload.get("candidates", [])
+            command    = payload.get("command", "")
+            if not candidates:
+                return
+
+            t  = self._tokens
+            sp = t.spacing_unit
+
+            self._remove_target_selection_widget()
+
+            frame = QFrame()
+            frame.setObjectName("targetSelectionFrame")
+            frame.setStyleSheet(
+                f"""
+                QFrame#targetSelectionFrame {{
+                    background: {t.bg_secondary};
+                    border: 2px solid {t.accent};
+                    border-radius: {t.radius_md}px;
+                    margin: {sp // 2}px {sp}px;
+                }}
+                """
+            )
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(sp, sp, sp, sp)
+            layout.setSpacing(sp // 2)
+
+            header = QLabel(f"⚠ Multiple terminals found for:\n{command[:80]}")
+            header.setWordWrap(True)
+            header.setStyleSheet(
+                f"color: {t.text_primary}; font-size: {t.font_size_sm}pt;"
+                f" font-weight: bold; background: transparent; border: none;"
+            )
+            layout.addWidget(header)
+
+            sub = QLabel("Select the terminal to run in:")
+            sub.setStyleSheet(
+                f"color: {t.text_muted}; font-size: {t.font_size_sm}pt;"
+                f" background: transparent; border: none;"
+            )
+            layout.addWidget(sub)
+
+            for cand in candidates:
+                title = cand.get("window_title", "Unknown terminal")
+                cwd   = cand.get("cwd", "")
+                pts   = cand.get("pts_path", "")
+                btn   = QPushButton(f"{title}  ·  {cwd}  ({pts})")
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background: {t.bg_tertiary};
+                        color: {t.text_primary};
+                        border: 1px solid {t.border_color};
+                        border-radius: {t.radius_sm}px;
+                        padding: {sp // 2}px {sp}px;
+                        font-size: {t.font_size_sm}pt;
+                        font-family: {t.font_family};
+                        text-align: left;
+                    }}
+                    QPushButton:hover {{
+                        background: {t.selection_bg};
+                        border-color: {t.accent};
+                        color: {t.accent};
+                    }}
+                    """
+                )
+                btn.clicked.connect(
+                    (lambda c: lambda: self._on_target_candidate_clicked(c))(cand)
+                )
+                layout.addWidget(btn)
+
+            cancel_btn = QPushButton("Cancel — use Ghost (background)")
+            cancel_btn.setStyleSheet(
+                f"background: transparent; color: {t.text_muted}; border: none;"
+                f" font-size: {t.font_size_sm}pt; padding: 2px;"
+            )
+            cancel_btn.clicked.connect(self._on_target_selection_cancelled)
+            layout.addWidget(cancel_btn)
+
+            self._target_selection_widget = frame
+            command_tab = self._tabs.widget(0)
+            if command_tab and command_tab.layout():
+                command_tab.layout().insertWidget(1, frame)
+                self._tabs.setCurrentIndex(0)
+            log.debug("panel_renderer: target selection shown (%d candidates)", len(candidates))
+
+        def _on_target_candidate_clicked(self, candidate: dict) -> None:
+            self._remove_target_selection_widget()
+            self.target_selection_responded.emit(candidate)
+
+        def _on_target_selection_cancelled(self) -> None:
+            self._remove_target_selection_widget()
+            self.target_selection_responded.emit({})
+
+        def _remove_target_selection_widget(self) -> None:
+            widget = getattr(self, "_target_selection_widget", None)
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+                self._target_selection_widget = None
 
         def _build_mode_switcher(self) -> QWidget:
             """
@@ -1030,3 +1192,5 @@ else:
         def set_status(self, msg: str, level: str = "info") -> None: pass
         def show_confirmation(self, payload: Any) -> None: pass
         def hide_confirmation(self) -> None: pass
+        def show_output_snippet(self, payload: Any) -> None: pass
+        def show_target_selection(self, payload: Any) -> None: pass
