@@ -39,6 +39,7 @@ class IntentParser:
         bus.subscribe("intent_parsed", self.validate_and_route)
         self.logger.info("🛡️ Intent Parser active: Monitoring LLM output...")
 
+        # Index built-in capability intents into vector store
         try:
             from capabilities.registry import capability_registry
             supported = capability_registry.get_all_names()
@@ -48,6 +49,31 @@ class IntentParser:
 
         if supported:
             await vector_store.add_intents(supported)
+
+        # Index plugin capabilities into vector store so _resolve_intent
+        # can find them via semantic search (Tier 2) and local match (Tier 3).
+        # Plugins live in plugin_registry which is separate from capability_registry.
+        try:
+            from plugins.loader import plugin_loader
+            plugin_intents: list[str] = []
+            for entry in plugin_loader.list_plugins():
+                caps = entry.get("capabilities", [])
+                plugin_intents.extend(str(c) for c in caps if c)
+                # Also add the plugin name itself as a resolvable intent
+                if entry.get("name"):
+                    plugin_intents.append(entry["name"])
+            if plugin_intents:
+                await vector_store.add_intents(plugin_intents)
+                self.logger.info(
+                    "🔌 Indexed %d plugin intent(s) into vector store.",
+                    len(plugin_intents),
+                )
+        except Exception as exc:
+            self.logger.debug("Could not index plugin intents: %s", exc)
+
+        # Re-index whenever a new plugin is deployed or hot-reloaded
+        bus.subscribe("plugin_deployed",     self._on_plugin_registry_changed)
+        bus.subscribe("plugin_hot_reloaded", self._on_plugin_registry_changed)
 
     # ── Panel-facing synchronous interface ────────────────────────────────────
 
@@ -213,17 +239,60 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
     async def _resolve_intent(self, raw_intent: str) -> str | None:
         """
         Resolution tiers (first hit wins):
-          1. Exact match in capability registry
+          0. Exact or fuzzy match in plugin_registry capabilities
+          1. Exact match in capability_registry (built-in capabilities)
           2. Semantic nearest-neighbour from vector store
-          3. Local token/sequence matcher (match_intent_local) — used when the
-             vector store is unavailable or returns nothing above threshold.
-             This ensures the panel always shows a resolved intent even if the
-             LLM or vector DB is unreachable.
+          3. Local token/sequence matcher — used when vector store unavailable.
+
+        Plugin registry is checked FIRST (Tier 0) because plugins fill gaps
+        that built-in capabilities don't cover. Without this, resolved=None
+        and the gap detector triggers re-generation of already-existing plugins.
         """
         if not raw_intent:
             return None
 
-        # Tier 1 — exact registry hit
+        normalized = raw_intent.lower().replace("_", " ").strip()
+
+        # ── Tier 0: Plugin registry — check before built-in capabilities ──────
+        # Plugins are in plugin_registry (separate from capability_registry).
+        # Match against each plugin's capabilities list using local fuzzy match.
+        try:
+            from plugins.loader import plugin_loader
+            from brain.intent_matcher import match_intent_local
+            plugin_caps: list[str] = []
+            # Map capability string → plugin name for lookup after match
+            cap_to_plugin: dict[str, str] = {}
+            for entry in plugin_loader.list_plugins():
+                name = entry.get("name", "")
+                for cap in entry.get("capabilities", []):
+                    cap_str = str(cap).lower().replace("_", " ")
+                    plugin_caps.append(cap_str)
+                    cap_to_plugin[cap_str] = name
+                # Also match against plugin name itself
+                if name:
+                    plugin_caps.append(name.replace("_", " "))
+                    cap_to_plugin[name.replace("_", " ")] = name
+
+            if plugin_caps:
+                plugin_threshold = float(
+                    getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55)
+                )
+                matched_cap, score = match_intent_local(
+                    normalized, plugin_caps, threshold=plugin_threshold
+                )
+                if matched_cap:
+                    plugin_name = cap_to_plugin.get(matched_cap, matched_cap)
+                    self.logger.info(
+                        "🔌 Plugin-matched '%s' → plugin='%s' via cap='%s' (score=%.2f)",
+                        raw_intent, plugin_name, matched_cap, score,
+                    )
+                    # Return the matched capability string — executor uses this
+                    # to look up the plugin by capability in plugin_registry
+                    return matched_cap
+        except Exception as exc:
+            self.logger.debug("Tier 0 plugin match failed: %s", exc)
+
+        # ── Tier 1: Exact built-in capability hit ─────────────────────────────
         try:
             from capabilities.registry import capability_registry
             if capability_registry.get(raw_intent) is not None:
@@ -231,15 +300,18 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
         except Exception:
             pass
 
-        # Collect all known intents for tiers 2 & 3
+        # Collect all known intents for tiers 2 & 3 (built-ins + plugins)
         known_intents: list[str] = []
         try:
             from capabilities.registry import capability_registry
             known_intents = capability_registry.get_all_names() or []
         except Exception:
             pass
+        # Add plugin capabilities to known_intents for local matching
+        if plugin_caps:  # already collected in Tier 0
+            known_intents = known_intents + plugin_caps
 
-        # Tier 2 — vector store semantic search
+        # ── Tier 2: Vector store semantic search ──────────────────────────────
         try:
             closest_intent, confidence = await vector_store.search_closest_intent(raw_intent)
             threshold = float(getattr(settings, "INTENT_MATCH_MIN_CONFIDENCE", 0.35))
@@ -252,7 +324,7 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
         except Exception as exc:  # noqa: BLE001
             self.logger.debug("_resolve_intent: vector search failed — %s", exc)
 
-        # Tier 3 — local token/sequence matcher (no external dependencies)
+        # ── Tier 3: Local token/sequence matcher (no external deps) ───────────
         if known_intents:
             from brain.intent_matcher import match_intent_local
             local_threshold = float(getattr(settings, "INTENT_LOCAL_MATCH_THRESHOLD", 0.30))
@@ -265,6 +337,28 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
                 return matched
 
         return None
+
+    async def _on_plugin_registry_changed(self, event: Any) -> None:
+        """
+        Re-indexes plugin capabilities into the vector store whenever
+        a plugin is deployed or hot-reloaded. Keeps _resolve_intent Tier 2
+        (vector search) current without restarting the agent.
+        """
+        try:
+            from plugins.loader import plugin_loader
+            plugin_intents: list[str] = []
+            for entry in plugin_loader.list_plugins():
+                plugin_intents.extend(str(c) for c in entry.get("capabilities", []) if c)
+                if entry.get("name"):
+                    plugin_intents.append(entry["name"])
+            if plugin_intents:
+                await vector_store.add_intents(plugin_intents)
+                self.logger.debug(
+                    "Re-indexed %d plugin intent(s) after registry change.",
+                    len(plugin_intents),
+                )
+        except Exception as exc:
+            self.logger.debug("Could not re-index plugin intents: %s", exc)
 
     async def _is_risky(self, intent: str, params: dict) -> bool:
         """Evaluates if an action could damage the system or compromise security."""
