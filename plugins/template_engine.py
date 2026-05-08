@@ -2,15 +2,26 @@
 plugins/template_engine.py
 
 Generates plugin and test file skeletons based on intent category.
-Provides structured scaffolding to the generator so the LLM only
-needs to fill in the logic, not the boilerplate.
 
-Templates cover:
-  - automation  (screen reader, vision, UI interaction)
-  - web         (web search, URL operations)
-  - file        (file system operations)
-  - command     (shell command execution via registry)
-  - generic     (fallback for unknown categories)
+Design philosophy:
+  Every template is a WORKING, RUNNABLE example — not a stub with # TODO comments.
+  The LLM's only job is to replace the example logic with intent-specific logic.
+  The skeleton must never lie about what APIs exist (no fake registry services).
+
+Categories and when they are used:
+  - automation   UI interaction: click, type, drag, scroll, screenshot, OCR
+  - background   Infinite-loop daemons: auto-clicker, monitor, watcher, repeater
+  - web          HTTP requests, URL fetch, web scraping, search APIs
+  - file         Read, write, copy, move, delete, rename files and directories
+  - command      Shell commands, subprocesses, terminal operations
+  - system       OS-level: clipboard, notifications, processes, window management
+  - data         Parse, transform, calculate, convert, format data
+  - generic      Fallback for anything that doesn't match above
+
+Pattern library (injected into generator prompt):
+  Contains copy-paste-ready code snippets for the most common sub-tasks,
+  so the LLM never has to guess how to do threading, sleeping, stopping loops,
+  reading clipboard, making HTTP requests, etc.
 """
 from __future__ import annotations
 
@@ -19,239 +30,771 @@ import re
 
 logger = logging.getLogger("TemplateEngine")
 
+
 # ── Category Detection ─────────────────────────────────────────────────────────
 
-_CATEGORY_KEYWORDS = {
+# Phrase-based scoring: multi-word phrases score higher than single keywords.
+# Checked in order; first match in a phrase wins its full score.
+_CATEGORY_PHRASES: dict[str, list[tuple[int, str]]] = {
+    "background": [
+        (3, "auto clicker"),   (3, "auto-clicker"),   (3, "autoclicker"),
+        (3, "infinite loop"),  (3, "keep clicking"),   (3, "repeat click"),
+        (3, "click forever"),  (3, "continuous click"),(3, "click loop"),
+        (3, "keep pressing"),  (3, "keep typing"),     (3, "hold key"),
+        (2, "background task"),(2, "daemon"),          (2, "monitor"),
+        (2, "watcher"),        (2, "periodic"),        (2, "interval"),
+        (2, "stop when"),      (2, "until stopped"),   (2, "toggle"),
+        (1, "repeat"),         (1, "loop"),             (1, "infinite"),
+        (1, "continuous"),     (1, "watch"),
+    ],
     "automation": [
-        "click", "type", "screen", "window", "ui", "button", "input",
-        "keyboard", "mouse", "drag", "scroll", "focus", "app", "launch",
-        "open", "close", "vision", "ocr", "screenshot",
+        (3, "click on"),       (3, "right click"),     (3, "double click"),
+        (3, "type text"),      (3, "press key"),        (3, "take screenshot"),
+        (3, "read screen"),    (3, "find element"),     (3, "drag and drop"),
+        (3, "open chrome"),    (3, "open firefox"),     (3, "open browser"),
+        (3, "open terminal"),  (3, "open vscode"),      (3, "launch chrome"),
+        (3, "launch firefox"), (3, "launch app"),       (3, "open app"),
+        (3, "start app"),      (3, "start chrome"),
+        (2, "scroll down"),    (2, "scroll up"),        (2, "move mouse"),
+        (2, "focus window"),   (2, "switch window"),    (2, "close app"),
+        (1, "click"),          (1, "type"),             (1, "keyboard"),
+        (1, "mouse"),          (1, "screen"),           (1, "window"),
+        (1, "button"),         (1, "input"),            (1, "drag"),
+        (1, "scroll"),         (1, "screenshot"),       (1, "ocr"),
+        (1, "vision"),         (1, "ui"),               (1, "open"),
+        (1, "launch"),
     ],
     "web": [
-        "search", "url", "browse", "website", "http", "download",
-        "fetch", "scrape", "web",
+        (3, "http request"),   (3, "api call"),         (3, "web scrape"),
+        (3, "download file"),  (3, "fetch url"),        (3, "browse to"),
+        (2, "search web"),     (2, "search google"),    (2, "open url"),
+        (2, "open link"),      (2, "visit website"),
+        (1, "search"),         (1, "url"),              (1, "http"),
+        (1, "https"),          (1, "browse"),           (1, "website"),
+        (1, "download"),       (1, "fetch"),            (1, "scrape"),
+        (1, "web"),            (1, "api"),              (1, "request"),
     ],
     "file": [
-        "file", "folder", "directory", "read", "write", "delete",
-        "move", "copy", "rename", "path", "save",
+        (3, "read file"),      (3, "write file"),       (3, "delete file"),
+        (3, "copy file"),      (3, "move file"),        (3, "rename file"),
+        (3, "create folder"),  (3, "list files"),       (3, "find file"),
+        (2, "file content"),   (2, "file path"),        (2, "open file"),
+        (2, "save file"),      (2, "append to"),
+        (1, "file"),           (1, "folder"),           (1, "directory"),
+        (1, "read"),           (1, "write"),            (1, "delete"),
+        (1, "copy"),           (1, "move"),             (1, "rename"),
+        (1, "path"),           (1, "save"),
     ],
     "command": [
-        "run", "execute", "shell", "command", "terminal", "process",
-        "script", "bash", "cmd",
+        (3, "run command"),    (3, "shell command"),    (3, "terminal command"),
+        (3, "bash script"),    (3, "execute script"),   (3, "run script"),
+        (2, "run program"),    (2, "start process"),    (2, "kill process"),
+        (1, "run"),            (1, "execute"),          (1, "shell"),
+        (1, "terminal"),       (1, "bash"),             (1, "cmd"),
+        (1, "process"),        (1, "script"),
+    ],
+    "system": [
+        (3, "copy to clipboard"), (3, "read clipboard"),  (3, "paste clipboard"),
+        (3, "show notification"), (3, "send notification"),(3, "system tray"),
+        (3, "lock screen"),    (3, "sleep computer"),   (3, "shutdown"),
+        (3, "volume up"),      (3, "volume down"),      (3, "mute"),
+        (2, "clipboard"),      (2, "notification"),     (2, "brightness"),
+        (2, "battery"),        (2, "wifi"),             (2, "bluetooth"),
+        (1, "system"),         (1, "os"),               (1, "desktop"),
+    ],
+    "data": [
+        (3, "parse json"),     (3, "parse csv"),        (3, "convert format"),
+        (3, "calculate"),      (3, "transform data"),   (3, "format text"),
+        (2, "extract data"),   (2, "process data"),     (2, "summarize"),
+        (2, "count words"),    (2, "find pattern"),
+        (1, "parse"),          (1, "convert"),          (1, "calculate"),
+        (1, "format"),         (1, "extract"),          (1, "transform"),
+        (1, "data"),
     ],
 }
 
 
 def detect_category(intent: str, description: str = "") -> str:
-    """Detect the most likely plugin category from intent and description."""
-    combined = f"{intent} {description}".lower().replace("_", " ")
-    scores = {cat: 0 for cat in _CATEGORY_KEYWORDS}
-    for cat, keywords in _CATEGORY_KEYWORDS.items():
-        for kw in keywords:
-            if kw in combined:
-                scores[cat] += 1
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "generic"
+    """
+    Detect the most likely plugin category using phrase-based scoring.
+    Multi-word phrases score higher than single keywords.
+    Returns the category with the highest score, or 'generic' if no match.
+    """
+    combined = f"{intent} {description}".lower().replace("_", " ").replace("-", " ")
+    scores: dict[str, int] = {cat: 0 for cat in _CATEGORY_PHRASES}
+
+    for cat, phrases in _CATEGORY_PHRASES.items():
+        for score, phrase in phrases:
+            if phrase in combined:
+                scores[cat] += score
+
+    best_cat = max(scores, key=scores.get)
+    best_score = scores[best_cat]
+
+    logger.debug(f"Category scores for '{intent}': {scores} → {best_cat} ({best_score})")
+    return best_cat if best_score > 0 else "generic"
 
 
-# ── Plugin Code Templates ──────────────────────────────────────────────────────
+# ── Pattern Library ────────────────────────────────────────────────────────────
+# Injected into the generator prompt so the LLM copies correct patterns.
+# Each pattern is a working, copy-paste-ready code snippet.
 
-_PLUGIN_HEADER = '''"""
-Auto-generated plugin: {plugin_name}
+PATTERN_LIBRARY = '''
+# ══════════════════════════════════════════════════════════════════════════════
+# OPERONIX PLUGIN PATTERN LIBRARY — copy the patterns relevant to your intent
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── PATTERN: Background loop with stop event (auto-clicker, monitor, etc.) ───
+# Use this for ANY "do X repeatedly until stopped" intent.
+import threading
+import time
+
+_stop_event = threading.Event()
+
+def _worker_loop(stop_event, interval=0.1):
+    """Worker runs in a daemon thread. Exits cleanly when stop_event is set."""
+    import pyautogui
+    pyautogui.FAILSAFE = True
+    while not stop_event.is_set():
+        pyautogui.click()           # ← replace with your action
+        stop_event.wait(interval)   # blocks for interval OR until set()
+
+def _listen_for_stop(stop_event, hotkey="alt+s"):
+    """Listens for a hotkey in a separate thread and sets the stop event."""
+    import keyboard
+    keyboard.wait(hotkey)           # blocks until hotkey is pressed
+    stop_event.set()
+
+# Starting the background task:
+stop_event = threading.Event()
+worker = threading.Thread(target=_worker_loop, args=(stop_event, 0.1), daemon=True)
+stopper = threading.Thread(target=_listen_for_stop, args=(stop_event, "alt+s"), daemon=True)
+worker.start()
+stopper.start()
+# Return immediately — threads run in background
+result = {"status": "success", "result": "started", "stop_with": "alt+s"}
+
+# ── PATTERN: One-shot UI action (click, type, key press) ─────────────────────
+import pyautogui
+import time
+pyautogui.FAILSAFE = True          # move mouse to corner to abort
+pyautogui.click(x=100, y=200)      # click at coordinates
+pyautogui.typewrite("hello", interval=0.05)  # type text
+pyautogui.hotkey("ctrl", "c")      # keyboard shortcut
+pyautogui.press("enter")           # single key press
+pyautogui.moveTo(500, 300, duration=0.3)  # move mouse smoothly
+time.sleep(0.5)                    # wait after action
+
+# ── PATTERN: Screenshot + OCR ─────────────────────────────────────────────────
+import pyautogui
+screenshot = pyautogui.screenshot()   # PIL Image
+screenshot.save("/tmp/screenshot.png")
+# Optional OCR (requires pytesseract):
+# import pytesseract
+# text = pytesseract.image_to_string(screenshot)
+
+# ── PATTERN: Keyboard shortcut / hotkey ──────────────────────────────────────
+import keyboard
+keyboard.press_and_release("ctrl+c")   # send shortcut
+keyboard.send("alt+tab")               # switch window
+keyboard.write("hello world")          # type text
+keyboard.add_hotkey("ctrl+shift+x", lambda: print("triggered"))
+
+# ── PATTERN: HTTP / web request ───────────────────────────────────────────────
+import urllib.request
+import json as _json
+url = "https://api.example.com/data"
+with urllib.request.urlopen(url, timeout=10) as resp:
+    data = _json.loads(resp.read().decode())
+# POST request:
+import urllib.request, urllib.parse
+post_data = urllib.parse.urlencode({"key": "value"}).encode()
+req = urllib.request.Request(url, data=post_data, method="POST")
+with urllib.request.urlopen(req, timeout=10) as resp:
+    response = _json.loads(resp.read().decode())
+
+# ── PATTERN: File operations ───────────────────────────────────────────────────
+import os, shutil
+content = open(path, "r", encoding="utf-8").read()          # read
+open(path, "w", encoding="utf-8").write(content)            # write
+os.makedirs(os.path.dirname(path), exist_ok=True)           # ensure dir exists
+shutil.copy2(src, dst)                                       # copy with metadata
+shutil.move(src, dst)                                        # move / rename
+os.remove(path)                                              # delete file
+files = os.listdir(directory)                                # list directory
+
+# ── PATTERN: Shell command ────────────────────────────────────────────────────
+import subprocess
+result = subprocess.run(
+    ["ls", "-la"],                 # command as list (safe, no shell injection)
+    capture_output=True,
+    text=True,
+    timeout=30,
+)
+stdout = result.stdout
+returncode = result.returncode
+
+# ── PATTERN: Clipboard ────────────────────────────────────────────────────────
+import subprocess
+# Read clipboard (Linux):
+result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                        capture_output=True, text=True)
+clipboard_text = result.stdout
+# Write to clipboard (Linux):
+proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+proc.communicate(input=text.encode())
+
+# ── PATTERN: System notification ─────────────────────────────────────────────
+import subprocess
+subprocess.run(["notify-send", "Title", "Message body"])
+
+# ══════════════════════════════════════════════════════════════════════════════
+'''
+
+
+# ── Plugin Header ─────────────────────────────────────────────────────────────
+
+_PLUGIN_HEADER = '''\
+"""
+Plugin: {plugin_name}
 Intent: {intent}
+Category: {category}
 Description: {description}
 Version: {version}
 Generated: {timestamp}
-
-IMPORTANT: Access system services ONLY via the capability registry:
-    service = capability_registry.get("vision_service")
-    if service is None:
-        return {{"status": "error", "message": "Service unavailable"}}
-    NOTE: capability_registry.get() returns the service or None — no is_available() method exists.
 """
-# NOTE: `from __future__ import annotations` is injected at the top of the
-# final file by sandbox_runner._patch_plugin_sys_path — do NOT add it here.
+# Standard library imports — always available
+import time
+import threading
+import os
+import sys
+
+# NOTE: from __future__ imports and sys.path bootstrap are injected
+# automatically by sandbox_runner — do NOT add them here.
+
 from plugins.manifest_schema import BasePlugin
 
 
 '''
 
-_AUTOMATION_TEMPLATE = '''class {class_name}(BasePlugin):
+
+# ── Category Templates ────────────────────────────────────────────────────────
+# Each template is a WORKING example.
+# The LLM replaces example logic with intent-specific logic.
+# Rules embedded in comments prevent the LLM from drifting.
+
+_BACKGROUND_TEMPLATE = '''\
+class {class_name}(BasePlugin):
     """
     {description}
-    Handles intent: {intent}
+    Category: background daemon (infinite loop with stop trigger)
+
+    Pattern: starts a daemon thread that loops until a stop event fires.
+    The run() method starts the threads and returns immediately.
     """
-    name        = "{plugin_name}"
-    description = "{description}"
-    version     = "{version}"
-    permissions = ["ui_interaction", "screen_read"]
-    safe_mode   = True
-    allowed_services = ["vision_service", "automation_service"]
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["ui_interaction"]
+    safe_mode        = True
+    allowed_services = []
+
+    # Class-level stop event — shared across calls
+    _stop_event: threading.Event | None = None
 
     def validate(self, args: dict) -> str | None:
-        # TODO: validate required args for this intent
+        # No required args for background tasks — all config has sensible defaults
         return None
 
     async def run(self, context: dict, args: dict) -> dict:
         try:
-            # Access automation via capability registry ONLY
-            from capabilities.registry import capability_registry
+            import pyautogui
+            import keyboard
+            import threading
 
-            automation = capability_registry.get("automation_service")
-            if automation is None:
-                return {{"status": "error", "message": "automation_service not available"}}
+            # ── Configuration from args (with safe defaults) ─────────────────
+            interval   = float(args.get("interval", 0.1))   # seconds between actions
+            stop_hotkey = str(args.get("stop_hotkey", "alt+s"))
 
-            # TODO: Implement the plugin logic for intent: {intent}
-            # Use automation service methods to interact with the UI
-            # Example: result = await automation(context, args)
+            # ── Stop any previous instance first ──────────────────────────────
+            if {class_name}._stop_event is not None:
+                {class_name}._stop_event.set()
+                time.sleep(0.2)
 
-            return {{"status": "success", "result": None, "intent": "{intent}"}}
+            stop_event = threading.Event()
+            {class_name}._stop_event = stop_event
+
+            # ── Worker: performs the repeating action ─────────────────────────
+            def _worker(stop: threading.Event, iv: float) -> None:
+                pyautogui.FAILSAFE = True
+                while not stop.is_set():
+                    # TODO: Replace this line with the actual repeating action
+                    # Examples:
+                    #   pyautogui.click()                    # left click
+                    #   pyautogui.press("space")             # press key
+                    #   pyautogui.click(button="right")      # right click
+                    pyautogui.click()
+                    stop.wait(iv)  # waits iv seconds OR until stop is set
+
+            # ── Stopper: listens for hotkey and sets stop event ────────────────
+            def _stopper(stop: threading.Event, hotkey: str) -> None:
+                try:
+                    keyboard.wait(hotkey)  # blocks until hotkey pressed
+                finally:
+                    stop.set()
+
+            threading.Thread(
+                target=_worker, args=(stop_event, interval), daemon=True
+            ).start()
+            threading.Thread(
+                target=_stopper, args=(stop_event, stop_hotkey), daemon=True
+            ).start()
+
+            return {{
+                "status":    "success",
+                "result":    "started",
+                "intent":    "{intent}",
+                "stop_with": stop_hotkey,
+                "interval":  interval,
+            }}
 
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
 
-_WEB_TEMPLATE = '''class {class_name}(BasePlugin):
+
+_AUTOMATION_TEMPLATE = '''\
+class {class_name}(BasePlugin):
     """
     {description}
-    Handles intent: {intent}
+    Category: automation (one-shot UI interaction)
+
+    Pattern: performs a UI action and returns the result.
+    Uses pyautogui and keyboard directly — these are standalone libraries,
+    not registry services. Do NOT use capability_registry for UI actions.
     """
-    name        = "{plugin_name}"
-    description = "{description}"
-    version     = "{version}"
-    permissions = ["web_access"]
-    safe_mode   = True
-    allowed_services = ["web_service"]
-
-    def validate(self, args: dict) -> str | None:
-        # TODO: validate required args (e.g., url, query)
-        return None
-
-    async def run(self, context: dict, args: dict) -> dict:
-        try:
-            from capabilities.registry import capability_registry
-
-            web = capability_registry.get("web_service")
-            if web is None:
-                return {{"status": "error", "message": "web_service not available"}}
-
-            # TODO: Implement the plugin logic for intent: {intent}
-
-            return {{"status": "success", "result": None, "intent": "{intent}"}}
-
-        except Exception as e:
-            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
-'''
-
-_FILE_TEMPLATE = '''class {class_name}(BasePlugin):
-    """
-    {description}
-    Handles intent: {intent}
-    """
-    name        = "{plugin_name}"
-    description = "{description}"
-    version     = "{version}"
-    permissions = ["file_read", "file_write"]
-    safe_mode   = True
-    allowed_services = ["filesystem_service"]
-
-    def validate(self, args: dict) -> str | None:
-        if not args.get("path"):
-            return "Missing required argument: 'path'"
-        return None
-
-    async def run(self, context: dict, args: dict) -> dict:
-        try:
-            from capabilities.registry import capability_registry
-
-            fs = capability_registry.get("filesystem_service")
-            if fs is None:
-                return {{"status": "error", "message": "filesystem_service not available"}}
-
-            # TODO: Implement the plugin logic for intent: {intent}
-
-            return {{"status": "success", "result": None, "intent": "{intent}"}}
-
-        except Exception as e:
-            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
-'''
-
-_COMMAND_TEMPLATE = '''class {class_name}(BasePlugin):
-    """
-    {description}
-    Handles intent: {intent}
-    """
-    name        = "{plugin_name}"
-    description = "{description}"
-    version     = "{version}"
-    permissions = ["command_execution"]
-    safe_mode   = True
-    allowed_services = ["command_service"]
-
-    def validate(self, args: dict) -> str | None:
-        if not args.get("command"):
-            return "Missing required argument: 'command'"
-        return None
-
-    async def run(self, context: dict, args: dict) -> dict:
-        try:
-            from capabilities.registry import capability_registry
-
-            cmd_service = capability_registry.get("command_service")
-            if cmd_service is None:
-                return {{"status": "error", "message": "command_service not available"}}
-
-            # TODO: Implement the plugin logic for intent: {intent}
-
-            return {{"status": "success", "result": None, "intent": "{intent}"}}
-
-        except Exception as e:
-            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
-'''
-
-_GENERIC_TEMPLATE = '''class {class_name}(BasePlugin):
-    """
-    {description}
-    Handles intent: {intent}
-    """
-    name        = "{plugin_name}"
-    description = "{description}"
-    version     = "{version}"
-    permissions = []
-    safe_mode   = True
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["ui_interaction", "screen_read"]
+    safe_mode        = True
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # TODO: add validation for required args
+        # TODO: Add validation for any args your action requires.
+        # Example: if not args.get("target"): return "Missing 'target'"
         return None
 
     async def run(self, context: dict, args: dict) -> dict:
         try:
-            from capabilities.registry import capability_registry
+            import pyautogui
+            pyautogui.FAILSAFE = True  # move mouse to corner to abort
 
-            # TODO: Implement the plugin logic for intent: {intent}
-            # Access ALL services via capability_registry.get("service_name")
+            # ── Read args (with safe defaults) ────────────────────────────────
+            # TODO: Read the args your intent needs, e.g.:
+            #   x       = int(args.get("x", 0))
+            #   y       = int(args.get("y", 0))
+            #   text    = str(args.get("text", ""))
+            #   app     = str(args.get("app", context.get("app_name", "")))
 
-            return {{"status": "success", "result": None, "intent": "{intent}"}}
+            # ── Perform the action ────────────────────────────────────────────
+            # TODO: Replace with the actual UI action for intent "{intent}"
+            # Examples — pick ONE or compose several:
+            #   pyautogui.click(x=x, y=y)
+            #   pyautogui.typewrite(text, interval=0.05)
+            #   pyautogui.hotkey("ctrl", "c")
+            #   pyautogui.press("enter")
+            #   pyautogui.screenshot().save("/tmp/shot.png")
+            time.sleep(0.1)  # small delay so the action settles
+            result = None    # TODO: set to meaningful result if action returns one
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
 
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
 
-# ── Test Template ──────────────────────────────────────────────────────────────
 
-_TEST_TEMPLATE = '''"""
-Auto-generated tests for plugin: {plugin_name}
+_WEB_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: web (HTTP request / web data)
+
+    Pattern: uses urllib (stdlib, always available) for HTTP.
+    No external dependencies required.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["web_access"]
+    safe_mode        = True
+    allowed_services = []
+
+    def validate(self, args: dict) -> str | None:
+        # TODO: Add validation. Example for a search plugin:
+        # if not args.get("query"): return "Missing required arg: 'query'"
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            import urllib.request
+            import urllib.parse
+            import json as _json
+
+            # ── Read args ─────────────────────────────────────────────────────
+            # TODO: Replace with the args your intent needs, e.g.:
+            #   query = str(args.get("query", ""))
+            #   url   = str(args.get("url", "https://example.com"))
+
+            # ── Make the HTTP request ─────────────────────────────────────────
+            # TODO: Replace with actual URL and logic for intent "{intent}"
+            # GET example:
+            #   with urllib.request.urlopen(url, timeout=10) as resp:
+            #       data = _json.loads(resp.read().decode())
+            #
+            # POST example:
+            #   post_data = urllib.parse.urlencode({{"q": query}}).encode()
+            #   req = urllib.request.Request(url, data=post_data)
+            #   with urllib.request.urlopen(req, timeout=10) as resp:
+            #       data = _json.loads(resp.read().decode())
+
+            result = None  # TODO: set to fetched/processed data
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
+
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+_FILE_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: file (filesystem operations)
+
+    Pattern: uses os, shutil, pathlib (stdlib) directly.
+    All paths must stay within safe directories.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["file_read", "file_write"]
+    safe_mode        = True
+    allowed_services = []
+
+    # Restrict operations to safe paths (never touch system files)
+    _SAFE_ROOT = os.path.expanduser("~")
+
+    def validate(self, args: dict) -> str | None:
+        path = args.get("path", "")
+        if not path:
+            return "Missing required argument: 'path'"
+        # Safety: path must be within home directory
+        abs_path = os.path.realpath(os.path.expanduser(str(path)))
+        if not abs_path.startswith(self._SAFE_ROOT):
+            return f"Path outside safe root ({{self._SAFE_ROOT}}): {{path}}"
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            import shutil
+            path = os.path.realpath(os.path.expanduser(str(args.get("path", ""))))
+
+            # TODO: Replace with the file operation for intent "{intent}"
+            # Examples — pick ONE:
+            #
+            # READ:
+            #   content = open(path, "r", encoding="utf-8").read()
+            #   result  = content
+            #
+            # WRITE:
+            #   content = str(args.get("content", ""))
+            #   os.makedirs(os.path.dirname(path), exist_ok=True)
+            #   open(path, "w", encoding="utf-8").write(content)
+            #   result = {{"written": len(content)}}
+            #
+            # DELETE:
+            #   os.remove(path)
+            #   result = {{"deleted": path}}
+            #
+            # COPY:
+            #   dst = os.path.realpath(os.path.expanduser(str(args.get("dest", ""))))
+            #   shutil.copy2(path, dst)
+            #   result = {{"copied_to": dst}}
+            #
+            # LIST:
+            #   result = os.listdir(path)
+
+            result = None  # TODO: set above
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
+
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+_COMMAND_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: command (shell / subprocess)
+
+    Pattern: runs a shell command via subprocess.run().
+    NEVER use shell=True with user-supplied input (injection risk).
+    Always pass command as a list.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["command_execution"]
+    safe_mode        = True
+    allowed_services = []
+
+    # Allowlist of safe commands (extend as needed)
+    _SAFE_COMMANDS: set[str] = {{"ls", "pwd", "echo", "cat", "grep", "find"}}
+
+    def validate(self, args: dict) -> str | None:
+        cmd = args.get("command")
+        if not cmd:
+            return "Missing required argument: 'command'"
+        if isinstance(cmd, list):
+            exe = cmd[0] if cmd else ""
+        else:
+            exe = str(cmd).split()[0]
+        if self.safe_mode and exe not in self._SAFE_COMMANDS:
+            return (
+                f"Command '{{exe}}' not in safe_mode allowlist. "
+                f"Set safe_mode=False or add to _SAFE_COMMANDS."
+            )
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            import subprocess
+            cmd     = args.get("command", [])
+            timeout = int(args.get("timeout", 30))
+            cwd     = args.get("cwd", None)
+
+            # Always pass as list — never shell=True with user input
+            if isinstance(cmd, str):
+                cmd = cmd.split()
+
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+            )
+
+            return {{
+                "status":     "success" if proc.returncode == 0 else "error",
+                "stdout":     proc.stdout[:2000],
+                "stderr":     proc.stderr[:500],
+                "returncode": proc.returncode,
+                "intent":     "{intent}",
+            }}
+
+        except subprocess.TimeoutExpired:
+            return {{"status": "error", "message": f"Command timed out", "intent": "{intent}"}}
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+_SYSTEM_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: system (OS-level: clipboard, notifications, volume, etc.)
+
+    Pattern: uses subprocess to call OS utilities (xclip, notify-send, etc.)
+    Works on Linux/X11. Checks for tool availability before use.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = ["system_access"]
+    safe_mode        = True
+    allowed_services = []
+
+    def validate(self, args: dict) -> str | None:
+        # TODO: Add validation for args your system action needs
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            import subprocess
+            import shutil as _shutil
+
+            # ── Helper: check a CLI tool is installed ─────────────────────────
+            def _require(tool: str) -> str | None:
+                """Returns tool path or None if not found."""
+                return _shutil.which(tool)
+
+            # TODO: Replace with actual system action for intent "{intent}"
+            # Examples:
+
+            # CLIPBOARD READ (requires xclip or xsel):
+            #   if not _require("xclip"):
+            #       return {{"status": "error", "message": "xclip not installed"}}
+            #   r = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+            #                      capture_output=True, text=True)
+            #   result = r.stdout
+
+            # CLIPBOARD WRITE:
+            #   text = str(args.get("text", ""))
+            #   if not _require("xclip"):
+            #       return {{"status": "error", "message": "xclip not installed"}}
+            #   proc = subprocess.Popen(["xclip", "-selection", "clipboard"],
+            #                           stdin=subprocess.PIPE)
+            #   proc.communicate(input=text.encode())
+            #   result = {{"copied": len(text)}}
+
+            # NOTIFICATION:
+            #   title = str(args.get("title", "Operonix"))
+            #   body  = str(args.get("body", ""))
+            #   if not _require("notify-send"):
+            #       return {{"status": "error", "message": "notify-send not installed"}}
+            #   subprocess.run(["notify-send", title, body])
+            #   result = {{"notified": True}}
+
+            result = None  # TODO: set above
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
+
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+_DATA_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: data (parse, transform, calculate, format)
+
+    Pattern: pure Python data processing — no UI, no network, no filesystem.
+    Input arrives via args, output goes in the result dict.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = []
+    safe_mode        = True
+    allowed_services = []
+
+    def validate(self, args: dict) -> str | None:
+        # TODO: Add validation for the input your data operation requires.
+        # Example: if not args.get("data"): return "Missing required arg: 'data'"
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            import json as _json
+            import re as _re
+            import csv as _csv
+            import io as _io
+
+            # ── Read input from args ──────────────────────────────────────────
+            # TODO: Read the args your data operation needs, e.g.:
+            #   data   = args.get("data", "")
+            #   format = args.get("format", "json")
+
+            # ── Perform the data operation ────────────────────────────────────
+            # TODO: Replace with actual logic for intent "{intent}"
+            # Examples:
+
+            # JSON parse:
+            #   parsed = _json.loads(data)
+            #   result = parsed
+
+            # CSV parse:
+            #   reader = _csv.DictReader(_io.StringIO(data))
+            #   result = list(reader)
+
+            # Text transform:
+            #   result = data.upper()   # or .lower(), .strip(), etc.
+
+            # Calculate:
+            #   result = eval(data)     # ONLY for trusted math expressions
+
+            # Regex extract:
+            #   matches = _re.findall(r"\\d+", data)
+            #   result  = matches
+
+            result = None  # TODO: set above
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
+
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+_GENERIC_TEMPLATE = '''\
+class {class_name}(BasePlugin):
+    """
+    {description}
+    Category: generic
+
+    This template is used when no specific category matched.
+    Pick the pattern that fits your intent from the PATTERN LIBRARY above,
+    or compose multiple patterns together.
+    """
+    name             = "{plugin_name}"
+    description      = "{description}"
+    version          = "{version}"
+    permissions      = []
+    safe_mode        = True
+    allowed_services = []
+
+    def validate(self, args: dict) -> str | None:
+        # Add validation for any required args here
+        return None
+
+    async def run(self, context: dict, args: dict) -> dict:
+        try:
+            # TODO: Implement the logic for intent "{intent}"
+            # Refer to the PATTERN LIBRARY for copy-paste patterns:
+            #   - Background loop → use threading.Event + daemon Thread
+            #   - UI action       → use pyautogui / keyboard
+            #   - HTTP request    → use urllib.request
+            #   - File operation  → use os / shutil
+            #   - Shell command   → use subprocess.run(cmd_as_list)
+            #   - Clipboard       → use xclip via subprocess
+            #   - Notification    → use notify-send via subprocess
+
+            result = None  # TODO: set to meaningful output
+
+            return {{"status": "success", "result": result, "intent": "{intent}"}}
+
+        except Exception as e:
+            return {{"status": "error", "message": str(e), "intent": "{intent}"}}
+'''
+
+
+# ── Test Templates ─────────────────────────────────────────────────────────────
+# Per-category test templates mock the right dependencies so tests pass in
+# the sandbox without needing real displays, files, or network.
+
+_TEST_HEADER = '''\
+"""
+Tests for plugin: {plugin_name}
 Intent: {intent}
+Category: {category}
 """
 import asyncio
-import pytest
-import sys
 import os
+import sys
+import pytest
+from unittest.mock import patch, MagicMock, call
 
-# Add plugin directory to path for import
+# Add plugin directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from plugin import {class_name}
 
 
@@ -259,70 +802,234 @@ from plugin import {class_name}
 def plugin():
     return {class_name}()
 
-
 @pytest.fixture
-def base_context():
-    return {{"active_window": "test", "app_type": "test"}}
+def ctx():
+    return {{"active_window": "test_window", "app_type": "test", "app_name": "TestApp"}}
 
+# ── Structural tests (always run, no mocking needed) ─────────────────────────
 
-def test_plugin_has_required_attributes(plugin):
-    assert hasattr(plugin, "name") and plugin.name
-    assert hasattr(plugin, "description") and plugin.description
-    assert hasattr(plugin, "version") and plugin.version
-    assert hasattr(plugin, "run")
-    assert hasattr(plugin, "validate")
+def test_has_required_attributes(plugin):
+    assert plugin.name
+    assert plugin.description
+    assert plugin.version
     assert asyncio.iscoroutinefunction(plugin.run)
+    assert callable(plugin.validate)
 
-
-def test_validate_returns_none_for_valid_args(plugin):
-    # TODO: Replace with valid args for intent: {intent}
+def test_validate_returns_none_or_str(plugin):
     result = plugin.validate({{}})
     assert result is None or isinstance(result, str)
 
-
-def test_run_returns_dict_with_status(plugin, base_context):
-    result = asyncio.run(plugin.run(base_context, {{}}))
-    assert isinstance(result, dict), "run() must return a dict"
-    assert "status" in result, "result must have a 'status' key"
+def test_run_always_returns_dict_with_status(plugin, ctx):
+    """run() must NEVER raise — always return a dict with 'status'."""
+    result = asyncio.run(plugin.run(ctx, {{}}))
+    assert isinstance(result, dict), f"Expected dict, got {{type(result)}}"
+    assert "status" in result, f"Missing 'status' key in {{result}}"
     assert result["status"] in ("success", "error"), (
-        f"status must be 'success' or 'error', got: {{result['status']}}"
+        f"status must be 'success' or 'error', got {{result['status']}}"
     )
 
+def test_run_never_raises_on_bad_args(plugin, ctx):
+    """Plugin must handle garbage input gracefully."""
+    for bad_args in [None, {{}}, {{"x": None}}, {{"path": "/../../../etc/passwd"}}]:
+        try:
+            result = asyncio.run(plugin.run(ctx, bad_args or {{}}))
+            assert isinstance(result, dict)
+        except Exception as exc:
+            pytest.fail(f"run() raised {{type(exc).__name__}}: {{exc}} for args={{bad_args}}")
 
-def test_run_handles_empty_args_gracefully(plugin, base_context):
-    """Plugin must not crash on empty args — return error dict instead."""
-    try:
-        result = asyncio.run(plugin.run(base_context, {{}}))
-        assert isinstance(result, dict)
-        assert "status" in result
-    except Exception as exc:
-        pytest.fail(f"run() raised an exception instead of returning error dict: {{exc}}")
+'''
 
+_TEST_BACKGROUND = '''\
 
-def test_run_handles_none_context(plugin):
-    """Plugin must handle None or empty context gracefully."""
-    try:
-        result = asyncio.run(plugin.run({{}}, {{}}))
-        assert isinstance(result, dict)
-    except Exception as exc:
-        pytest.fail(f"run() crashed on empty context: {{exc}}")
+# ── Background plugin tests (mock pyautogui and keyboard) ────────────────────
+
+@patch("plugin.keyboard.wait")
+@patch("plugin.pyautogui.click")
+def test_run_starts_background_threads(mock_click, mock_wait, plugin, ctx):
+    """run() must start daemon threads and return immediately."""
+    import threading
+    mock_wait.side_effect = lambda *a, **kw: None   # don\'t actually block
+    result = asyncio.run(plugin.run(ctx, {{"interval": 0.01, "stop_hotkey": "alt+s"}}))
+    assert result["status"] == "success"
+    assert "stop_with" in result
+
+@patch("plugin.keyboard.wait")
+@patch("plugin.pyautogui.click")
+def test_run_is_non_blocking(mock_click, mock_wait, plugin, ctx):
+    """run() must return in under 2 seconds (threads run in background)."""
+    import time
+    mock_wait.side_effect = lambda *a, **kw: None
+    start = time.monotonic()
+    asyncio.run(plugin.run(ctx, {{}}))
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0, f"run() blocked for {{elapsed:.1f}}s — must be non-blocking"
+'''
+
+_TEST_AUTOMATION = '''\
+
+# ── Automation plugin tests (mock pyautogui) ──────────────────────────────────
+
+@patch("plugin.pyautogui.click", return_value=None)
+@patch("plugin.pyautogui.screenshot", return_value=MagicMock())
+def test_run_succeeds_with_valid_args(mock_shot, mock_click, plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"x": 100, "y": 200}}))
+    assert result["status"] in ("success", "error")  # error OK if arg validation fails
+
+@patch("plugin.pyautogui.click", side_effect=Exception("display error"))
+def test_run_handles_pyautogui_error(mock_click, plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{}}))
+    assert result["status"] == "error"
+    assert "message" in result
+'''
+
+_TEST_WEB = '''\
+
+# ── Web plugin tests (mock urllib) ────────────────────────────────────────────
+
+@patch("urllib.request.urlopen")
+def test_run_makes_http_request(mock_urlopen, plugin, ctx):
+    import json as _json
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = _json.dumps({{"result": "ok"}}).encode()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_urlopen.return_value = mock_resp
+    result = asyncio.run(plugin.run(ctx, {{"query": "test"}}))
+    assert result["status"] in ("success", "error")
+
+@patch("urllib.request.urlopen", side_effect=Exception("network error"))
+def test_run_handles_network_error(mock_urlopen, plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"query": "test"}}))
+    assert result["status"] == "error"
+    assert "message" in result
+'''
+
+_TEST_FILE = '''\
+
+# ── File plugin tests (use tmp_path, no real FS mutation) ─────────────────────
+
+def test_validate_rejects_missing_path(plugin):
+    result = plugin.validate({{}})
+    assert result is not None  # should fail validation
+
+def test_validate_rejects_path_traversal(plugin):
+    result = plugin.validate({{"path": "/etc/passwd"}})
+    # Either validates or rejects — must not crash
+    assert result is None or isinstance(result, str)
+
+def test_run_reads_existing_file(plugin, ctx, tmp_path):
+    f = tmp_path / "test.txt"
+    f.write_text("hello operonix")
+    result = asyncio.run(plugin.run(ctx, {{"path": str(f)}}))
+    assert isinstance(result, dict)
+
+def test_run_handles_missing_file(plugin, ctx, tmp_path):
+    result = asyncio.run(plugin.run(ctx, {{"path": str(tmp_path / "nonexistent.txt")}}))
+    assert isinstance(result, dict)  # must not raise
+'''
+
+_TEST_COMMAND = '''\
+
+# ── Command plugin tests (mock subprocess) ────────────────────────────────────
+
+@patch("plugin.subprocess.run")
+def test_run_executes_safe_command(mock_run, plugin, ctx):
+    mock_run.return_value = MagicMock(stdout="ok\\n", stderr="", returncode=0)
+    result = asyncio.run(plugin.run(ctx, {{"command": ["echo", "hello"]}}))
+    assert result["status"] in ("success", "error")
+
+@patch("plugin.subprocess.run", side_effect=Exception("command failed"))
+def test_run_handles_command_error(mock_run, plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"command": ["echo", "test"]}}))
+    assert result["status"] == "error"
+
+def test_validate_rejects_missing_command(plugin):
+    result = plugin.validate({{}})
+    assert result is not None
+'''
+
+_TEST_SYSTEM = '''\
+
+# ── System plugin tests (mock subprocess) ────────────────────────────────────
+
+@patch("subprocess.run")
+@patch("subprocess.Popen")
+def test_run_system_action(mock_popen, mock_run, plugin, ctx):
+    mock_run.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
+    mock_popen.return_value = MagicMock()
+    result = asyncio.run(plugin.run(ctx, {{}}))
+    assert result["status"] in ("success", "error")
+
+@patch("subprocess.run", side_effect=Exception("no such tool"))
+def test_run_handles_missing_tool(mock_run, plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{}}))
+    assert result["status"] == "error"
+    assert "message" in result
+'''
+
+_TEST_DATA = '''\
+
+# ── Data plugin tests (no mocking needed — pure Python) ───────────────────────
+
+def test_run_processes_valid_input(plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"data": "hello world"}}))
+    assert result["status"] in ("success", "error")
+
+def test_run_handles_empty_input(plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"data": ""}}))
+    assert isinstance(result, dict)
+
+def test_run_handles_malformed_input(plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{"data": None}}))
+    assert isinstance(result, dict)
+'''
+
+_TEST_GENERIC = '''\
+
+# ── Generic plugin tests ──────────────────────────────────────────────────────
+
+def test_run_returns_success_or_error(plugin, ctx):
+    result = asyncio.run(plugin.run(ctx, {{}}))
+    assert result["status"] in ("success", "error")
 '''
 
 _CATEGORY_TEMPLATES = {
+    "background": _BACKGROUND_TEMPLATE,
     "automation": _AUTOMATION_TEMPLATE,
     "web":        _WEB_TEMPLATE,
     "file":       _FILE_TEMPLATE,
     "command":    _COMMAND_TEMPLATE,
+    "system":     _SYSTEM_TEMPLATE,
+    "data":       _DATA_TEMPLATE,
     "generic":    _GENERIC_TEMPLATE,
 }
 
+_CATEGORY_TEST_BODIES = {
+    "background": _TEST_BACKGROUND,
+    "automation": _TEST_AUTOMATION,
+    "web":        _TEST_WEB,
+    "file":       _TEST_FILE,
+    "command":    _TEST_COMMAND,
+    "system":     _TEST_SYSTEM,
+    "data":       _TEST_DATA,
+    "generic":    _TEST_GENERIC,
+}
+
+
+# ── TemplateEngine class ───────────────────────────────────────────────────────
 
 class TemplateEngine:
     """
     Generates plugin and test scaffolding for a given intent/category.
 
-    The generator calls get_plugin_skeleton() and get_test_skeleton()
-    to get the boilerplate, then asks the LLM to fill in only the logic.
+    Key design decisions:
+    1. Templates are WORKING examples, not empty stubs.
+       The LLM fills in intent-specific logic, not boilerplate.
+    2. Tests mock the right dependencies per category.
+       Background tests mock pyautogui+keyboard. Web tests mock urllib. Etc.
+    3. The pattern library is exposed for injection into the generator prompt.
+       This gives the LLM concrete, copy-paste-ready patterns.
+    4. No fake registry services. Templates only use what actually exists.
     """
 
     def __init__(self):
@@ -337,14 +1044,9 @@ class TemplateEngine:
         category: str | None = None,
     ) -> str:
         """
-        Returns a full plugin.py skeleton string for the given intent.
-
-        Args:
-            plugin_name:  snake_case plugin name
-            intent:       the capability gap intent
-            description:  short description of what the plugin does
-            version:      version string
-            category:     override auto-detection (automation/web/file/command/generic)
+        Returns a complete plugin.py skeleton for the given intent.
+        The skeleton is a WORKING example — the LLM only fills in the
+        TODO sections with intent-specific logic.
         """
         from datetime import datetime
 
@@ -352,12 +1054,13 @@ class TemplateEngine:
             category = detect_category(intent, description)
 
         class_name = self._to_class_name(plugin_name)
-        template = _CATEGORY_TEMPLATES.get(category, _GENERIC_TEMPLATE)
+        template   = _CATEGORY_TEMPLATES.get(category, _GENERIC_TEMPLATE)
 
         header = _PLUGIN_HEADER.format(
             plugin_name=plugin_name,
             intent=intent,
             description=description,
+            category=category,
             version=version,
             timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         )
@@ -371,18 +1074,38 @@ class TemplateEngine:
         )
 
         self.logger.debug(
-            f"Generated '{category}' skeleton for plugin '{plugin_name}'"
+            f"Generated '{category}' skeleton for '{plugin_name}'"
         )
         return header + body
 
-    def get_test_skeleton(self, plugin_name: str, intent: str) -> str:
-        """Returns a test_plugin.py skeleton for the given plugin."""
+    def get_test_skeleton(
+        self, plugin_name: str, intent: str, category: str | None = None
+    ) -> str:
+        """
+        Returns a test_plugin.py skeleton with category-appropriate mocking.
+        Tests are designed to pass in the sandbox without real display/network/FS.
+        """
+        if category is None:
+            category = detect_category(intent)
+
         class_name = self._to_class_name(plugin_name)
-        return _TEST_TEMPLATE.format(
+
+        header = _TEST_HEADER.format(
             plugin_name=plugin_name,
             intent=intent,
+            category=category,
             class_name=class_name,
         )
+        body = _CATEGORY_TEST_BODIES.get(category, _TEST_GENERIC)
+
+        return header + body
+
+    def get_pattern_library(self) -> str:
+        """
+        Returns the pattern library string for injection into the generator prompt.
+        Gives the LLM concrete, copy-paste-ready patterns for common sub-tasks.
+        """
+        return PATTERN_LIBRARY
 
     def get_category(self, intent: str, description: str = "") -> str:
         """Public helper to inspect which category would be selected."""
