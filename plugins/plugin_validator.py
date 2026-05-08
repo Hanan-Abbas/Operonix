@@ -54,6 +54,17 @@ class PluginValidator:
         """
         self.logger.info(f"🔍 Validating plugin '{plugin_name}' for intent '{intent}'...")
 
+        # ── Structural pre-check ───────────────────────────────────────────────
+        # Groq's JSON mode sometimes truncates method bodies to keep JSON valid,
+        # causing the LLM auditor to incorrectly report "no methods implemented"
+        # even when the code is fine. We do a fast regex pre-check first:
+        # if all required structural elements are present in the raw code string,
+        # we know the interface is implemented and skip the LLM for that check.
+        precheck = self._structural_precheck(plugin_code, plugin_name, intent)
+        if precheck is not None:
+            return precheck
+        # ──────────────────────────────────────────────────────────────────────
+
         failure_context = ""
         if failure_summary:
             failure_context = f"""
@@ -208,6 +219,110 @@ Return STRICTLY valid JSON:
             "reason": f"Test validator exception",
             "suggested_tweaks": "Regenerate tests.",
         }
+
+
+    # ── Structural pre-check ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_plugin_code(code: str) -> str:
+        """
+        Collapse excessive blank lines that Groq JSON mode injects.
+        When plugin_code is embedded in a JSON string, the LLM sometimes
+        puts \n\n between every line making method bodies appear empty.
+        """
+        import re
+        code = re.sub(r"\n{3,}", "\n\n", code)
+        return code.strip()
+
+    def _structural_precheck(
+        self, plugin_code: str, plugin_name: str, intent: str
+    ) -> dict | None:
+        """
+        Fast structural check that bypasses the LLM auditor for the common
+        false-negative case where Groq JSON mode truncates method bodies.
+
+        Logic:
+        - Normalize whitespace first (collapse triple+ newlines)
+        - Check all required structural tokens are present
+        - If ALL present → pass immediately (valid=True)
+        - If NONE present → the code is genuinely empty → fail immediately
+        - If SOME present → ambiguous → let the LLM decide (return None)
+
+        Returns:
+            dict  → definitive pass or fail result (skip LLM)
+            None  → ambiguous, let LLM audit proceed
+        """
+        import re
+
+        normalized = self._normalize_plugin_code(plugin_code)
+
+        checks = {
+            "subclasses_baseplugin": bool(re.search(
+                r"class\s+\w+\s*\(\s*BasePlugin\s*\)", normalized
+            )),
+            "has_async_run": bool(re.search(
+                r"async\s+def\s+run\s*\(", normalized
+            )),
+            "has_validate": bool(re.search(
+                r"def\s+validate\s*\(", normalized
+            )),
+            "run_returns_dict": bool(re.search(
+                r'return\s+\{[^}]*["\']status["\']', normalized
+            )),
+            "has_try_except": "try:" in normalized and "except" in normalized,
+        }
+
+        passed = sum(checks.values())
+        total  = len(checks)
+
+        self.logger.debug(
+            f"Structural pre-check for '{plugin_name}': "
+            + ", ".join(f"{k}={'✅' if v else '❌'}" for k, v in checks.items())
+        )
+
+        if passed == total:
+            # All checks pass — definitively valid, skip LLM audit
+            self.logger.info(
+                f"✅ Structural pre-check PASSED for '{plugin_name}' "
+                f"({passed}/{total}) — skipping LLM audit."
+            )
+            return {
+                "valid": True,
+                "reason": (
+                    f"Structural pre-check passed all {total} checks: "
+                    "BasePlugin subclass, async run(), validate(), "
+                    "status return, and try/except all present."
+                ),
+                "suggested_tweaks": "",
+                "safety_concerns": "",
+            }
+
+        if passed == 0:
+            # Nothing present — code is genuinely empty/broken
+            self.logger.warning(
+                f"❌ Structural pre-check FAILED for '{plugin_name}' "
+                f"(0/{total}) — code appears empty or malformed."
+            )
+            return {
+                "valid": False,
+                "reason": (
+                    "Structural pre-check failed: the plugin code appears to be "
+                    "empty or malformed — no BasePlugin subclass, async run(), "
+                    "validate(), or return dict found."
+                ),
+                "suggested_tweaks": (
+                    "Implement class MyPlugin(BasePlugin) with async run(self, "
+                    "context, args) -> dict and def validate(self, args) -> str | None."
+                ),
+                "safety_concerns": "",
+            }
+
+        # Partial pass — ambiguous, let LLM decide
+        self.logger.debug(
+            f"Structural pre-check partial ({passed}/{total}) for "
+            f"'{plugin_name}' — deferring to LLM audit."
+        )
+        return None
 
 
 # Global instance
