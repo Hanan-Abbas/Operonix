@@ -336,4 +336,197 @@ class TerminalResolver:
 
         return records
 
-    
+    @staticmethod
+    def _find_pts(pid: int) -> Optional[str]:
+        """
+        Find the pseudo-terminal device (pts) for a process.
+        Reads /proc/<pid>/fd/* looking for char devices that match /dev/pts/*.
+        """
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(os.path.join(fd_dir, fd))
+                    if target.startswith("/dev/pts/"):
+                        return target
+                except OSError:
+                    continue
+        except OSError:
+            pass
+
+        # Fallback: check /proc/<pid>/stat for the controlling tty
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                fields = f.read().split()
+                # Field 7 (0-indexed) is tty_nr
+                tty_nr = int(fields[6])
+                if tty_nr > 0:
+                    minor = tty_nr & 0xFF
+                    return f"/dev/pts/{minor}"
+        except (OSError, IndexError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _read_proc_cwd(pid: int) -> Optional[str]:
+        try:
+            return os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return None
+
+    # ── CWD scoring ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cwd_score(terminal_cwd: Optional[str], task_cwd: Optional[str]) -> float:
+        """
+        Return 0.0–1.0 score for how closely terminal_cwd matches task_cwd.
+
+        Rules:
+          1.0 — exact match
+          0.8 — terminal is a subdirectory of task_cwd
+          0.6 — task_cwd is a subdirectory of terminal_cwd (terminal is parent)
+          0.3 — same root project (first two path segments match)
+          0.0 — no relation
+        """
+        if not terminal_cwd or not task_cwd:
+            return 0.0
+        tc = terminal_cwd.rstrip("/")
+        sc = task_cwd.rstrip("/")
+        if tc == sc:
+            return 1.0
+        if tc.startswith(sc + "/"):
+            return 0.8
+        if sc.startswith(tc + "/"):
+            return 0.6
+        # Compare first two segments
+        tc_parts = tc.split("/")[:3]
+        sc_parts = sc.split("/")[:3]
+        if tc_parts == sc_parts:
+            return 0.3
+        return 0.0
+
+    # ── Profile hint from command text ───────────────────────────────────────
+
+    @staticmethod
+    def _profile_hint_from_command(command: str) -> Optional[str]:
+        """
+        Inspect the raw command text to see if we can force a profile.
+        Returns "ghost", "bridge", "lab", or None (let scoring decide).
+        """
+        first_token = command.strip().split()[0] if command.strip() else ""
+        cmd_lower = command.lower()
+
+        if first_token in _FORCE_BRIDGE:
+            return "bridge"
+        if any(kw in cmd_lower for kw in _FORCE_LAB):
+            return "lab"
+        return None
+
+    # ── Main resolution logic ─────────────────────────────────────────────────
+
+    def resolve(
+        self,
+        cwd: Optional[str] = None,
+        command: str = "",
+        profile_hint: Optional[str] = None,   # "ghost" | "bridge" | "lab" | None
+        venv_path: Optional[str] = None,
+    ) -> ResolveResult:
+        """
+        Determine the optimal execution profile for the given command.
+
+        Args:
+            cwd          — working directory from the task payload (from HotkeyListener)
+            command      — raw command string (used for force-profile detection)
+            profile_hint — explicit override from intent_parser ("ghost"/"bridge"/"lab")
+            venv_path    — path to venv activate script, if known
+
+        Returns:
+            One of: GhostTarget, BridgeTarget, LabTarget, AmbiguousTarget
+        """
+        # ── 1. Apply explicit profile hint (intent_parser or capability) ──────
+        effective_hint = profile_hint or self._profile_hint_from_command(command)
+
+        if effective_hint == "ghost":
+            return GhostTarget(venv_path=venv_path, cwd=cwd)
+
+        if effective_hint == "lab":
+            return LabTarget(terminal_bin=self._terminal_bin or "xterm", cwd=cwd)
+
+        # ── 2. Discover available terminals ───────────────────────────────────
+        terminals = self._list_terminals()
+
+        if not terminals:
+            # No terminals visible — fall back to Ghost
+            log.info("TerminalResolver: no terminals found — using Ghost profile")
+            return GhostTarget(venv_path=venv_path, cwd=cwd)
+
+        # ── 3. Score each terminal by CWD match + temporal recency ────────────
+        scored: list[tuple[float, _TerminalRecord]] = []
+        for rec in terminals:
+            cwd_s = self._cwd_score(rec.cwd, cwd)
+            # Recency bonus: position in focus_stack (0 = most recent)
+            try:
+                stack_pos = list(self._focus_stack).index(rec.window_id)
+                recency = max(0.0, 1.0 - stack_pos * 0.15)
+            except ValueError:
+                recency = 0.0
+            score = cwd_s * 0.7 + recency * 0.3
+            scored.append((score, rec))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        best_score, best_rec = scored[0]
+
+        # ── 4. Check for ambiguity ─────────────────────────────────────────────
+        # Ambiguous if two or more terminals share the top score (within 0.05)
+        # AND their CWD matches equally — meaning we cannot pick deterministically.
+        top_group = [
+            rec for score, rec in scored
+            if abs(score - best_score) < 0.05 and best_score > 0.0
+        ]
+
+        if len(top_group) > 1 and effective_hint == "bridge":
+            # Forced bridge but truly ambiguous — ask the user
+            candidates = [
+                BridgeTarget(
+                    pts_path=rec.pts_path or "",
+                    window_id=rec.window_id,
+                    window_title=rec.title,
+                    cwd=rec.cwd,
+                )
+                for rec in top_group
+                if rec.pts_path
+            ]
+            if len(candidates) > 1:
+                log.info(
+                    "TerminalResolver: ambiguous Bridge — %d candidates", len(candidates)
+                )
+                return AmbiguousTarget(candidates=candidates)
+
+        # ── 5. Decide profile based on best score ─────────────────────────────
+        if best_score >= 0.3 and best_rec.pts_path:
+            # Good CWD match or recent focus — use Bridge
+            log.info(
+                "TerminalResolver: Bridge → %s (score=%.2f, pts=%s)",
+                best_rec.title, best_score, best_rec.pts_path,
+            )
+            return BridgeTarget(
+                pts_path=best_rec.pts_path,
+                window_id=best_rec.window_id,
+                window_title=best_rec.title,
+                cwd=best_rec.cwd,
+            )
+
+        if effective_hint == "bridge":
+            # Caller explicitly wanted bridge but no good candidate
+            # → spawn a Lab terminal so the user still sees something
+            log.info("TerminalResolver: bridge requested but no match — falling to Lab")
+            return LabTarget(terminal_bin=self._terminal_bin or "xterm", cwd=cwd)
+
+        # Low/no CWD match and no forced profile → Ghost
+        log.info("TerminalResolver: Ghost profile (best_score=%.2f)", best_score)
+        return GhostTarget(venv_path=venv_path, cwd=cwd)
+
+
+# Singleton
+terminal_resolver = TerminalResolver()
