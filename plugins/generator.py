@@ -207,6 +207,7 @@ class PluginGenerator:
                 plugin_dir=plugin_dir,
                 intent=intent,
                 failure_summary=failure_context,
+                category=category,
             )
 
             if pipeline_report["passed"]:
