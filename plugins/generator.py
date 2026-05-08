@@ -177,7 +177,7 @@ class PluginGenerator:
             description=f"Auto-generated plugin to handle: {intent}",
             category=category,
         )
-        test_skeleton = template_engine.get_test_skeleton(plugin_name, intent)
+        test_skeleton = template_engine.get_test_skeleton(plugin_name, intent, category=category)
 
         # Step 4: Generation + retry loop
         for attempt in range(MAX_GENERATION_ATTEMPTS):
@@ -260,66 +260,118 @@ class PluginGenerator:
         failure_context: dict,
     ) -> tuple[str, str, dict]:
         """
-        Calls DeepSeek to generate plugin code and tests.
+        Calls the LLM to generate plugin code and tests.
         Returns (plugin_code, test_code, metadata_dict).
+
+        Uses a two-call approach:
+          Call 1 (no JSON mode) — generates the full plugin.py and test code
+                                   as plain text with clear separators.
+                                   Plain text avoids Groq JSON mode truncation
+                                   of multi-line code strings.
+          Call 2 (JSON mode)   — generates only the small metadata dict.
         """
         common_reasons = failure_context.get("common_reasons", [])
-        prompt = f"""
-You are an expert Python developer for a self-evolving AI OS agent.
+        prev_attempts  = failure_context.get("previous_attempts", [])
+
+        # ── Call 1: Generate code as plain text (no JSON mode) ────────────────
+        # Embedding code in JSON causes Groq to escape newlines and truncate
+        # method bodies, making the validator think no methods are implemented.
+        code_prompt = f"""You are an expert Python developer for a self-evolving AI OS agent.
 Generate a complete, production-quality plugin to handle the failing intent.
 
 FAILING INTENT: "{intent}"
+PLUGIN CATEGORY: {failure_context.get('category', category if 'category' in dir() else 'generic')}
 CONSECUTIVE FAILURES: {failure_context.get('consecutive_failures', 0)}
 COMMON FAILURE REASONS: {common_reasons}
-PREVIOUS ATTEMPT FAILURES: {failure_context.get('previous_attempts', [])}
+PREVIOUS ATTEMPT FAILURES: {prev_attempts}
 
-PLUGIN SKELETON (fill in the TODO sections with real logic):
+PATTERN LIBRARY — working code patterns for common tasks, copy what you need:
+{template_engine.get_pattern_library()}
+
+PLUGIN SKELETON (fill in the TODO sections with real, working logic):
 ```python
 {skeleton}
 ```
 
-TEST SKELETON (fill in with real test cases):
+TEST SKELETON (fill in with real test cases that match your implementation):
 ```python
 {test_skeleton}
 ```
 
 CRITICAL RULES:
 1. The plugin class MUST subclass BasePlugin
-2. Do NOT add sys.path manipulation or from __future__ imports — these are injected automatically by the runtime before execution.
+2. Do NOT add sys.path manipulation or from __future__ imports — injected automatically.
 3. ALWAYS import asyncio at the top if you use await anywhere
 4. run() MUST return a dict with a "status" key ("success" or "error")
 5. Access ALL services via: capability_registry.get("service_name")
 6. NEVER import from automation/, context/, core/, or safety/ directly
 7. ALL exceptions must be caught and returned as {{"status": "error", "message": str(e)}}
 8. Tests must be runnable standalone with pytest (no external services needed)
-9. NEVER put Python comments or special characters inside the JSON string values
+9. Use time.sleep() inside threads, asyncio.sleep() inside async functions
 
-Return ONLY valid JSON with this exact structure:
+Output EXACTLY this format — no other text before or after:
+
+===PLUGIN_CODE===
+<complete plugin.py source code here>
+===TEST_CODE===
+<complete test_plugin.py source code here>
+===END===
+"""
+        # ── Call 2: Metadata only (small JSON, no code) ───────────────────────
+        meta_prompt = f"""Return ONLY valid JSON metadata for a plugin named '{plugin_name}'.
+No markdown, no explanation, just the JSON object.
+
 {{
-    "plugin_code": "<full plugin.py content as a string>",
-    "tests": "<full test_plugin.py content as a string>",
-    "metadata": {{
-        "name": "{plugin_name}",
-        "description": "<one sentence description>",
-        "permissions": ["<list of permissions needed>"],
-        "risk_level": "low",
-        "capabilities": ["<list of intent strings>"]
-    }}
+    "name": "{plugin_name}",
+    "description": "<one sentence: what this plugin does for intent '{intent}'>",
+    "permissions": ["ui_interaction"],
+    "risk_level": "low",
+    "capabilities": ["{intent}"]
 }}
 """
         try:
-            result = await llm_client.generate(prompt, use_json=True)
+            # Call 1: plain text code generation
+            raw_text = await llm_client.generate(code_prompt, use_json=False)
 
-            if isinstance(result, dict):
-                plugin_code = result.get("plugin_code", "")
-                tests       = result.get("tests", "")
-                metadata    = result.get("metadata", {})
+            plugin_code = ""
+            tests = ""
 
-                # Clean up markdown wrappers if LLM added them
-                plugin_code = self._strip_code_fences(plugin_code)
-                tests       = self._strip_code_fences(tests)
+            if raw_text and isinstance(raw_text, str):
+                plugin_code, tests = self._parse_separator_response(raw_text)
+            elif isinstance(raw_text, dict):
+                # Fallback: LLM still returned JSON despite use_json=False
+                plugin_code = self._strip_code_fences(raw_text.get("plugin_code", ""))
+                tests       = self._strip_code_fences(raw_text.get("tests", ""))
 
-                return plugin_code, tests, metadata
+            # Call 2: metadata JSON
+            metadata = {}
+            try:
+                meta_result = await llm_client.generate(meta_prompt, use_json=True)
+                if isinstance(meta_result, dict) and "name" in meta_result:
+                    metadata = meta_result
+            except Exception as me:
+                self.logger.debug(f"Metadata generation failed (non-fatal): {me}")
+                metadata = {
+                    "name": plugin_name,
+                    "description": f"Auto-generated plugin for: {intent}",
+                    "permissions": [],
+                    "risk_level": "low",
+                    "capabilities": [intent],
+                }
+
+            if not metadata:
+                metadata = {
+                    "name": plugin_name,
+                    "description": f"Auto-generated plugin for: {intent}",
+                    "permissions": [],
+                    "risk_level": "low",
+                    "capabilities": [intent],
+                }
+
+            snippet = (plugin_code or "")[:200].replace("\n", "↵")
+            self.logger.debug(f"Generated code snippet: {snippet}")
+
+            return plugin_code, tests, metadata
 
         except Exception as e:
             self.logger.error(f"LLM generation failed: {e}")
@@ -480,6 +532,50 @@ Return ONLY valid JSON with this exact structure:
         if not name:
             name = "auto_plugin"
         return f"{name}_plugin"
+
+    @staticmethod
+    def _parse_separator_response(raw: str) -> tuple[str, str]:
+        """
+        Parses the separator-based code generation response.
+
+        Expected format:
+            ===PLUGIN_CODE===
+            <plugin.py content>
+            ===TEST_CODE===
+            <test_plugin.py content>
+            ===END===
+
+        Falls back gracefully if the LLM didn't follow the format exactly.
+        """
+        import re
+
+        # Try exact separator format first
+        plugin_match = re.search(
+            r"===PLUGIN_CODE===\s*(.*?)\s*===TEST_CODE===",
+            raw, re.DOTALL
+        )
+        test_match = re.search(
+            r"===TEST_CODE===\s*(.*?)\s*===END===",
+            raw, re.DOTALL
+        )
+
+        if plugin_match and test_match:
+            plugin_code = plugin_match.group(1).strip()
+            tests       = test_match.group(1).strip()
+            # Strip any markdown fences the LLM added inside the sections
+            plugin_code = PluginGenerator._strip_code_fences(plugin_code)
+            tests       = PluginGenerator._strip_code_fences(tests)
+            return plugin_code, tests
+
+        # Fallback: try to extract two code blocks from the raw text
+        blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw, re.DOTALL)
+        if len(blocks) >= 2:
+            return blocks[0].strip(), blocks[1].strip()
+        if len(blocks) == 1:
+            return blocks[0].strip(), ""
+
+        # Last resort: treat the whole response as plugin code
+        return raw.strip(), ""
 
     @staticmethod
     def _strip_code_fences(code: str) -> str:
