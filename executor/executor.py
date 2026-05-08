@@ -5,34 +5,26 @@ Central task executor.
 
 Changes from original
 ──────────────────────
-BUG FIX 1 — capability result handling
-    The original code called capability_registry.execute() and on success
-    tried to call _resolve_tool_call() to find a *second* tool to run.
-    But file_ops capabilities now execute the operation directly and return:
-        {"success": True/False, "result": <value>, "intent": <name>}
+HYBRID EXECUTION (new):
+    Before calling tool.run() for any shell/command action, the executor now
+    calls terminal_resolver.resolve() to determine the execution profile
+    (Ghost / Bridge / Lab / Ambiguous) and injects it into args["_profile"].
 
-    New logic:
-      a. If capability_registry.execute() returns (True, dict_with_success_key):
-         - If dict["success"] is True  -> operation already done, return it.
-         - If dict["success"] is False -> treat as failure, move to next tier.
-      b. If capability returned (True, non-dict) -> treat as legacy success.
-      c. If capability returned (False, ...) -> move to next tier as before.
-      d. If capability returned (True, dict) WITHOUT "success" key:
-         -> original _resolve_tool_call() path (for capabilities that still
-            return action descriptors instead of executing directly).
+    If the result is AmbiguousTarget (multiple terminals share the same CWD),
+    execution is suspended and "target_selection_required" is published on the
+    bus.  panel_controller listens to this event and shows the Target Selection
+    UI.  When the user picks a terminal, "target_selected" is published back
+    and the executor resumes with the chosen BridgeTarget.
 
-BUG FIX 2 — context enrichment before step execution
-    "location": "current window" must be resolved to a real CWD before the
-    capability runs.  _enrich_context_with_cwd() injects the CWD of the
-    focused window into context["cwd"] using window_detector data that the
-    orchestrator already captured in context["window_title"] /
-    context["app_context"].
+    output routing:
+    shell_tool publishes "command_output_ready" (Ghost) or "command_dispatched"
+    (Bridge/Lab) on the bus.  WebSocket bridge forwards both to the dashboard
+    automatically.  The executor also publishes "action_completed" (already
+    wired to panel_controller for inline snippet display).
 
-BUG FIX 3 — preferred_method waterfall now correctly maps tier names to
-    the tool_type strings used in ToolRegistry ("command" tier -> shell_tool).
-    Previously "command" was passed raw; ToolRegistry keys are "shell_tool".
-
-No other logic changed.
+BUG FIX 1 — capability result handling (unchanged from previous version)
+BUG FIX 2 — context enrichment before step execution (unchanged)
+BUG FIX 3 — preferred_method waterfall tier mapping (unchanged)
 """
 from __future__ import annotations
 
@@ -48,6 +40,13 @@ from capabilities.registry import capability_registry
 from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
+from core.terminal_resolver import (
+    AmbiguousTarget,
+    BridgeTarget,
+    GhostTarget,
+    LabTarget,
+    terminal_resolver,
+)
 from executor.error_classifier import error_classifier
 from executor.fallback_manager import FallbackManager
 from executor.focus_manager import FocusManager
@@ -60,21 +59,26 @@ from tools.tool_selector import tool_selector
 logger = logging.getLogger("Executor")
 
 error_handler = ErrorHandler(event_bus=bus, logger=logger)
-retry_manager = RetryManager()
+retry_manager  = RetryManager()
 fallback_manager = FallbackManager()
-focus_manager = FocusManager()
+focus_manager  = FocusManager()
 
 # Canonical waterfall order — do not reorder.
 _WATERFALL_ORDER: list[str] = ["plugin", "api", "command", "ui"]
 
 # Map waterfall tier names -> ToolRegistry tool_type strings.
-# This is the single place where tier->tool translation lives.
 _TIER_TO_TOOL_TYPE: dict[str, str] = {
     "plugin":  "plugin",
     "api":     "api_tool",
     "command": "shell_tool",
     "ui":      "ui_tool",
 }
+
+# Actions that go through profile resolution
+_SHELL_ACTIONS: frozenset[str] = frozenset({
+    "run_command", "execute", "git_op", "check_status",
+    "execute_script", "navigate",
+})
 
 
 class Executor:
@@ -84,8 +88,14 @@ class Executor:
         self.is_running = False
         self.restricted_actions: set[str] = set()
 
+        # Stores suspended tasks waiting for target selection UI response.
+        # Structure: { task_id: (step, context, preferred_method, resolve_future) }
+        self._pending_target_selections: dict[str, asyncio.Future] = {}
+
     async def start(self) -> None:
         bus.subscribe("task_safety_cleared", self.execute_plan)
+        # Listen for the user's terminal selection from the panel UI
+        bus.subscribe("target_selected", self._on_target_selected)
         self.is_running = True
         logger.info("Executor Online | OS: %s", self.os_name)
         logger.info("Tools Loaded: %d", len(tool_registry.list_tools()))
@@ -103,8 +113,6 @@ class Executor:
         intent    = task_data.get("intent")
         preferred_method: str | None = task_data.get("preferred_method")
 
-        # BUG FIX 2: inject CWD into context so _resolve_path() in file_ops
-        # can resolve "current window" to a real filesystem path.
         self._enrich_context_with_cwd(context)
 
         logger.info(
@@ -206,6 +214,34 @@ class Executor:
                     "focus_failed",
                 )
 
+        # ── Hybrid profile resolution ──────────────────────────────────────
+        # For shell actions, resolve the execution profile BEFORE the waterfall
+        # so shell_tool.run() receives args["_profile"] and doesn't need to
+        # re-resolve (avoids a second wmctrl/xdotool round-trip).
+        if action in _SHELL_ACTIONS:
+            args = await self._resolve_and_inject_profile(
+                task_id, step_index, action, args, context
+            )
+            # _resolve_and_inject_profile returns None if execution must be
+            # suspended waiting for user target selection.
+            if args is None:
+                # Suspend and wait for target_selected event (max 60 s)
+                try:
+                    chosen_profile = await asyncio.wait_for(
+                        self._wait_for_target_selection(task_id),
+                        timeout=60.0,
+                    )
+                except asyncio.TimeoutError:
+                    return (
+                        False,
+                        "Target selection timed out — command cancelled.",
+                        "target_selection",
+                    )
+                # Rebuild args with the user-chosen profile
+                args = dict(step.get("args", {}))
+                args["_profile"] = chosen_profile
+                args["cwd"] = context.get("cwd")
+
         waterfall = self._build_waterfall(preferred_method)
         tried_tools: list[str] = []
         fallback_attempts = 0
@@ -217,7 +253,6 @@ class Executor:
             if fallback_attempts >= max_fallbacks:
                 break
 
-            # BUG FIX 3: translate tier name to tool_type for ToolSelector
             tool_type_hint = _TIER_TO_TOOL_TYPE.get(tier, tier)
 
             tool_type, tool_instance = await tool_selector.select_best_tool(
@@ -250,13 +285,10 @@ class Executor:
             )
 
             try:
-                # ── Execute via capability registry ──────────────────────
                 cap_ok, cap_result = await capability_registry.execute(
                     action, context, args
                 )
 
-                # BUG FIX 1a: capability executed directly and returned a
-                # result dict with a "success" key.
                 if cap_ok and isinstance(cap_result, dict) and "success" in cap_result:
                     if cap_result["success"]:
                         logger.debug(
@@ -265,22 +297,15 @@ class Executor:
                         )
                         return True, cap_result.get("result"), method_used
                     else:
-                        # Capability reported its own failure — fall through
                         last_error = cap_result.get("result", "Capability failed")
                         logger.warning(
                             "Capability '%s' reported failure: %s", action, last_error
                         )
-                        # Don't retry via next tier for logic errors
-                        # (e.g. missing path) — propagate immediately.
                         return False, last_error, method_used
 
-                # BUG FIX 1b: capability returned (True, non-dict) — legacy
-                # success with a plain value (e.g. string).
                 if cap_ok and not isinstance(cap_result, dict):
                     return True, cap_result, method_used
 
-                # BUG FIX 1c: capability returned an action descriptor dict
-                # (old style — no "success" key).  Use _resolve_tool_call().
                 if cap_ok and isinstance(cap_result, dict):
                     cap_intent = cap_result.get("intent") or action
                     cap_args   = cap_result.get("args") or args
@@ -297,7 +322,6 @@ class Executor:
                         else:
                             last_error = f"Tool not registered: {tool_name_r}"
                     else:
-                        # No tool mapping and no direct execution — treat ok
                         return True, cap_result, method_used
                 else:
                     last_error = cap_result
@@ -312,7 +336,6 @@ class Executor:
                     context={"task_id": task_id, "step": step_index},
                 )
 
-            # Classify error and decide retry vs. next tier
             category = await self._classify_error_dynamically(str(last_error))
             should_retry = await retry_manager.should_retry(
                 task_id, step_index, error_type=category
@@ -334,33 +357,131 @@ class Executor:
             method_used,
         )
 
-    # ── Context enrichment (BUG FIX 2) ────────────────────────────────────
+    # ── Hybrid profile resolution ──────────────────────────────────────────
+
+    async def _resolve_and_inject_profile(
+        self,
+        task_id: str,
+        step_index: int,
+        action: str,
+        args: dict,
+        context: dict,
+    ) -> dict | None:
+        """
+        Call terminal_resolver.resolve() and inject the result into args.
+
+        Returns:
+            dict — args with "_profile" injected (ready to pass to shell_tool)
+            None — execution must suspend; AmbiguousTarget was returned and the
+                   target_selection_required event has been published.
+        """
+        cwd          = context.get("cwd") or args.get("cwd")
+        command      = args.get("command") or args.get("cmd", "")
+        profile_hint = args.get("profile_hint")   # set by intent_parser if known
+        venv_path    = args.get("venv_path") or context.get("venv_path")
+
+        profile = await asyncio.get_running_loop().run_in_executor(
+            None,
+            terminal_resolver.resolve,
+            cwd,
+            command,
+            profile_hint,
+            venv_path,
+        )
+
+        logger.info(
+            "Task [%s] step %d profile resolved: %s",
+            task_id, step_index, type(profile).__name__,
+        )
+
+        if isinstance(profile, AmbiguousTarget):
+            # Publish target_selection_required — panel_controller shows the UI
+            bus.publish(
+                "target_selection_required",
+                {
+                    "task_id":    task_id,
+                    "step_index": step_index,
+                    "command":    command,
+                    "candidates": [
+                        {
+                            "pts_path":     c.pts_path,
+                            "window_id":    c.window_id,
+                            "window_title": c.window_title,
+                            "cwd":          c.cwd,
+                        }
+                        for c in profile.candidates
+                    ],
+                },
+                source="executor",
+            )
+            return None   # caller will wait for target_selected
+
+        # Inject resolved profile into a copy of args
+        enriched = dict(args)
+        enriched["_profile"] = profile
+        enriched["cwd"] = cwd
+        return enriched
+
+    async def _wait_for_target_selection(self, task_id: str) -> BridgeTarget:
+        """
+        Return a Future that resolves when the user picks a terminal in the
+        panel Target Selection UI.  _on_target_selected() resolves it.
+        """
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_target_selections[task_id] = fut
+        return await fut
+
+    async def _on_target_selected(self, event: Any) -> None:
+        """
+        EventBus handler for target_selected.
+        Published by panel_controller when the user clicks a terminal in the
+        Target Selection UI.
+
+        Expected payload:
+            {
+                "task_id":      str,
+                "pts_path":     str,
+                "window_id":    str,
+                "window_title": str,
+                "cwd":          str | None,
+            }
+        """
+        data = event.data if hasattr(event, "data") else event
+        task_id = data.get("task_id")
+
+        fut = self._pending_target_selections.pop(task_id, None)
+        if fut is None or fut.done():
+            logger.warning(
+                "target_selected for unknown/already-resolved task: %s", task_id
+            )
+            return
+
+        chosen = BridgeTarget(
+            pts_path     = data.get("pts_path", ""),
+            window_id    = data.get("window_id", ""),
+            window_title = data.get("window_title", ""),
+            cwd          = data.get("cwd"),
+        )
+        fut.set_result(chosen)
+        logger.info(
+            "Target selected for task [%s]: %s (%s)",
+            task_id, chosen.window_title, chosen.pts_path,
+        )
+
+    # ── Context enrichment (BUG FIX 2 — unchanged) ────────────────────────
 
     @staticmethod
     def _enrich_context_with_cwd(context: dict) -> None:
-        """
-        Inject context["cwd"] so that file_ops._resolve_path() can map
-        "current window" to a real filesystem path.
-
-        Resolution order:
-          1. context["cwd"] already set (e.g. by orchestrator) — leave it.
-          2. context["window_cwd"] set by window_detector — use it.
-          3. context["app_context"]["cwd"] — nested app context.
-          4. os.getcwd() as final fallback.
-        """
         if context.get("cwd"):
-            return  # already set
-
+            return
         if context.get("window_cwd"):
             context["cwd"] = context["window_cwd"]
             return
-
         app_ctx = context.get("app_context") or {}
         if app_ctx.get("cwd"):
             context["cwd"] = app_ctx["cwd"]
             return
-
-        # Final fallback — use the process CWD
         context["cwd"] = os.getcwd()
         logger.debug("cwd not in context — using process CWD: %s", context["cwd"])
 
@@ -368,7 +489,6 @@ class Executor:
 
     @staticmethod
     def _build_waterfall(preferred_method: str | None) -> list[str]:
-        """Return the execution tier order starting from preferred_method."""
         if preferred_method and preferred_method in _WATERFALL_ORDER:
             idx = _WATERFALL_ORDER.index(preferred_method)
             return _WATERFALL_ORDER[idx:] + _WATERFALL_ORDER[:idx]
@@ -408,15 +528,8 @@ class Executor:
     def _resolve_tool_call(
         self, intent: str, args: dict
     ) -> tuple[str, str, dict] | None:
-        """
-        Maps an abstract intent to a registered concrete tool.
-
-        tool_registry.list_tools() returns list[str] (names).
-        tool_registry.get_all_tools() returns dict[str, instance].
-        We use get_all_tools() to get both name and instance.
-        """
         try:
-            all_tools = tool_registry.get_all_tools()  # dict[str, instance]
+            all_tools = tool_registry.get_all_tools()
         except Exception:
             all_tools = {}
 
