@@ -242,6 +242,98 @@ class Executor:
                 args["_profile"] = chosen_profile
                 args["cwd"] = context.get("cwd")
 
+        # ── Direct plugin dispatch (before waterfall) ────────────────────────
+        # plugin_registry is separate from capability_registry — the waterfall's
+        # "plugin" tier calls tool_selector which doesn't reach plugin instances.
+        # We query plugin_registry directly first: find a plugin whose capabilities
+        # match the action, validate, and call run(). This is the primary path
+        # for all user-generated plugins.
+        try:
+            from plugins.registry import plugin_registry
+            from brain.intent_matcher import match_intent_local
+
+            # Build a map of capability → plugin entry for fast lookup
+            cap_map: dict[str, Any] = {}
+            for pname, entry in plugin_registry.entries.items():
+                caps = getattr(entry.manifest, "capabilities", []) or []
+                for cap in caps:
+                    cap_map[str(cap).lower().replace("_", " ")] = entry
+                # Also match by plugin name itself
+                cap_map[pname.replace("_", " ")] = entry
+
+            if cap_map:
+                action_normalized = action.lower().replace("_", " ").strip()
+                plugin_threshold = float(
+                    getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55)
+                )
+                matched_cap, score = match_intent_local(
+                    action_normalized, list(cap_map.keys()),
+                    threshold=plugin_threshold,
+                )
+                if matched_cap:
+                    matched_entry = cap_map[matched_cap]
+                    plugin_instance = matched_entry.instance
+                    plugin_name = matched_entry.manifest.name
+
+                    # Validate args before calling run()
+                    validation_error = plugin_instance.validate(args or {})
+                    if validation_error:
+                        logger.warning(
+                            "Plugin '%s' validation failed: %s — proceeding with defaults.",
+                            plugin_name, validation_error,
+                        )
+
+                    logger.info(
+                        "🔌 Plugin dispatch: '%s' → '%s' (cap='%s', score=%.2f)",
+                        action, plugin_name, matched_cap, score,
+                    )
+                    bus.publish(
+                        "tool_selected",
+                        {
+                            "task_id":    task_id,
+                            "step_index": step_index,
+                            "tool_type":  "plugin",
+                            "tool_name":  plugin_name,
+                            "method":     "plugin",
+                        },
+                        source="executor",
+                    )
+
+                    try:
+                        plugin_result = await asyncio.wait_for(
+                            plugin_instance.run(context, args or {}),
+                            timeout=float(getattr(settings, "PLUGIN_TIMEOUT", 60.0)),
+                        )
+                        if isinstance(plugin_result, dict):
+                            status = plugin_result.get("status", "error")
+                            if status == "success":
+                                return True, plugin_result.get("result"), "plugin"
+                            else:
+                                # Plugin returned error — log and fall through
+                                # to waterfall so other tiers can try
+                                logger.warning(
+                                    "Plugin '%s' returned error: %s — falling through.",
+                                    plugin_name,
+                                    plugin_result.get("message", "unknown error"),
+                                )
+                        else:
+                            # Non-dict return — still treat as success
+                            return True, plugin_result, "plugin"
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Plugin '%s' timed out after %ss.",
+                            plugin_name,
+                            getattr(settings, "PLUGIN_TIMEOUT", 60.0),
+                        )
+                    except Exception as plugin_exc:
+                        logger.warning(
+                            "Plugin '%s' raised exception: %s — falling through.",
+                            plugin_name, plugin_exc,
+                        )
+        except Exception as exc:
+            logger.debug("Plugin dispatch pre-check failed (non-fatal): %s", exc)
+        # ─────────────────────────────────────────────────────────────────────
+
         waterfall = self._build_waterfall(preferred_method)
         tried_tools: list[str] = []
         fallback_attempts = 0
