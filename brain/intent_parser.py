@@ -10,6 +10,16 @@ The suggestion engine calls `intent_parser.parse(text)` synchronously
 (wrapped in asyncio.to_thread) to power live suggestions as the user types.
 `parse()` is a thin synchronous wrapper that runs the async `_parse_async`
 pipeline in a safe way — it never blocks the Qt thread.
+
+HYBRID EXECUTION CHANGE:
+  _parse_async() now asks the LLM for an additional "profile" key alongside
+  intent/confidence/parameters.  Valid values: "ghost", "bridge", "lab", None.
+  This is stored in the returned dict and forwarded through the orchestrator
+  into the executor, which injects it into args["profile_hint"] before calling
+  terminal_resolver.resolve().
+
+  Commands like "source", "export", "activate" are keyword-forced to "bridge"
+  in _keyword_profile_hint() so they are correct even when the LLM is offline.
 """
 from __future__ import annotations
 
@@ -22,6 +32,22 @@ from core.config import settings
 from core.event_bus import bus
 from memory.vector_store import vector_store
 from brain.llm_client import llm_client
+
+
+# Commands that MUST run in the user's shell (Bridge profile).
+# Source, export, cd etc. modify the calling shell's environment — running
+# them in a silent subprocess is always wrong.
+_BRIDGE_KEYWORDS: frozenset[str] = frozenset({
+    "source", "activate", "deactivate", "export", "unset",
+    "cd", "alias", "nvm", "pyenv", "rbenv", "conda",
+})
+
+# Commands that benefit from a visible interactive terminal (Lab profile).
+_LAB_KEYWORDS: frozenset[str] = frozenset({
+    "pytest", "npm run", "yarn", "make", "docker", "jupyter",
+    "ipython", "uvicorn", "gunicorn", "flask", "django",
+    "manage.py", "cargo", "go run", "mvn", "gradle",
+})
 
 
 class IntentParser:
@@ -85,9 +111,10 @@ class IntentParser:
 
         Returns a dict with at minimum:
             {
-                "intent":     str | None,
-                "confidence": float,          # 0.0 – 1.0
-                "parameters": dict,
+                "intent":       str | None,
+                "confidence":   float,          # 0.0 – 1.0
+                "parameters":   dict,
+                "profile_hint": str | None,     # "ghost" | "bridge" | "lab" | None
             }
         """
         try:
@@ -109,7 +136,12 @@ class IntentParser:
 
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("IntentParser.parse: failed for %r — %s", text, exc)
-            return {"intent": None, "confidence": 0.0, "parameters": {}}
+            return {
+                "intent":       None,
+                "confidence":   0.0,
+                "parameters":   {},
+                "profile_hint": None,
+            }
 
     def _run_parse_sync(self, text: str) -> dict[str, Any]:
         """Run _parse_async in a brand-new event loop (used from non-async threads)."""
@@ -119,18 +151,48 @@ class IntentParser:
         """
         Async core of parse(): asks the LLM to classify the intent,
         then resolves and validates it against the registry.
+
+        The LLM prompt now requests an additional "profile" field so the
+        executor knows whether to run Ghost / Bridge / Lab without a second
+        LLM call.
         """
         if not text.strip():
-            return {"intent": None, "confidence": 0.0, "parameters": {}}
+            return {
+                "intent":       None,
+                "confidence":   0.0,
+                "parameters":   {},
+                "profile_hint": None,
+            }
 
-        # Ask LLM to extract intent + parameters from natural language.
+        # ── Keyword-based profile hint (works offline) ────────────────────
+        # Apply before the LLM call so even degraded mode gets this right.
+        keyword_profile = self._keyword_profile_hint(text)
+
         prompt = f"""
-Extract the intent and parameters from this user command.
-Return ONLY JSON with keys: intent (snake_case string), confidence (0.0-1.0 float), parameters (dict).
+Extract the intent, parameters, and execution profile from this user command.
+Return ONLY JSON with these keys:
+  intent       — snake_case string (e.g. "run_command", "open_file")
+  confidence   — float 0.0-1.0
+  parameters   — dict of extracted arguments
+  profile      — one of "ghost", "bridge", "lab", or null
+                 ghost  = run silently in background (output piped, no visible terminal)
+                 bridge = inject into user's active terminal (must use for: source, export, cd, activate, conda, nvm)
+                 lab    = spawn new visible terminal window (use for: pytest, jupyter, docker, long-running servers)
+                 null   = let the system decide
 
 User command: {text}
 
-Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"path": "main.py"}}}}
+Example:
+  Input:  "source venv/bin/activate"
+  Output: {{"intent": "run_command", "confidence": 0.97, "parameters": {{"command": "source venv/bin/activate"}}, "profile": "bridge"}}
+
+Example:
+  Input:  "run pytest on the tests folder"
+  Output: {{"intent": "run_command", "confidence": 0.91, "parameters": {{"command": "pytest tests/"}}, "profile": "lab"}}
+
+Example:
+  Input:  "list files in current directory"
+  Output: {{"intent": "run_command", "confidence": 0.95, "parameters": {{"command": "ls -la"}}, "profile": "ghost"}}
 """
         try:
             raw = await asyncio.wait_for(
@@ -138,28 +200,68 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
                 timeout=4.0,
             )
             if isinstance(raw, dict):
-                llm_intent = raw.get("intent", "")
-                confidence = float(raw.get("confidence", 0.5))
-                parameters = raw.get("parameters", {})
+                llm_intent  = raw.get("intent", "")
+                confidence  = float(raw.get("confidence", 0.5))
+                parameters  = raw.get("parameters", {})
+                llm_profile = raw.get("profile")
             else:
-                llm_intent = str(raw)
-                confidence = 0.5
-                parameters = {}
+                llm_intent  = str(raw)
+                confidence  = 0.5
+                parameters  = {}
+                llm_profile = None
         except Exception as exc:  # noqa: BLE001
             self.logger.debug("_parse_async: LLM failed — %s", exc)
             # Graceful degradation: attempt a keyword-based guess.
-            llm_intent = self._keyword_guess(text)
-            confidence = 0.3 if llm_intent else 0.0
-            parameters = {}
+            llm_intent  = self._keyword_guess(text)
+            confidence  = 0.3 if llm_intent else 0.0
+            parameters  = {}
+            llm_profile = None
+
+        # Keyword profile takes priority over LLM profile when the command
+        # clearly requires a specific execution environment.
+        effective_profile = keyword_profile or (
+            llm_profile if llm_profile in ("ghost", "bridge", "lab") else None
+        )
 
         # Resolve against the capability registry (exact + semantic).
         resolved = await self._resolve_intent(llm_intent)
         if resolved:
-            return {"intent": resolved, "confidence": confidence, "parameters": parameters}
+            return {
+                "intent":       resolved,
+                "confidence":   confidence,
+                "parameters":   parameters,
+                "profile_hint": effective_profile,
+            }
 
         # If resolution failed, still return the raw LLM guess so the
         # suggestion engine can show a low-confidence ui-fallback row.
-        return {"intent": llm_intent or None, "confidence": confidence * 0.4, "parameters": parameters}
+        return {
+            "intent":       llm_intent or None,
+            "confidence":   confidence * 0.4,
+            "parameters":   parameters,
+            "profile_hint": effective_profile,
+        }
+
+    # ── Profile keyword detection ─────────────────────────────────────────────
+
+    @staticmethod
+    def _keyword_profile_hint(text: str) -> str | None:
+        """
+        Fast offline check — returns a forced profile if the first token of
+        the command is in a known set.  Never calls the LLM.
+
+        Called before _parse_async so even when the LLM is unavailable the
+        profile hint is correct for the most critical cases (source, export…).
+        """
+        stripped = text.strip().lstrip("run ").lstrip("execute ").lstrip("the command ")
+        first_token = stripped.split()[0].lower() if stripped.split() else ""
+        text_lower = text.lower()
+
+        if first_token in _BRIDGE_KEYWORDS:
+            return "bridge"
+        if any(kw in text_lower for kw in _LAB_KEYWORDS):
+            return "lab"
+        return None
 
     @staticmethod
     def _keyword_guess(text: str) -> str:
@@ -170,70 +272,79 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
         """
         lower = text.lower()
         mapping = {
-            ("open", "launch", "start", "run"):    "open_file",
-            ("close", "quit", "exit", "kill"):     "close_app",
-            ("search", "find", "look"):            "web_search",
-            ("write", "create", "make", "new"):    "create_file",
-            ("delete", "remove", "trash"):         "file_delete",
-            ("read", "show", "display", "print"):  "read_file",
+            ("open", "launch", "start", "run"):     "open_file",
+            ("close", "quit", "exit", "kill"):      "close_app",
+            ("search", "find", "look"):             "web_search",
+            ("write", "create", "make", "new"):     "create_file",
+            ("delete", "remove", "trash"):          "file_delete",
+            ("read", "show", "display", "print"):   "read_file",
             ("edit", "modify", "change", "update"): "modify_code",
-            ("copy", "duplicate"):                 "copy_file",
-            ("move", "rename"):                    "move_file",
+            ("copy", "duplicate"):                  "copy_file",
+            ("move", "rename"):                     "move_file",
         }
         for verbs, intent in mapping.items():
             if any(v in lower for v in verbs):
                 return intent
         return ""
 
-    # ── EventBus path (unchanged from original) ───────────────────────────────
+    # ── EventBus path ─────────────────────────────────────────────────────────
 
     async def validate_and_route(self, event: Any) -> None:
         """Validates if the intent is supported and determines the next step."""
-        task_id = event.data.get("task_id")
-        raw_intent = event.data.get("intent")
-        params = event.data.get("parameters", {})
+        task_id      = event.data.get("task_id")
+        raw_intent   = event.data.get("intent")
+        params       = event.data.get("parameters", {})
+        # profile_hint may have been injected by the orchestrator from the
+        # panel payload (set during parse()) or arrive via the event itself.
+        profile_hint = event.data.get("profile_hint") or self._keyword_profile_hint(
+            params.get("command", "")
+        )
 
-        self.logger.info("🔍 Validating intent: '%s' for task %s", raw_intent, task_id)
+        self.logger.info(
+            "🔍 Validating intent: '%s' for task %s (profile_hint=%s)",
+            raw_intent, task_id, profile_hint,
+        )
 
         resolved_intent = await self._resolve_intent(raw_intent)
         if not resolved_intent:
             self.logger.error("❌ Unknown intent: %s. Aborting task.", raw_intent)
-            await bus.emit("task_failed", {"task_id": task_id, "error": f"Unsupported intent: {raw_intent}"})
+            await bus.emit(
+                "task_failed",
+                {"task_id": task_id, "error": f"Unsupported intent: {raw_intent}"},
+            )
             return
 
         requires_confirmation = await self._is_risky(resolved_intent, params)
 
         if requires_confirmation:
-            self.logger.warning("⚠️ High-risk operation detected: %s. Escalating.", resolved_intent)
-            # FIX 1: event name must be "confirmation_required" — that is what
-            #         ConfirmationManager.hold_for_confirmation subscribes to.
-            #         The old name "request_confirmation" had no subscriber.
-            # FIX 2: include full_task so ConfirmationManager can re-publish
-            #         the complete payload as task_safety_cleared on Allow.
-            #         Without it, approval re-published an empty envelope and
-            #         the executor received a task with no steps.
+            self.logger.warning(
+                "⚠️ High-risk operation detected: %s. Escalating.", resolved_intent
+            )
             full_task = {
-                "task_id":    task_id,
-                "intent":     resolved_intent,
-                "parameters": params,
+                "task_id":      task_id,
+                "intent":       resolved_intent,
+                "parameters":   params,
+                "profile_hint": profile_hint,
                 "steps": [
-                    {"action": resolved_intent, "args": params}
+                    {"action": resolved_intent, "args": {**params, "profile_hint": profile_hint}}
                 ],
             }
             await bus.emit("confirmation_required", {
-                "task_id":    task_id,
-                "intent":     resolved_intent,
-                "parameters": params,
-                "risk_level": "high",
-                "reason":     f"High-risk intent '{resolved_intent}' requires your approval.",
-                "step_data":  {"action": resolved_intent, "args": params},
-                "full_task":  full_task,
+                "task_id":      task_id,
+                "intent":       resolved_intent,
+                "parameters":   params,
+                "profile_hint": profile_hint,
+                "risk_level":   "high",
+                "reason":       f"High-risk intent '{resolved_intent}' requires your approval.",
+                "step_data":    {"action": resolved_intent, "args": params},
+                "full_task":    full_task,
             })
         else:
             await bus.emit("intent_validated", {
-                "task_id": task_id,
-                "intent": resolved_intent,
-                "parameters": params,
+                "task_id":      task_id,
+                "intent":       resolved_intent,
+                "parameters":   params,
+                "profile_hint": profile_hint,
             })
 
     async def _resolve_intent(self, raw_intent: str) -> str | None:
@@ -256,10 +367,10 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
         # ── Tier 0: Plugin registry — check before built-in capabilities ──────
         # Plugins are in plugin_registry (separate from capability_registry).
         # Match against each plugin's capabilities list using local fuzzy match.
+        plugin_caps: list[str] = []
         try:
             from plugins.loader import plugin_loader
             from brain.intent_matcher import match_intent_local
-            plugin_caps: list[str] = []
             # Map capability string → plugin name for lookup after match
             cap_to_plugin: dict[str, str] = {}
             for entry in plugin_loader.list_plugins():
@@ -321,7 +432,7 @@ Example output: {{"intent": "open_file", "confidence": 0.92, "parameters": {{"pa
                     raw_intent, closest_intent, confidence,
                 )
                 return closest_intent
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.debug("_resolve_intent: vector search failed — %s", exc)
 
         # ── Tier 3: Local token/sequence matcher (no external deps) ───────────
@@ -386,8 +497,10 @@ Return ONLY JSON: {{"risk_score": <int>}}
             response = await llm_client.generate(prompt, use_json=True)
             risk_score = response.get("risk_score", 1)
             return risk_score >= 7
-        except Exception as exc:  # noqa: BLE001
-            self.logger.error("Risk evaluation failed: %s. Defaulting to SAFE/Locked mode.", exc)
+        except Exception as exc:
+            self.logger.error(
+                "Risk evaluation failed: %s. Defaulting to SAFE/Locked mode.", exc
+            )
             return True
 
 
