@@ -112,3 +112,46 @@ class _TerminalRecord:
 
 # ── Resolver ─────────────────────────────────────────────────────────────────
 
+class TerminalResolver:
+    """
+    Singleton that owns self-window awareness and terminal discovery.
+    Call init() once at startup; then call resolve() per command.
+    """
+
+    def __init__(self) -> None:
+        self._own_window_ids: set[str] = set()
+        self._own_pids: set[int] = set()
+        self._focus_stack: Deque[str] = deque(maxlen=10)  # window_ids, newest first
+        self._terminal_bin: Optional[str] = None
+        self._poll_task: Optional[asyncio.Task] = None
+        self._initialized: bool = False
+
+    # ── Startup ──────────────────────────────────────────────────────────────
+
+    async def init(self) -> None:
+        """
+        Must be called once at startup from an async context.
+
+        1. Find and blacklist our own terminal window.
+        2. Detect the best available terminal emulator binary.
+        3. Start the background focus-stack polling loop.
+        """
+        if self._initialized:
+            return
+        self._initialized = True
+
+        # Step 1 — self-window awareness
+        await asyncio.get_running_loop().run_in_executor(None, self._discover_own_window)
+
+        # Step 2 — detect terminal binary
+        self._terminal_bin = self._detect_terminal_bin()
+        log.info("TerminalResolver: terminal binary = %s", self._terminal_bin)
+
+        # Step 3 — start polling loop
+        self._poll_task = asyncio.create_task(self._poll_focus_loop())
+        log.info(
+            "TerminalResolver: initialized (own window IDs = %s)",
+            self._own_window_ids,
+        )
+
+    
