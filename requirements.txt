@@ -18,27 +18,30 @@ pyobjc-framework-AppKit; sys_platform == 'darwin'
 pyobjc-framework-Quartz; sys_platform == 'darwin'
 
 # --- TOOLS & AUTOMATION (The "Hands") ---
-pyautogui        # Cross-platform UI automation (Click/Type)
-mouse            # Fine-grained mouse control fallback
-keyboard         # Global hotkey listening and simulation
-pillow           # Image processing for screenshots and vision fallback
-faster-whisper   # STT (was 'fast-whisper' — correct package name is faster-whisper)
+pyautogui
+mouse
+keyboard
+pillow
+faster-whisper
 pyaudio
-silero-vad       # VAD (correct PyPI name is silero-vad, not silero_vad)
+silero-vad
 pyttsx3
 openwakeword
-noisereduce      # Spectral noise gating (was misspelled 'noicereduce')
+noisereduce
 
-# --- NEURAL NOISE SUPPRESSION (Optional, CPU-only) ---
-# Uncomment to enable DeepFilterNet neural noise reduction:
-# deepfilternet
-# torch            # Required by deepfilternet; install CPU-only build:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# --- NEURAL NOISE SUPPRESSION (CRITICAL: Python 3.12 Sync) ---
+# We use 2.2.0 specifically to maintain 'torchaudio.backend' for DeepFilterNet 0.5.6
+torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cpu
+deepfilternet==0.5.6
+deepfilterlib==0.5.6
 
 # --- BRAIN, VECTOR DB & MATH ---
-numpy            # Fast matrix math for cosine similarity calculations
-scikit-learn     # Vector distance calculations
-chromadb         # Vector store for memory/capability mapping
+# Pin packaging to keep DeepFilterNet happy and prevent ChromaDB from upgrading it
+packaging>=23.0,<24.0
+numpy<2.0.0      # DeepFilterNet requires numpy < 2.0
+scikit-learn
+chromadb
 
 # --- UTILITIES ---
 python-dotenv    # For managing API keys and local configs in core/config.py
