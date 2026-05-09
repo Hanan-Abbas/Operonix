@@ -387,6 +387,18 @@ class Orchestrator:
         Called when ConfirmationManager clears a task after user approval.
         Merges accumulated context and preserves profile_hint so the executor
         still knows which execution profile to use.
+
+        BUG 2+3 FIX:
+          confirmation_manager.handle_user_response() re-publishes the original
+          confirmation_required payload as task_safety_cleared.  That payload
+          has steps nested inside full_task, not at the top level.
+          This method promotes full_task.steps → top-level steps so the
+          executor finds them via task_data.get("steps").
+
+          It also merges the context accumulated by handle_context_snapshot
+          (which has the real cwd from the user's terminal window) into the
+          payload, since inject_task_metadata is never re-called on the
+          confirmation path.
         """
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
@@ -395,15 +407,34 @@ class Orchestrator:
 
         payload = dict(event.data)
 
-        # Merge context
+        # ── BUG 2 FIX: promote full_task.steps to top-level ──────────────
+        # executor.execute_plan reads task_data.get("steps").
+        # If top-level steps is missing or empty, pull from full_task.
+        if not payload.get("steps"):
+            full_task_steps = (payload.get("full_task") or {}).get("steps") or []
+            if full_task_steps:
+                payload["steps"] = full_task_steps
+                logger.debug(
+                    "Task [%s] promoted %d steps from full_task to top level",
+                    task_id, len(full_task_steps),
+                )
+
+        # ── BUG 3 FIX: merge accumulated context (cwd, window_title, etc.) ─
+        # handle_context_snapshot() already populated active_tasks[task_id]["context"]
+        # with the real terminal cwd.  Merge it into the payload now since
+        # inject_task_metadata won't be called again on this path.
         if task:
-            existing_ctx = payload.get("context") or {}
-            payload["context"] = {**task.get("context", {}), **existing_ctx}
+            accumulated_ctx = task.get("context") or {}
+            existing_ctx    = payload.get("context") or {}
+            # accumulated_ctx wins for keys not already in payload context
+            payload["context"] = {**accumulated_ctx, **existing_ctx}
+            if accumulated_ctx.get("cwd") and not existing_ctx.get("cwd"):
+                logger.debug(
+                    "Task [%s] context.cwd restored from active_tasks: %s",
+                    task_id, accumulated_ctx["cwd"],
+                )
 
         # ── HYBRID EXECUTION: ensure profile_hint survives the safety pause ─
-        # When a high-risk command is paused for confirmation, the user may
-        # take several seconds to respond.  During that time nothing changes
-        # the profile decision — preserve it from the original task.
         if not payload.get("profile_hint") and task.get("profile_hint"):
             payload["profile_hint"] = task["profile_hint"]
             logger.debug(
