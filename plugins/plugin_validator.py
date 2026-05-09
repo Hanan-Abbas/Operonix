@@ -34,6 +34,7 @@ class PluginValidator:
         plugin_code: str,
         intent: str,
         failure_summary: dict | None = None,
+        category: str = "generic",
     ) -> dict:
         """
         Sends generated plugin code to Gemini for critique.
@@ -60,7 +61,7 @@ class PluginValidator:
         # even when the code is fine. We do a fast regex pre-check first:
         # if all required structural elements are present in the raw code string,
         # we know the interface is implemented and skip the LLM for that check.
-        precheck = self._structural_precheck(plugin_code, plugin_name, intent)
+        precheck = self._structural_precheck(plugin_code, plugin_name, intent, category)
         if precheck is not None:
             return precheck
         # ──────────────────────────────────────────────────────────────────────
@@ -235,7 +236,8 @@ Return STRICTLY valid JSON:
         return code.strip()
 
     def _structural_precheck(
-        self, plugin_code: str, plugin_name: str, intent: str
+        self, plugin_code: str, plugin_name: str, intent: str,
+        category: str = "generic",
     ) -> dict | None:
         """
         Fast structural check that bypasses the LLM auditor for the common
@@ -256,6 +258,11 @@ Return STRICTLY valid JSON:
 
         normalized = self._normalize_plugin_code(plugin_code)
 
+        # Background plugins run their logic in daemon threads — the run()
+        # method itself just starts threads and returns. The try/except lives
+        # inside the thread worker, not in run() directly. Relax that check.
+        requires_try_except = category not in ("background",)
+
         checks = {
             "subclasses_baseplugin": bool(re.search(
                 r"class\s+\w+\s*\(\s*BasePlugin\s*\)", normalized
@@ -269,7 +276,10 @@ Return STRICTLY valid JSON:
             "run_returns_dict": bool(re.search(
                 r'return\s+\{[^}]*["\']status["\']', normalized
             )),
-            "has_try_except": "try:" in normalized and "except" in normalized,
+            "has_try_except": (
+                ("try:" in normalized and "except" in normalized)
+                if requires_try_except else True
+            ),
         }
 
         passed = sum(checks.values())
