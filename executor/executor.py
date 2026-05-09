@@ -3,28 +3,25 @@ executor/executor.py
 ─────────────────────
 Central task executor.
 
-Changes from original
-──────────────────────
-HYBRID EXECUTION (new):
-    Before calling tool.run() for any shell/command action, the executor now
-    calls terminal_resolver.resolve() to determine the execution profile
-    (Ghost / Bridge / Lab / Ambiguous) and injects it into args["_profile"].
+CAVEAT 1 FIX — Dual event subscription:
+    Executor now subscribes to BOTH:
+      • "task_safety_cleared"  — fired by ConfirmationManager after user approves
+      • "task_dispatched_safe" — fired by Orchestrator direct flow
+    Both channels call execute_plan().  A _seen_task_ids dedup set ensures a
+    task arriving on both channels is only executed once.
 
-    If the result is AmbiguousTarget (multiple terminals share the same CWD),
-    execution is suspended and "target_selection_required" is published on the
-    bus.  panel_controller listens to this event and shows the Target Selection
-    UI.  When the user picks a terminal, "target_selected" is published back
-    and the executor resumes with the chosen BridgeTarget.
+    profile_hint is extracted by _extract_profile_hint() from wherever it
+    lives: top-level key OR steps[0].args["profile_hint"].  It is then
+    normalised into every step's args before the waterfall runs.
 
-    output routing:
-    shell_tool publishes "command_output_ready" (Ghost) or "command_dispatched"
-    (Bridge/Lab) on the bus.  WebSocket bridge forwards both to the dashboard
-    automatically.  The executor also publishes "action_completed" (already
-    wired to panel_controller for inline snippet display).
+CAVEAT 3 FIX — Bridge PermissionError self-heal:
+    _check_bridge_permission() runs a pre-flight O_WRONLY open on the pts
+    device before shell_tool even tries.  On PermissionError or missing pts
+    it automatically downgrades to GhostTarget and publishes
+    "bridge_permission_denied" to the dashboard with the exact fix command.
 
-BUG FIX 1 — capability result handling (unchanged from previous version)
-BUG FIX 2 — context enrichment before step execution (unchanged)
-BUG FIX 3 — preferred_method waterfall tier mapping (unchanged)
+HYBRID EXECUTION — unchanged from previous version.
+BUG FIX 1, 2, 3  — unchanged from previous version.
 """
 from __future__ import annotations
 
@@ -58,15 +55,13 @@ from tools.tool_selector import tool_selector
 
 logger = logging.getLogger("Executor")
 
-error_handler = ErrorHandler(event_bus=bus, logger=logger)
-retry_manager  = RetryManager()
+error_handler    = ErrorHandler(event_bus=bus, logger=logger)
+retry_manager    = RetryManager()
 fallback_manager = FallbackManager()
-focus_manager  = FocusManager()
+focus_manager    = FocusManager()
 
-# Canonical waterfall order — do not reorder.
 _WATERFALL_ORDER: list[str] = ["plugin", "api", "command", "ui"]
 
-# Map waterfall tier names -> ToolRegistry tool_type strings.
 _TIER_TO_TOOL_TYPE: dict[str, str] = {
     "plugin":  "plugin",
     "api":     "api_tool",
@@ -74,7 +69,6 @@ _TIER_TO_TOOL_TYPE: dict[str, str] = {
     "ui":      "ui_tool",
 }
 
-# Actions that go through profile resolution
 _SHELL_ACTIONS: frozenset[str] = frozenset({
     "run_command", "execute", "git_op", "check_status",
     "execute_script", "navigate",
@@ -87,37 +81,64 @@ class Executor:
         self.os_name = platform.system()
         self.is_running = False
         self.restricted_actions: set[str] = set()
-
-        # Stores suspended tasks waiting for target selection UI response.
-        # Structure: { task_id: (step, context, preferred_method, resolve_future) }
         self._pending_target_selections: dict[str, asyncio.Future] = {}
 
+        # CAVEAT 1 — dedup guard
+        # Prevents double-execution when a task arrives on both
+        # task_safety_cleared and task_dispatched_safe.
+        self._seen_task_ids: set[str] = set()
+
     async def start(self) -> None:
-        bus.subscribe("task_safety_cleared", self.execute_plan)
-        # Listen for the user's terminal selection from the panel UI
-        bus.subscribe("target_selected", self._on_target_selected)
+        # CAVEAT 1 — subscribe to BOTH execution trigger channels
+        bus.subscribe("task_safety_cleared",  self.execute_plan)
+        bus.subscribe("task_dispatched_safe", self.execute_plan)
+        bus.subscribe("target_selected",      self._on_target_selected)
         self.is_running = True
         logger.info("Executor Online | OS: %s", self.os_name)
         logger.info("Tools Loaded: %d", len(tool_registry.list_tools()))
 
-    # ── Main entry point ──────────────────────────────────────────────────
+    # ── Main entry point ───────────────────────────────────────────────────
 
     async def execute_plan(self, event: Any) -> None:
         metrics.total_tasks += 1
-        start = time.time()
-
+        start     = time.time()
         task_data = event.data
         task_id   = task_data.get("task_id")
-        steps     = task_data.get("steps", [])
-        context   = task_data.get("context", {})
-        intent    = task_data.get("intent")
+
+        # CAVEAT 1 — dedup: skip if already running from the other channel
+        if task_id in self._seen_task_ids:
+            logger.debug(
+                "execute_plan: task [%s] already running — ignoring duplicate "
+                "from '%s'.", task_id, getattr(event, "name", "unknown"),
+            )
+            return
+        self._seen_task_ids.add(task_id)
+
+        steps            = task_data.get("steps", [])
+        context          = task_data.get("context", {})
+        intent           = task_data.get("intent")
         preferred_method: str | None = task_data.get("preferred_method")
 
         self._enrich_context_with_cwd(context)
 
+        # CAVEAT 1 — normalise profile_hint into every step's args
+        # so _resolve_and_inject_profile always finds it via args["profile_hint"]
+        # regardless of which event channel delivered the task.
+        profile_hint_top = task_data.get("profile_hint")
+        if not profile_hint_top and steps:
+            profile_hint_top = steps[0].get("args", {}).get("profile_hint")
+
+        if profile_hint_top:
+            for step in steps:
+                step.setdefault("args", {})
+                if "profile_hint" not in step["args"]:
+                    step["args"]["profile_hint"] = profile_hint_top
+
         logger.info(
-            "Starting Task [%s] with %d steps (preferred=%s)",
-            task_id, len(steps), preferred_method or "auto",
+            "Starting Task [%s] — %d steps | preferred=%s | profile_hint=%s",
+            task_id, len(steps),
+            preferred_method or "auto",
+            profile_hint_top or "auto",
         )
 
         method_used: str = "unknown"
@@ -150,9 +171,8 @@ class Executor:
                     source="executor",
                 )
                 retry_manager.clear_task(task_id)
-                logger.error(
-                    "Task [%s] failed at step %d: %s", task_id, step_index, result
-                )
+                self._seen_task_ids.discard(task_id)
+                logger.error("Task [%s] failed at step %d: %s", task_id, step_index, result)
                 return
 
             context["last_result"] = result
@@ -184,9 +204,8 @@ class Executor:
             source="executor",
         )
         retry_manager.clear_task(task_id)
-        logger.info(
-            "Task [%s] completed successfully (method=%s)", task_id, method_used
-        )
+        self._seen_task_ids.discard(task_id)
+        logger.info("Task [%s] completed (method=%s)", task_id, method_used)
 
     # ── Step execution ─────────────────────────────────────────────────────
 
@@ -215,17 +234,11 @@ class Executor:
                 )
 
         # ── Hybrid profile resolution ──────────────────────────────────────
-        # For shell actions, resolve the execution profile BEFORE the waterfall
-        # so shell_tool.run() receives args["_profile"] and doesn't need to
-        # re-resolve (avoids a second wmctrl/xdotool round-trip).
         if action in _SHELL_ACTIONS:
             args = await self._resolve_and_inject_profile(
                 task_id, step_index, action, args, context
             )
-            # _resolve_and_inject_profile returns None if execution must be
-            # suspended waiting for user target selection.
             if args is None:
-                # Suspend and wait for target_selected event (max 60 s)
                 try:
                     chosen_profile = await asyncio.wait_for(
                         self._wait_for_target_selection(task_id),
@@ -237,45 +250,33 @@ class Executor:
                         "Target selection timed out — command cancelled.",
                         "target_selection",
                     )
-                # Rebuild args with the user-chosen profile
                 args = dict(step.get("args", {}))
                 args["_profile"] = chosen_profile
-                args["cwd"] = context.get("cwd")
+                args["cwd"]      = context.get("cwd")
 
-        # ── Direct plugin dispatch (before waterfall) ────────────────────────
-        # plugin_registry is separate from capability_registry — the waterfall's
-        # "plugin" tier calls tool_selector which doesn't reach plugin instances.
-        # We query plugin_registry directly first: find a plugin whose capabilities
-        # match the action, validate, and call run(). This is the primary path
-        # for all user-generated plugins.
+        # ── Direct plugin dispatch ─────────────────────────────────────────
         try:
             from plugins.registry import plugin_registry
             from brain.intent_matcher import match_intent_local
 
-            # Build a map of capability → plugin entry for fast lookup
             cap_map: dict[str, Any] = {}
             for pname, entry in plugin_registry.entries.items():
                 caps = getattr(entry.manifest, "capabilities", []) or []
                 for cap in caps:
                     cap_map[str(cap).lower().replace("_", " ")] = entry
-                # Also match by plugin name itself
                 cap_map[pname.replace("_", " ")] = entry
 
             if cap_map:
                 action_normalized = action.lower().replace("_", " ").strip()
-                plugin_threshold = float(
-                    getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55)
-                )
+                plugin_threshold  = float(getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55))
                 matched_cap, score = match_intent_local(
-                    action_normalized, list(cap_map.keys()),
-                    threshold=plugin_threshold,
+                    action_normalized, list(cap_map.keys()), threshold=plugin_threshold,
                 )
                 if matched_cap:
-                    matched_entry = cap_map[matched_cap]
+                    matched_entry   = cap_map[matched_cap]
                     plugin_instance = matched_entry.instance
-                    plugin_name = matched_entry.manifest.name
+                    plugin_name     = matched_entry.manifest.name
 
-                    # Validate args before calling run()
                     validation_error = plugin_instance.validate(args or {})
                     if validation_error:
                         logger.warning(
@@ -305,48 +306,35 @@ class Executor:
                             timeout=float(getattr(settings, "PLUGIN_TIMEOUT", 60.0)),
                         )
                         if isinstance(plugin_result, dict):
-                            status = plugin_result.get("status", "error")
-                            if status == "success":
+                            if plugin_result.get("status") == "success":
                                 return True, plugin_result.get("result"), "plugin"
                             else:
-                                # Plugin returned error — log and fall through
-                                # to waterfall so other tiers can try
                                 logger.warning(
                                     "Plugin '%s' returned error: %s — falling through.",
-                                    plugin_name,
-                                    plugin_result.get("message", "unknown error"),
+                                    plugin_name, plugin_result.get("message", "unknown"),
                                 )
                         else:
-                            # Non-dict return — still treat as success
                             return True, plugin_result, "plugin"
                     except asyncio.TimeoutError:
-                        logger.warning(
-                            "Plugin '%s' timed out after %ss.",
-                            plugin_name,
-                            getattr(settings, "PLUGIN_TIMEOUT", 60.0),
-                        )
+                        logger.warning("Plugin '%s' timed out.", plugin_name)
                     except Exception as plugin_exc:
-                        logger.warning(
-                            "Plugin '%s' raised exception: %s — falling through.",
-                            plugin_name, plugin_exc,
-                        )
+                        logger.warning("Plugin '%s' exception: %s — falling through.", plugin_name, plugin_exc)
         except Exception as exc:
             logger.debug("Plugin dispatch pre-check failed (non-fatal): %s", exc)
-        # ─────────────────────────────────────────────────────────────────────
 
-        waterfall = self._build_waterfall(preferred_method)
+        # ── Waterfall ──────────────────────────────────────────────────────
+        waterfall       = self._build_waterfall(preferred_method)
         tried_tools: list[str] = []
         fallback_attempts = 0
-        max_fallbacks = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
+        max_fallbacks   = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
         last_error: Any = f"No tool available for action: {action}"
-        method_used = "unknown"
+        method_used     = "unknown"
 
         for tier in waterfall:
             if fallback_attempts >= max_fallbacks:
                 break
 
             tool_type_hint = _TIER_TO_TOOL_TYPE.get(tier, tier)
-
             tool_type, tool_instance = await tool_selector.select_best_tool(
                 {"intent": action, "method": tool_type_hint},
                 context,
@@ -354,10 +342,7 @@ class Executor:
             )
 
             if not tool_instance:
-                logger.debug(
-                    "No %s (%s) tool for '%s', trying next tier.",
-                    tier, tool_type_hint, action,
-                )
+                logger.debug("No %s tool for '%s', trying next tier.", tier, action)
                 continue
 
             tool_name = getattr(tool_instance, "name", tool_type)
@@ -377,22 +362,13 @@ class Executor:
             )
 
             try:
-                cap_ok, cap_result = await capability_registry.execute(
-                    action, context, args
-                )
+                cap_ok, cap_result = await capability_registry.execute(action, context, args)
 
                 if cap_ok and isinstance(cap_result, dict) and "success" in cap_result:
                     if cap_result["success"]:
-                        logger.debug(
-                            "Capability '%s' executed directly: %s",
-                            action, cap_result.get("result"),
-                        )
                         return True, cap_result.get("result"), method_used
                     else:
                         last_error = cap_result.get("result", "Capability failed")
-                        logger.warning(
-                            "Capability '%s' reported failure: %s", action, last_error
-                        )
                         return False, last_error, method_used
 
                 if cap_ok and not isinstance(cap_result, dict):
@@ -402,7 +378,6 @@ class Executor:
                     cap_intent = cap_result.get("intent") or action
                     cap_args   = cap_result.get("args") or args
                     resolved   = self._resolve_tool_call(cap_intent, cap_args)
-
                     if resolved:
                         tool_name_r, tool_action, tool_args = resolved
                         tool = tool_registry.get_tool(tool_name_r)
@@ -423,12 +398,11 @@ class Executor:
             except Exception as exc:
                 last_error = str(exc)
                 error_handler.handle_error(
-                    exc,
-                    component="executor",
+                    exc, component="executor",
                     context={"task_id": task_id, "step": step_index},
                 )
 
-            category = await self._classify_error_dynamically(str(last_error))
+            category     = await self._classify_error_dynamically(str(last_error))
             should_retry = await retry_manager.should_retry(
                 task_id, step_index, error_type=category
             )
@@ -459,35 +433,26 @@ class Executor:
         args: dict,
         context: dict,
     ) -> dict | None:
-        """
-        Call terminal_resolver.resolve() and inject the result into args.
-
-        Returns:
-            dict — args with "_profile" injected (ready to pass to shell_tool)
-            None — execution must suspend; AmbiguousTarget was returned and the
-                   target_selection_required event has been published.
-        """
         cwd          = context.get("cwd") or args.get("cwd")
         command      = args.get("command") or args.get("cmd", "")
-        profile_hint = args.get("profile_hint")   # set by intent_parser if known
+        profile_hint = args.get("profile_hint")
         venv_path    = args.get("venv_path") or context.get("venv_path")
 
         profile = await asyncio.get_running_loop().run_in_executor(
-            None,
-            terminal_resolver.resolve,
-            cwd,
-            command,
-            profile_hint,
-            venv_path,
+            None, terminal_resolver.resolve, cwd, command, profile_hint, venv_path,
         )
 
         logger.info(
-            "Task [%s] step %d profile resolved: %s",
-            task_id, step_index, type(profile).__name__,
+            "Task [%s] step %d → %s", task_id, step_index, type(profile).__name__,
         )
 
+        # CAVEAT 3 — Bridge pre-flight permission check
+        if isinstance(profile, BridgeTarget):
+            profile = await asyncio.get_running_loop().run_in_executor(
+                None, self._check_bridge_permission, profile, task_id, cwd,
+            )
+
         if isinstance(profile, AmbiguousTarget):
-            # Publish target_selection_required — panel_controller shows the UI
             bus.publish(
                 "target_selection_required",
                 {
@@ -506,49 +471,98 @@ class Executor:
                 },
                 source="executor",
             )
-            return None   # caller will wait for target_selected
+            return None
 
-        # Inject resolved profile into a copy of args
         enriched = dict(args)
         enriched["_profile"] = profile
-        enriched["cwd"] = cwd
+        enriched["cwd"]      = cwd
         return enriched
 
+    @staticmethod
+    def _check_bridge_permission(
+        profile: BridgeTarget,
+        task_id: str,
+        cwd: str | None,
+    ) -> BridgeTarget | GhostTarget:
+        """
+        CAVEAT 3 — pre-flight pts write permission check (runs in thread executor).
+
+        Opens the pts device O_WRONLY|O_NOCTTY and closes it immediately.
+        On PermissionError → downgrade to Ghost + publish dashboard warning.
+        On missing device → same fallback.
+        """
+        pts = profile.pts_path
+
+        if not pts or not os.path.exists(pts):
+            logger.warning("Bridge pre-flight: pts '%s' missing — downgrading to Ghost", pts)
+            bus.publish(
+                "bridge_permission_denied",
+                {
+                    "task_id":       task_id,
+                    "pts":           pts,
+                    "reason":        "pts device not found",
+                    "fallback":      "ghost",
+                    "action_needed": "Check that the target terminal is still open.",
+                },
+                source="executor",
+            )
+            return GhostTarget(cwd=cwd)
+
+        try:
+            fd = os.open(pts, os.O_WRONLY | os.O_NOCTTY)
+            os.close(fd)
+            logger.debug("Bridge pre-flight: pts '%s' writable ✓", pts)
+            return profile
+
+        except PermissionError:
+            logger.warning(
+                "Bridge pre-flight: PermissionError on '%s' — downgrading to Ghost. "
+                "Fix: echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope",
+                pts,
+            )
+            bus.publish(
+                "bridge_permission_denied",
+                {
+                    "task_id":       task_id,
+                    "pts":           pts,
+                    "reason":        "ptrace_scope hardening blocks pts write",
+                    "fallback":      "ghost",
+                    "action_needed": (
+                        "Run setup.sh OR manually: "
+                        "echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope"
+                    ),
+                },
+                source="executor",
+            )
+            return GhostTarget(cwd=cwd)
+
+        except OSError as exc:
+            logger.warning("Bridge pre-flight: OSError on '%s': %s — Ghost", pts, exc)
+            bus.publish(
+                "bridge_permission_denied",
+                {
+                    "task_id":  task_id,
+                    "pts":      pts,
+                    "reason":   f"OS error: {exc}",
+                    "fallback": "ghost",
+                },
+                source="executor",
+            )
+            return GhostTarget(cwd=cwd)
+
     async def _wait_for_target_selection(self, task_id: str) -> BridgeTarget:
-        """
-        Return a Future that resolves when the user picks a terminal in the
-        panel Target Selection UI.  _on_target_selected() resolves it.
-        """
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._pending_target_selections[task_id] = fut
         return await fut
 
     async def _on_target_selected(self, event: Any) -> None:
-        """
-        EventBus handler for target_selected.
-        Published by panel_controller when the user clicks a terminal in the
-        Target Selection UI.
-
-        Expected payload:
-            {
-                "task_id":      str,
-                "pts_path":     str,
-                "window_id":    str,
-                "window_title": str,
-                "cwd":          str | None,
-            }
-        """
-        data = event.data if hasattr(event, "data") else event
+        data    = event.data if hasattr(event, "data") else event
         task_id = data.get("task_id")
-
-        fut = self._pending_target_selections.pop(task_id, None)
+        fut     = self._pending_target_selections.pop(task_id, None)
         if fut is None or fut.done():
-            logger.warning(
-                "target_selected for unknown/already-resolved task: %s", task_id
-            )
+            logger.warning("target_selected for unknown task: %s", task_id)
             return
-
         chosen = BridgeTarget(
             pts_path     = data.get("pts_path", ""),
             window_id    = data.get("window_id", ""),
@@ -556,12 +570,9 @@ class Executor:
             cwd          = data.get("cwd"),
         )
         fut.set_result(chosen)
-        logger.info(
-            "Target selected for task [%s]: %s (%s)",
-            task_id, chosen.window_title, chosen.pts_path,
-        )
+        logger.info("Target selected [%s]: %s (%s)", task_id, chosen.window_title, chosen.pts_path)
 
-    # ── Context enrichment (BUG FIX 2 — unchanged) ────────────────────────
+    # ── Context enrichment ─────────────────────────────────────────────────
 
     @staticmethod
     def _enrich_context_with_cwd(context: dict) -> None:
@@ -599,7 +610,6 @@ class Executor:
         for category, pattern in patterns.items():
             if re.search(pattern, result_str):
                 return category
-
         prompt = (
             f"Classify this execution error into one category.\n"
             f"Error: {result_str}\n"
@@ -617,20 +627,16 @@ class Executor:
 
     # ── Tool resolution ────────────────────────────────────────────────────
 
-    def _resolve_tool_call(
-        self, intent: str, args: dict
-    ) -> tuple[str, str, dict] | None:
+    def _resolve_tool_call(self, intent: str, args: dict) -> tuple[str, str, dict] | None:
         try:
             all_tools = tool_registry.get_all_tools()
         except Exception:
             all_tools = {}
-
         for tool_name, tool_obj in all_tools.items():
             if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
                 return tool_name, intent, args
             if hasattr(tool_obj, "supported_intents") and intent in tool_obj.supported_intents:
                 return tool_name, intent, args
-
         return None
 
 
