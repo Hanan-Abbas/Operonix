@@ -171,16 +171,20 @@ class IntentParser:
         prompt = f"""
 Extract the intent, parameters, and execution profile from this user command.
 Return ONLY JSON with these keys:
-  intent       — snake_case string (e.g. "run_command", "open_file")
+  intent       — snake_case string capturing the FULL action, not just a single verb.
+                 WRONG: "click" for "start auto clicker"   RIGHT: "auto_clicker"
+                 WRONG: "open"  for "open chrome"          RIGHT: "open_chrome"
+                 WRONG: "run"   for "run pytest"           RIGHT: "run_command"
+                 Preserve compound/multi-word intents as snake_case.
   confidence   — float 0.0-1.0
-  parameters   — dict of extracted arguments
+  parameters   — dict of specific values mentioned (path, interval, hotkey, url, query, command, etc.)
   profile      — one of "ghost", "bridge", "lab", or null
                  ghost  = run silently in background (output piped, no visible terminal)
                  bridge = inject into user's active terminal (must use for: source, export, cd, activate, conda, nvm)
                  lab    = spawn new visible terminal window (use for: pytest, jupyter, docker, long-running servers)
                  null   = let the system decide
 
-User command: {text}
+User command: "{text}"
 
 Example:
   Input:  "source venv/bin/activate"
@@ -391,6 +395,17 @@ Example:
                 matched_cap, score = match_intent_local(
                     normalized, plugin_caps, threshold=plugin_threshold
                 )
+                # Substring fallback: if fuzzy match missed, check if normalized
+                # is contained in any plugin cap or vice versa. Catches cases
+                # where LLM returns a vague verb like "click" when the plugin
+                # cap is "auto clicker" — "click" is in "auto clicker".
+                if not matched_cap:
+                    for cap in plugin_caps:
+                        if (normalized in cap or cap in normalized) and len(normalized) >= 3:
+                            matched_cap = cap
+                            score = 0.6
+                            break
+
                 if matched_cap:
                     plugin_name = cap_to_plugin.get(matched_cap, matched_cap)
                     self.logger.info(
