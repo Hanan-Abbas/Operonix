@@ -39,7 +39,8 @@ SYSTEM_PACKAGES=(
     # ── Hybrid execution layer (REQUIRED for Bridge + focus-stack) ──────────
     wmctrl          # Z-order terminal list  →  TerminalResolver._list_terminals()
     xdotool         # Active window ID       →  TerminalResolver._get_active_window_id()
-    x11-utils           # WM_CLASS lookup        →  TerminalResolver._get_wm_class()
+    x11-utils
+    xterm           # WM_CLASS lookup        →  TerminalResolver._get_wm_class()
     # ── Python runtime ───────────────────────────────────────────────────────
     python3-venv
     python3-pip
