@@ -112,6 +112,18 @@
                 ],
                 "usage_count": 2,
                 "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "run_command",
+                        "args": {
+                            "command": "<COMMAND>"
+                        }
+                    }
+                ],
+                "usage_count": 2,
+                "step_count": 1
             }
         ]
     }
