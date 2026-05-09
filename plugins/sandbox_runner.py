@@ -114,6 +114,13 @@ class SandboxRunner:
 
         os.makedirs(test_dir, exist_ok=True)
 
+        # Fix double-brace escape sequences in generated test code.
+        # The LLM sometimes copies the template skeleton verbatim, including
+        # {{ }} which are .format() escapes meaning literal { }.
+        # In real Python code {{ is parsed as a set-containing-a-dict which
+        # raises TypeError at runtime. Strip them before writing.
+        test_code = self._fix_test_braces(test_code)
+
         # Patch sys.path bootstrap into the plugin before writing.
         # The sandbox subprocess has an isolated environment — the project
         # root is not on sys.path by default, causing 'No module named plugins'.
@@ -260,6 +267,55 @@ class SandboxRunner:
             self.logger.debug(
                 f"Could not clean up plugin dir '{plugin_dir}': {e}"
             )
+
+    @staticmethod
+    def _fix_test_braces(test_code: str) -> str:
+        """
+        Normalise {{ }} escape sequences in LLM-generated test code.
+
+        The test skeleton template uses {{ and }} as .format() escapes so that
+        literal braces survive the .format() call in get_test_skeleton().
+        When the LLM copies the skeleton verbatim into its output, those
+        escape sequences appear in the final test file as-is.
+
+        In real Python (non-f-string) code:
+          {{"key": "value"}}  →  BUILD_CONST_KEY_MAP + BUILD_SET
+                                  → TypeError at runtime (dict is unhashable)
+
+        We replace {{ → { and }} → } throughout the test source.
+        We skip lines that are inside triple-quoted docstrings to avoid
+        corrupting string literals that legitimately use braces.
+        """
+        import re as _re
+
+        if not test_code or ("{{" not in test_code and "}}" not in test_code):
+            return test_code
+
+        # Simple line-by-line pass — skip docstring content
+        lines = test_code.splitlines(keepends=True)
+        result = []
+        in_docstring = False
+        docstring_char = ""
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Track docstring boundaries (triple-quote toggle)
+            for quote in ('"""', "'''"):
+                count = stripped.count(quote)
+                if count % 2 == 1:          # odd occurrences → toggle
+                    if not in_docstring:
+                        in_docstring = True
+                        docstring_char = quote
+                    elif docstring_char == quote:
+                        in_docstring = False
+
+            if not in_docstring:
+                line = line.replace("{{", "{").replace("}}", "}")
+
+            result.append(line)
+
+        return "".join(result)
 
     @staticmethod
     def _patch_plugin_sys_path(plugin_code: str, plugin_dir: str) -> str:
