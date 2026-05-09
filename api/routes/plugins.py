@@ -214,12 +214,17 @@ async def reload_all_plugins() -> Dict[str, Any]:
 async def generate_plugin(
     spec: Dict[str, Any] = Body(
         ...,
-        example={
-            "name":        "weather_lookup",
-            "description": "Fetches real-time weather for a given city",
-            "intent":      "weather_lookup",
-            "capabilities": ["web", "api"],
-            "parameters":  {"city": "str"},
+        examples={
+            "weather_lookup": {
+                "summary": "Weather lookup plugin",
+                "value": {
+                    "name":         "weather_lookup",
+                    "description":  "Fetches real-time weather for a given city",
+                    "intent":       "weather_lookup",
+                    "capabilities": ["web", "api"],
+                    "parameters":   {"city": "str"},
+                },
+            }
         },
     ),
 ) -> Dict[str, Any]:
