@@ -82,6 +82,104 @@ class LifecycleManager:
         self._background_tasks: set = set()
         self.error_handler = ErrorHandler(event_bus=bus, logger=sys_logger)
 
+    # ── Dependency Sentry (CAVEAT 2) ──────────────────────────────────────────
+    # Binary manifest: (name, role, required)
+    #   required=True  → missing = error; Bridge/Lab disabled, Ghost fallback
+    #   required=False → missing = warning; specific sub-feature degraded
+    _SYSTEM_DEPS: list[tuple[str, str, bool]] = [
+        ("wmctrl",         "Z-order terminal list — Bridge/Ghost routing",       True),
+        ("xdotool",        "Active window focus-stack — Bridge routing",         True),
+        ("xprop",          "WM_CLASS terminal-type detection",                   True),
+        ("gnome-terminal", "Profile C Lab terminal (preferred)",                 False),
+        ("xterm",          "Profile C Lab terminal (fallback)",                  False),
+    ]
+
+    async def _check_system_dependencies(self) -> None:
+        """
+        Dependency Sentry — runs once at startup after the EventBus is live.
+
+        Uses shutil.which() to verify every binary in _SYSTEM_DEPS.
+        Results are published on the bus so the dashboard live-log and panel
+        status strip reflect the current state immediately.
+
+        Operonix NEVER crashes here.  Missing required binaries cause
+        terminal_resolver to fall back to Ghost automatically (it performs
+        the same shutil.which() checks internally at resolve() time).
+        """
+        missing_required: list[str] = []
+        missing_optional: list[str] = []
+        present:          list[str] = []
+
+        logger.info("🔍 Dependency Sentry: checking system binaries…")
+
+        for binary, role, required in self._SYSTEM_DEPS:
+            path = shutil.which(binary)
+            if path:
+                logger.info("  ✓ %-18s %s", binary, path)
+                present.append(binary)
+            else:
+                if required:
+                    logger.warning("  ✗ %-18s NOT FOUND (required) — %s", binary, role)
+                    missing_required.append(binary)
+                else:
+                    logger.warning("  ~ %-18s not found  (optional) — %s", binary, role)
+                    missing_optional.append(binary)
+
+        # ── Broadcast results on the bus ──────────────────────────────────────
+        if missing_required:
+            bus.publish(
+                "dependency_missing",
+                {
+                    "level":    "error",
+                    "binaries": missing_required,
+                    "message": (
+                        f"Required system binaries missing: {', '.join(missing_required)}. "
+                        f"Bridge and Lab profiles disabled — running in Ghost (background) mode. "
+                        f"Fix: sudo apt install -y {' '.join(missing_required)}"
+                    ),
+                    "fallback": "ghost",
+                    "fix_cmd":  f"sudo apt install -y {' '.join(missing_required)}",
+                },
+                source="lifecycle_manager",
+            )
+
+        if missing_optional:
+            bus.publish(
+                "dependency_missing",
+                {
+                    "level":    "warn",
+                    "binaries": missing_optional,
+                    "message": (
+                        f"Optional binaries missing: {', '.join(missing_optional)}. "
+                        f"Some features may be degraded. "
+                        f"Fix: sudo apt install -y {' '.join(missing_optional)}"
+                    ),
+                    "fix_cmd": f"sudo apt install -y {' '.join(missing_optional)}",
+                },
+                source="lifecycle_manager",
+            )
+
+        if not missing_required and not missing_optional:
+            bus.publish(
+                "dependencies_ok",
+                {
+                    "binaries": present,
+                    "message":  "All system dependencies present. Hybrid execution fully operational.",
+                },
+                source="lifecycle_manager",
+            )
+            logger.info("✅ Dependency Sentry: all binaries present — hybrid execution ready.")
+        elif not missing_required:
+            logger.info(
+                "⚠️  Dependency Sentry: required binaries present; optional missing: %s",
+                missing_optional,
+            )
+        else:
+            logger.warning(
+                "❌ Dependency Sentry: %d required binary(ies) missing — Ghost-only mode active.",
+                len(missing_required),
+            )
+
     def setup_global_exception_hooks(self, loop: asyncio.AbstractEventLoop) -> None:
         def handle_sync_exception(exctype: type, value: BaseException, traceback: Any) -> None:
             if exctype is KeyboardInterrupt:
@@ -127,6 +225,20 @@ class LifecycleManager:
 
         await error_listener.start()
         await sys_logger.start()
+
+        # 2.a Dependency Sentry — runs after the EventBus is live so results
+        #     are broadcast to the dashboard immediately.  Must run before any
+        #     subsystem that depends on wmctrl/xdotool (terminal_resolver, which
+        #     is initialised inside orchestrator.start()).  Never raises.
+        #
+        #     FIX: bus.run() is started as create_task() above.  The coroutine
+        #     only begins executing (and sets bus._event_loop) on the next event
+        #     loop tick.  We yield once with asyncio.sleep(0) so bus._event_loop
+        #     is populated before _check_system_dependencies calls bus.publish().
+        #     Without this yield, every publish drops with "Event loop not
+        #     initialized yet."
+        await asyncio.sleep(0)
+        await self._check_system_dependencies()
 
         # 3. LLM first — required by intent_parser and executor
         await llm_client.start()
