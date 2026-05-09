@@ -309,6 +309,9 @@ CRITICAL RULES:
 7. ALL exceptions must be caught and returned as {{"status": "error", "message": str(e)}}
 8. Tests must be runnable standalone with pytest (no external services needed)
 9. Use time.sleep() inside threads, asyncio.sleep() inside async functions
+10. In the TEST CODE: use single braces for dicts — double braces are WRONG.
+    Write test dicts as plain Python dict literals with single braces.
+    Do NOT write double-brace dict literals in test code — they create sets not dicts.
 
 Output EXACTLY this format — no other text before or after:
 
