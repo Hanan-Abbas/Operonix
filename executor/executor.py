@@ -223,8 +223,13 @@ class Executor:
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}", "blocked"
 
+        # Skip window focus for plugin actions — background/automation plugins
+        # don't need a specific window focused first. Focusing causes failures
+        # when the active window title doesn't resolve via wmctrl/xdotool.
+        _SKIP_FOCUS_FOR_METHODS = {"plugin"}
+        _needs_focus = preferred_method not in _SKIP_FOCUS_FOR_METHODS
         window_title = context.get("window_title")
-        if window_title:
+        if window_title and _needs_focus:
             focused = await focus_manager.ensure_focus(window_title)
             if not focused:
                 return (
