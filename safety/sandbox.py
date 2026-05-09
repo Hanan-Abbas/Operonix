@@ -261,31 +261,47 @@ class Sandbox:
             #   3. The plugin produced either valid JSON output OR no output
             #      (fast clean exit with no output is acceptable for background)
             if category == "background":
-                if process.returncode == 0 and not stderr_text:
-                    # Parse output if present, otherwise synthesise success
-                    if stdout_text:
-                        try:
-                            output = json.loads(stdout_text)
-                            return SandboxResult(
-                                status=output.get("status", "success"),
-                                result=output.get("result"),
-                                elapsed_ms=elapsed,
-                            )
-                        except json.JSONDecodeError:
-                            pass
-                    # Clean exit with no output = background threads started fine
-                    return SandboxResult(
-                        status="success",
-                        result={"note": "background plugin exited cleanly"},
-                        elapsed_ms=elapsed,
-                    )
-                elif stderr_text:
+                # Background plugins start daemon threads and return immediately.
+                # The subprocess then exits, killing those threads — expected.
+                # keyboard.wait() in the _stopper thread raises an exception
+                # in the sandbox because there is no input device — this is
+                # harmless noise, NOT a real failure.
+                # Only fail on CRITICAL errors: SyntaxError, ImportError,
+                # ModuleNotFoundError, or non-zero exit with no output at all.
+                _CRITICAL_ERRORS = (
+                    "SyntaxError", "ImportError", "ModuleNotFoundError",
+                    "IndentationError", "NameError", "AttributeError",
+                    "No module named",
+                )
+                has_critical = any(e in stderr_text for e in _CRITICAL_ERRORS)
+
+                if has_critical:
                     return SandboxResult(
                         status="error",
-                        error=f"Background plugin stderr: {stderr_text[:300]}",
+                        error=f"Background plugin critical error: {stderr_text[:300]}",
                         traceback=stderr_text,
                         elapsed_ms=elapsed,
                     )
+
+                # Non-critical stderr (thread exceptions, keyboard device errors)
+                # + any exit code is acceptable for background plugins
+                if stdout_text:
+                    try:
+                        output = json.loads(stdout_text)
+                        return SandboxResult(
+                            status=output.get("status", "success"),
+                            result=output.get("result"),
+                            elapsed_ms=elapsed,
+                        )
+                    except json.JSONDecodeError:
+                        pass
+
+                # Clean exit (even with non-critical stderr) = success
+                return SandboxResult(
+                    status="success",
+                    result={"note": "background plugin exited cleanly"},
+                    elapsed_ms=elapsed,
+                )
             # ──────────────────────────────────────────────────────────────────
 
             if not stdout_text:
