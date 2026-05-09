@@ -19,12 +19,25 @@ Mode Manager integration
     and applies the boot mode (read from CURRENT_MODE in .env).
   • On shutdown, mode_manager does not need an explicit stop — the
     orchestrator.stop() call already tears down both subsystems.
+
+Dependency Sentry (CAVEAT 2)
+─────────────────────────────
+  • _check_system_dependencies() runs as step 0.a inside startup(), after the
+    EventBus is running but before any other subsystem starts.
+  • Checks wmctrl, xdotool, xprop via shutil.which().
+  • Missing REQUIRED binary → publishes "dependency_missing" (level=error) on
+    the bus so dashboard + panel show a persistent warning. Operonix continues
+    in Ghost (background) mode — never crashes here.
+  • Missing OPTIONAL binary → publishes "dependency_missing" (level=warn).
+  • All present → publishes "dependencies_ok".
+  • The matching bash-layer check lives in setup.sh (Section 6).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import shutil
 import signal
 import sys
 from datetime import datetime
