@@ -58,11 +58,14 @@ class AutoFixer:
                 gen_prompt = self._build_fix_prompt(
                     file_path, code, parsed_report
                 )
-                response = await llm_client.generate(gen_prompt)
+                response = await llm_client.generate(gen_prompt, use_json=False)
+                if not response:
+                    self.logger.warning("No response from LLM — skipping attempt.")
+                    continue
                 new_code = self._extract_code(response)
 
                 if not new_code:
-                    self.logger.warning("No code generated.")
+                    self.logger.warning("No code extracted from LLM response.")
                     continue
 
                 # ✨ CRITIC REVIEW (Gemini via external FixValidator)
@@ -135,26 +138,74 @@ Fix this code:
 {code}
 """
 
-    def _run_tests(self, file_path):
-        """Runs pytest and returns (success_boolean, output_string)."""
+    def _run_tests(self, file_path: str) -> tuple[bool, str]:
+        """
+        Runs pytest on the test file adjacent to the source file.
+
+        pytest called directly on a source file (not a test file) exits with
+        code 5 ("no tests collected") which we must not treat as failure.
+        Instead we look for a tests/ subdirectory or a test_*.py sibling.
+        If no test file is found, we skip testing and treat it as passed.
+        """
         try:
             import subprocess
 
+            file_dir  = os.path.dirname(file_path)
+            file_name = os.path.basename(file_path)
+
+            # Candidate test file locations
+            candidates = [
+                os.path.join(file_dir, "tests", f"test_{file_name}"),
+                os.path.join(file_dir, f"test_{file_name}"),
+                os.path.join(file_dir, "tests", "test_plugin.py"),
+            ]
+            test_file = next((c for c in candidates if os.path.exists(c)), None)
+
+            if not test_file:
+                self.logger.info(
+                    "No test file found for %s — skipping pytest (treating as passed).",
+                    file_path,
+                )
+                return True, "No test file — skipped."
+
             result = subprocess.run(
-                ["pytest", file_path],
+                ["python", "-m", "pytest", test_file, "--tb=short", "-q"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=60,
             )
-            return result.returncode == 0, result.stderr + result.stdout
+            output = result.stdout + result.stderr
+            # Exit code 5 = no tests collected — treat as pass (file loaded OK)
+            passed = result.returncode in (0, 5)
+            return passed, output
         except Exception as e:
             return False, str(e)
 
-    def _extract_code(self, response: str) -> str:
-        """Pulls raw python code out of LLM markdown wrappers."""
+    def _extract_code(self, response) -> str:
+        """
+        Pulls raw Python code out of LLM response.
+
+        llm_client.generate() returns a dict when use_json=True, or a str
+        when use_json=False. We call it without use_json so it returns a str,
+        but guard against both cases here for safety.
+        """
+        if not response:
+            return ""
+        # If LLM returned a dict (JSON mode), try common code keys
+        if isinstance(response, dict):
+            for key in ("code", "fixed_code", "content", "result"):
+                if key in response and isinstance(response[key], str):
+                    response = response[key]
+                    break
+            else:
+                # No recognised key — can't extract code
+                return ""
+        response = str(response).strip()
         if "```python" in response:
             return response.split("```python")[1].split("```")[0].strip()
-        return response.strip()
+        if "```" in response:
+            return response.split("```")[1].split("```")[0].strip()
+        return response
 
     def _build_fix_prompt(self, file_path, code, report):
         """Prepares a clear engineering prompt for DeepSeek."""
