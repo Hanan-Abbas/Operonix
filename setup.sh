@@ -39,7 +39,7 @@ SYSTEM_PACKAGES=(
     # ── Hybrid execution layer (REQUIRED for Bridge + focus-stack) ──────────
     wmctrl          # Z-order terminal list  →  TerminalResolver._list_terminals()
     xdotool         # Active window ID       →  TerminalResolver._get_active_window_id()
-    xprop           # WM_CLASS lookup        →  TerminalResolver._get_wm_class()
+    x11-utils           # WM_CLASS lookup        →  TerminalResolver._get_wm_class()
     # ── Python runtime ───────────────────────────────────────────────────────
     python3-venv
     python3-pip
@@ -119,8 +119,8 @@ hdr "━━━ 5. Python packages ━━━━━━━━━━━━━━━�
 
 REQUIREMENTS_FILE="$(dirname "$(realpath "$0")")/requirements.txt"
 
-pip install "packaging>=23.0,<24.0" --quiet
 pip install --upgrade pip --quiet
+pip install "packaging>=23.0,<24.0" --force-reinstall --quiet
 
 if [[ -f "$REQUIREMENTS_FILE" ]]; then
     info "Installing from ${REQUIREMENTS_FILE}…"
