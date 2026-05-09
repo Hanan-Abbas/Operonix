@@ -114,12 +114,43 @@ class Executor:
             return
         self._seen_task_ids.add(task_id)
 
-        steps            = task_data.get("steps", [])
-        context          = task_data.get("context", {})
+        # BUG 1 FIX — task_safety_cleared carries the full confirmation_required
+        # payload.  The executor's steps live at the top level when built by
+        # intent_parser, but confirmation_manager re-publishes the whole dict
+        # including a nested "full_task" key.  If top-level steps is empty,
+        # unwrap full_task.steps as the authoritative fallback so the command
+        # is never silently dropped.
+        steps = task_data.get("steps") or []
+        if not steps:
+            full_task = task_data.get("full_task") or {}
+            steps = full_task.get("steps") or []
+            if steps:
+                logger.debug(
+                    "Task [%s] steps unwrapped from full_task (%d steps)",
+                    task_id, len(steps),
+                )
+
+        context          = task_data.get("context") or {}
         intent           = task_data.get("intent")
         preferred_method: str | None = task_data.get("preferred_method")
 
         self._enrich_context_with_cwd(context)
+
+        # BUG 3 FIX — confirmation path: context may arrive empty because
+        # inject_task_metadata (which merges context) is only triggered by
+        # capability_mapped, which is never re-emitted after safety clearance.
+        # Pull context from full_task if the top-level context is bare.
+        if not context.get("cwd"):
+            full_task_ctx = (task_data.get("full_task") or {}).get("context") or {}
+            if full_task_ctx:
+                context.update({k: v for k, v in full_task_ctx.items() if not context.get(k)})
+                logger.debug("Task [%s] context enriched from full_task.context", task_id)
+            # Last resort: pull cwd directly from full_task parameters
+            if not context.get("cwd"):
+                params = (task_data.get("full_task") or {}).get("parameters") or {}
+                if params.get("cwd"):
+                    context["cwd"] = params["cwd"]
+            self._enrich_context_with_cwd(context)
 
         # CAVEAT 1 — normalise profile_hint into every step's args
         # so _resolve_and_inject_profile always finds it via args["profile_hint"]
