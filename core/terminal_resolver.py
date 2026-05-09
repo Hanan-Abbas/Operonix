@@ -50,8 +50,15 @@ log = logging.getLogger("TerminalResolver")
 # Heavy / interactive processes go to Lab. Everything else defaults to Ghost.
 
 _FORCE_BRIDGE: frozenset[str] = frozenset({
+    # Shell environment modifiers — must run in user's shell
     "source", "export", "cd", "alias", "unset", "set",
     "activate", "deactivate", "conda", "nvm", "pyenv", "rbenv",
+    # Interactive commands — need a real terminal for password/confirmation prompts.
+    # Running these in Ghost silently fails or dumps prompts to the Operonix terminal.
+    "sudo",
+    # Package managers that prompt for sudo password or y/n confirmation
+    "apt", "apt-get", "dpkg", "snap", "flatpak",
+    "dnf", "yum", "pacman", "zypper", "brew",
 })
 
 _FORCE_LAB: frozenset[str] = frozenset({
@@ -246,17 +253,23 @@ class TerminalResolver:
     def _get_active_window_id() -> Optional[str]:
         if shutil.which("xdotool"):
             try:
+                # stderr=DEVNULL suppresses "XGetWindowProperty[_NET_ACTIVE_WINDOW]
+                # failed" messages that xdotool emits when no X11 window is focused
+                # (e.g. when the panel or a Wayland surface is active).
                 return subprocess.check_output(
-                    ["xdotool", "getactivewindow"], text=True, timeout=1.0
+                    ["xdotool", "getactivewindow"],
+                    text=True,
+                    timeout=1.0,
+                    stderr=subprocess.DEVNULL,
                 ).strip()
             except Exception:
                 pass
         if shutil.which("wmctrl"):
             try:
                 out = subprocess.check_output(
-                    ["wmctrl", "-l", "-p"], text=True, timeout=1.0
+                    ["wmctrl", "-l", "-p"], text=True, timeout=1.0,
+                    stderr=subprocess.DEVNULL,
                 )
-                # First line is usually the topmost window
                 first = out.strip().splitlines()
                 if first:
                     return first[0].split()[0]
@@ -339,26 +352,84 @@ class TerminalResolver:
     @staticmethod
     def _find_pts(pid: int) -> Optional[str]:
         """
-        Find the pseudo-terminal device (pts) for a process.
-        Reads /proc/<pid>/fd/* looking for char devices that match /dev/pts/*.
+        Find the pseudo-terminal device (pts) for a terminal window.
+
+        wmctrl reports the window manager PID — for gnome-terminal this is
+        the gnome-terminal-server process, NOT the bash shell inside it.
+        The bash shell is a child (or grandchild) of that server process and
+        is the actual owner of the /dev/pts/* device.
+
+        Strategy:
+          1. Check the reported PID's own fds first.
+          2. Walk one level of children via /proc/<pid>/task/*/children
+             and check each child's fds.
+          3. Fallback: parse /proc/<pid>/stat tty_nr field.
         """
-        fd_dir = f"/proc/{pid}/fd"
+        def _pts_from_pid(p: int) -> Optional[str]:
+            fd_dir = f"/proc/{p}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        target = os.readlink(os.path.join(fd_dir, fd))
+                        if target.startswith("/dev/pts/"):
+                            return target
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            return None
+
+        # Step 1 — check the reported PID directly
+        result = _pts_from_pid(pid)
+        if result:
+            return result
+
+        # Step 2 — walk children (shell is a child of the terminal server)
+        child_pids: list[int] = []
         try:
-            for fd in os.listdir(fd_dir):
+            # /proc/<pid>/task/<tid>/children lists child PIDs
+            task_dir = f"/proc/{pid}/task"
+            for tid in os.listdir(task_dir):
+                children_file = f"{task_dir}/{tid}/children"
                 try:
-                    target = os.readlink(os.path.join(fd_dir, fd))
-                    if target.startswith("/dev/pts/"):
-                        return target
+                    with open(children_file) as f:
+                        for cpid_str in f.read().split():
+                            try:
+                                child_pids.append(int(cpid_str))
+                            except ValueError:
+                                pass
                 except OSError:
-                    continue
+                    pass
         except OSError:
             pass
 
-        # Fallback: check /proc/<pid>/stat for the controlling tty
+        for cpid in child_pids:
+            result = _pts_from_pid(cpid)
+            if result:
+                return result
+            # One more level — grandchildren (some terminals nest deeper)
+            try:
+                task_dir2 = f"/proc/{cpid}/task"
+                for tid2 in os.listdir(task_dir2):
+                    children_file2 = f"{task_dir2}/{tid2}/children"
+                    try:
+                        with open(children_file2) as f:
+                            for gcpid_str in f.read().split():
+                                try:
+                                    result = _pts_from_pid(int(gcpid_str))
+                                    if result:
+                                        return result
+                                except (ValueError, OSError):
+                                    pass
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+
+        # Step 3 — tty_nr fallback from /proc/<pid>/stat
         try:
             with open(f"/proc/{pid}/stat") as f:
                 fields = f.read().split()
-                # Field 7 (0-indexed) is tty_nr
                 tty_nr = int(fields[6])
                 if tty_nr > 0:
                     minor = tty_nr & 0xFF
@@ -369,10 +440,45 @@ class TerminalResolver:
 
     @staticmethod
     def _read_proc_cwd(pid: int) -> Optional[str]:
+        """
+        Read the cwd of the shell running inside the terminal window.
+
+        Same child-walking logic as _find_pts: wmctrl reports the server PID
+        whose cwd is typically / or the install dir.  We want the bash shell's
+        cwd which is what the user sees at their prompt.
+        """
+        def _cwd_from_pid(p: int) -> Optional[str]:
+            try:
+                return os.readlink(f"/proc/{p}/cwd")
+            except OSError:
+                return None
+
+        # Check reported PID first
+        result = _cwd_from_pid(pid)
+        # Skip cwd that looks like a system root (server process default)
+        if result and result not in ("/", "/usr", "/usr/bin"):
+            return result
+
+        # Walk children to find the shell cwd
         try:
-            return os.readlink(f"/proc/{pid}/cwd")
+            task_dir = f"/proc/{pid}/task"
+            for tid in os.listdir(task_dir):
+                children_file = f"{task_dir}/{tid}/children"
+                try:
+                    with open(children_file) as f:
+                        for cpid_str in f.read().split():
+                            try:
+                                cwd = _cwd_from_pid(int(cpid_str))
+                                if cwd and cwd not in ("/", "/usr", "/usr/bin"):
+                                    return cwd
+                            except ValueError:
+                                pass
+                except OSError:
+                    pass
         except OSError:
-            return None
+            pass
+
+        return result  # return whatever we had even if it's /
 
     # ── CWD scoring ───────────────────────────────────────────────────────────
 
