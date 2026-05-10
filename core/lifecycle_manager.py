@@ -228,8 +228,19 @@ class LifecycleManager:
 
         # 2.a Dependency Sentry — runs after the EventBus is live so results
         #     are broadcast to the dashboard immediately.  Must run before any
-        #     subsystem that depends on wmctrl/xdotool (terminal_resolver, which
-        #     is initialised inside orchestrator.start()).  Never raises.
+        #     subsystem that depends on wmctrl/xdotool.  Never raises.
+        #
+        #     FIX: bus.run() is started as create_task() above. The coroutine
+        #     sets bus._event_loop only when it actually begins executing.
+        #     A single asyncio.sleep(0) is not always enough — the scheduler
+        #     may not have dispatched bus.run() yet if other coroutines are
+        #     queued ahead of it. We poll until bus._event_loop is populated
+        #     (max 1 s / 20 × 50 ms) so bus.publish() inside the sentry never
+        #     drops with "Event loop not initialized yet."
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if getattr(bus, "_event_loop", None) is not None:
+                break
         await self._check_system_dependencies()
 
         # 3. LLM first — required by intent_parser and executor
