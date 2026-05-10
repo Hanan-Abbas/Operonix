@@ -230,14 +230,6 @@ class LifecycleManager:
         #     are broadcast to the dashboard immediately.  Must run before any
         #     subsystem that depends on wmctrl/xdotool (terminal_resolver, which
         #     is initialised inside orchestrator.start()).  Never raises.
-        #
-        #     FIX: bus.run() is started as create_task() above.  The coroutine
-        #     only begins executing (and sets bus._event_loop) on the next event
-        #     loop tick.  We yield once with asyncio.sleep(0) so bus._event_loop
-        #     is populated before _check_system_dependencies calls bus.publish().
-        #     Without this yield, every publish drops with "Event loop not
-        #     initialized yet."
-        await asyncio.sleep(0)
         await self._check_system_dependencies()
 
         # 3. LLM first — required by intent_parser and executor
@@ -298,6 +290,14 @@ class LifecycleManager:
             logger.info("🧠 Pattern Learner: Hooked to Event Bus.")
         except Exception as exc:
             logger.error("Failed to start learning system: %s", exc)
+
+        # Start Adaptive Trust Layer (interactive prompt pattern learning)
+        try:
+            from learning.prompt_trust import prompt_trust
+            prompt_trust.start()
+            logger.info("🎯 PromptTrustLayer: Online (threshold=%d approvals).", 5)
+        except Exception as exc:
+            logger.error("Failed to start PromptTrustLayer: %s", exc)
 
         logger.info("✨ All modules synchronised and listening to the Event Bus.")
         self._register_signal_handlers(loop)
