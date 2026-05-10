@@ -112,6 +112,11 @@ class CapabilityGapDetector:
         This is the strongest signal of a missing capability —
         trigger generation immediately on first occurrence, not after
         3 consecutive failures. The agent should learn right away.
+
+        GUARD: skip if the intent is already handled by a loaded plugin.
+        capability_mapper should not fire mapping_failed for plugin intents,
+        but we defend here too in case the event fires before the plugin
+        registry is fully indexed.
         """
         data        = event.data or {}
         raw_intent  = data.get("raw_intent", "")
@@ -120,6 +125,33 @@ class CapabilityGapDetector:
 
         if not intent:
             return
+
+        # Skip if a plugin already handles this intent — no gap exists
+        try:
+            from plugins.registry import plugin_registry
+            from brain.intent_matcher import match_intent_local
+            intent_norm = intent.lower().replace("_", " ").strip()
+            plugin_caps = []
+            for entry in plugin_registry.entries.values():
+                caps = getattr(entry.manifest, "capabilities", []) or []
+                plugin_caps.extend(str(c).lower().replace("_", " ") for c in caps)
+            if plugin_caps:
+                matched, _ = match_intent_local(intent_norm, plugin_caps, threshold=0.55)
+                if not matched:
+                    # Substring fallback
+                    matched = next(
+                        (c for c in plugin_caps
+                         if (intent_norm in c or c in intent_norm) and len(intent_norm) >= 3),
+                        None
+                    )
+                if matched:
+                    self.logger.debug(
+                        "mapping_failed for '%s' ignored — plugin '%s' handles it.",
+                        intent, matched,
+                    )
+                    return
+        except Exception as exc:
+            self.logger.debug("Plugin check in _on_mapping_failed failed: %s", exc)
 
         canonical = await self._resolve_canonical(intent)
 
@@ -193,9 +225,13 @@ class CapabilityGapDetector:
         consecutive = self._consecutive[canonical]
 
         # Also query episodic DB for window-based count
-        window_count = episodic_memory.get_failures_in_window(
-            canonical, hours=WINDOW_HOURS
-        )
+        # Guard against uninitialised DB connection (episodic_memory._conn is None)
+        try:
+            window_count = episodic_memory.get_failures_in_window(
+                canonical, hours=WINDOW_HOURS
+            )
+        except Exception:
+            window_count = 0
 
         self.logger.debug(
             f"Failure tracked: '{canonical}' | consecutive={consecutive} | "
@@ -240,7 +276,11 @@ class CapabilityGapDetector:
         self._consecutive[intent] = 0  # Reset counter after trigger
 
         # Build failure summary from episodic memory
-        failure_summary = episodic_memory.get_failure_summary(intent)
+        # Guard against uninitialised DB connection
+        try:
+            failure_summary = episodic_memory.get_failure_summary(intent)
+        except Exception:
+            failure_summary = {}
 
         self.logger.warning(
             f"🚨 CAPABILITY GAP DETECTED: '{intent}' | "
