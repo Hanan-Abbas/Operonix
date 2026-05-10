@@ -271,24 +271,48 @@ class Executor:
 
         # ── Hybrid profile resolution ──────────────────────────────────────
         if action in _SHELL_ACTIONS:
-            args = await self._resolve_and_inject_profile(
-                task_id, step_index, action, args, context
+            # BUG 1 FIX: panel_sudo commands must SKIP terminal_resolver entirely.
+            # The executor was resolving Ghost/Bridge BEFORE shell_tool got to check
+            # needs_password, then injecting _profile=GhostTarget which overrode
+            # the interactive flow. panel_sudo has its own subprocess strategy
+            # (sudo -S + ProcessBridge) that is incompatible with the profile system.
+            #
+            # BUG 2 FIX: task_id was never injected into step args, so shell_tool
+            # and process_bridge received task_id="unknown" for every command.
+            # Inject it here, before profile resolution or dispatch.
+            args = dict(args)
+            args["task_id"] = task_id   # BUG 2 FIX — always stamp task_id into args
+
+            is_panel_sudo = (
+                args.get("needs_password")
+                or args.get("profile_hint") == "panel_sudo"
             )
-            if args is None:
-                try:
-                    chosen_profile = await asyncio.wait_for(
-                        self._wait_for_target_selection(task_id),
-                        timeout=60.0,
-                    )
-                except asyncio.TimeoutError:
-                    return (
-                        False,
-                        "Target selection timed out — command cancelled.",
-                        "target_selection",
-                    )
-                args = dict(step.get("args", {}))
-                args["_profile"] = chosen_profile
-                args["cwd"]      = context.get("cwd")
+
+            if not is_panel_sudo:
+                # Normal path — resolve execution profile via terminal_resolver
+                args = await self._resolve_and_inject_profile(
+                    task_id, step_index, action, args, context
+                )
+                if args is None:
+                    try:
+                        chosen_profile = await asyncio.wait_for(
+                            self._wait_for_target_selection(task_id),
+                            timeout=60.0,
+                        )
+                    except asyncio.TimeoutError:
+                        return (
+                            False,
+                            "Target selection timed out — command cancelled.",
+                            "target_selection",
+                        )
+                    args = dict(step.get("args", {}))
+                    args["task_id"]  = task_id   # keep task_id on rebuilt args too
+                    args["_profile"] = chosen_profile
+                    args["cwd"]      = context.get("cwd")
+            else:
+                # panel_sudo path — skip terminal_resolver, just stamp cwd
+                # shell_tool._execute_interactive handles everything from here
+                args["cwd"] = args.get("cwd") or context.get("cwd")
 
         # ── Direct plugin dispatch ─────────────────────────────────────────
         try:
