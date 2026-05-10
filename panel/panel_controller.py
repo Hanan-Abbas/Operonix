@@ -114,6 +114,16 @@ if _HAS_QT:
         sig_show_sudo_password  = _pyqtSignal(object)         # payload dict
         sig_hide_sudo_password  = _pyqtSignal()
 
+        # ── NEW: streaming interactive prompt signals ──────────────────────
+        # Emitted when ProcessBridge detects a y/n or free-text prompt.
+        sig_show_interactive_prompt = _pyqtSignal(object)    # {task_id, prompt_type, message}
+        sig_hide_interactive_prompt = _pyqtSignal()
+
+        # ── NEW: trust suggestion signals ─────────────────────────────────
+        # Emitted when PromptTrustLayer threshold is reached.
+        sig_show_trust_suggestion   = _pyqtSignal(object)    # {task_id, command, message}
+        sig_hide_trust_suggestion   = _pyqtSignal()
+
         # ── NEW: hybrid execution signals ──────────────────────────────────
         sig_show_output_snippet     = _pyqtSignal(object)
         sig_show_target_selection   = _pyqtSignal(object)
@@ -199,6 +209,16 @@ class PanelController:
         # in the panel password widget.
         self._pending_sudo_task_id: str | None = None
 
+        # ── Interactive prompt state ───────────────────────────────────────
+        # Stores (task_id, prompt_type, command) while waiting for user
+        # to respond to a y/n or free-text prompt from ProcessBridge.
+        self._pending_interactive: tuple[str, str, str] | None = None
+
+        # ── Trust suggestion state ─────────────────────────────────────────
+        # Stores (task_id, command, prompt_type) while showing the
+        # "automate this?" suggestion widget.
+        self._pending_trust_suggestion: tuple[str, str, str] | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -276,6 +296,16 @@ class PanelController:
         self._bridge.sig_hide_sudo_password.connect(self._renderer.hide_sudo_password)
         # Bridge: Qt thread → controller (password submitted by user)
         self._renderer.sudo_password_submitted.connect(self._on_sudo_password_submitted)
+
+        # ── NEW: wire interactive prompt signals ───────────────────────────
+        self._bridge.sig_show_interactive_prompt.connect(self._renderer.show_interactive_prompt)
+        self._bridge.sig_hide_interactive_prompt.connect(self._renderer.hide_interactive_prompt)
+        self._renderer.interactive_prompt_responded.connect(self._on_interactive_prompt_responded)
+
+        # ── NEW: wire trust suggestion signals ────────────────────────────
+        self._bridge.sig_show_trust_suggestion.connect(self._renderer.show_trust_suggestion)
+        self._bridge.sig_hide_trust_suggestion.connect(self._renderer.hide_trust_suggestion)
+        self._renderer.trust_suggestion_answered.connect(self._on_trust_suggestion_answered)
 
         # ── Pre-populate UI ───────────────────────────────────────────────
         self._renderer.set_theme_selection(self._state.theme)
@@ -357,10 +387,17 @@ class PanelController:
             "target_selection_required":  self._on_target_selection_required,
 
             # ── Sudo password prompt ───────────────────────────────────────
-            # shell_tool._execute_panel_sudo publishes this when a sudo/apt
+            # shell_tool._execute_interactive publishes this when a sudo/apt
             # command needs a password.  The panel shows a secure input widget.
-            # The widget is dismissed by _on_command_output_ready (reused above).
-            "sudo_password_required":     self._on_sudo_password_required,
+            "sudo_password_required":          self._on_sudo_password_required,
+
+            # ── Streaming interactive prompts ──────────────────────────────
+            # ProcessBridge detected a y/n or free-text prompt mid-stream.
+            "interactive_prompt_widget":       self._on_interactive_prompt_widget,
+
+            # ── Adaptive Trust Layer ───────────────────────────────────────
+            # PromptTrustLayer threshold reached — show "automate this?" widget.
+            "trust_auto_approve_suggestion":   self._on_trust_suggestion,
         }
         for event, handler in handlers.items():
             try:
@@ -651,6 +688,123 @@ class PanelController:
             )
         except Exception as exc:
             log.error("panel_controller: failed to publish sudo_password_provided — %s", exc)
+
+    # ── Streaming interactive prompt handlers ──────────────────────────────
+
+    def _on_interactive_prompt_widget(self, event: Any) -> None:
+        """
+        ProcessBridge detected a y/n or free-text prompt mid-stream.
+        Show the appropriate widget in the panel.
+        Runs on asyncio thread — use bridge signal.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+
+        task_id     = payload.get("task_id", "")
+        prompt_type = payload.get("prompt_type", "yn")
+        command     = payload.get("command", "")
+        self._pending_interactive = (task_id, prompt_type, command)
+
+        log.info(
+            "panel_controller: interactive prompt type=%s task=%s",
+            prompt_type, task_id,
+        )
+        if self._bridge:
+            self._bridge.sig_show_interactive_prompt.emit(payload)
+            if self._window and not (
+                self._window.isVisible() if hasattr(self._window, "isVisible") else True
+            ):
+                self._bridge.sig_toggle.emit()
+
+    def _on_interactive_prompt_responded(self, response: str) -> None:
+        """
+        User clicked Yes/No or submitted free-text in the interactive prompt widget.
+        Runs on Qt thread — bus.publish() is thread-safe.
+        """
+        if not self._pending_interactive:
+            log.warning("panel_controller: interactive response but no pending prompt")
+            return
+
+        task_id, prompt_type, command = self._pending_interactive
+        self._pending_interactive = None
+
+        log.info(
+            "panel_controller: user responded to interactive prompt task=%s response=%r",
+            task_id, response,
+        )
+
+        if self._bridge:
+            self._bridge.sig_hide_interactive_prompt.emit()
+
+        try:
+            self._bus.publish(
+                "interactive_response",
+                {
+                    "task_id":     task_id,
+                    "response":    response,
+                    "prompt_type": prompt_type,
+                    "command":     command,
+                },
+                source="panel",
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish interactive_response — %s", exc)
+
+    # ── Trust suggestion handlers ──────────────────────────────────────────
+
+    def _on_trust_suggestion(self, event: Any) -> None:
+        """
+        PromptTrustLayer threshold reached for a command pattern.
+        Show the "Should I automate this?" widget in the panel.
+        Runs on asyncio thread — use bridge signal.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+
+        task_id     = payload.get("task_id", "")
+        command     = payload.get("command", "")
+        prompt_type = payload.get("prompt_type", "yn")
+        self._pending_trust_suggestion = (task_id, command, prompt_type)
+
+        log.info("panel_controller: trust suggestion for command=%r task=%s", command, task_id)
+        if self._bridge:
+            self._bridge.sig_show_trust_suggestion.emit(payload)
+
+    def _on_trust_suggestion_answered(self, accept: bool) -> None:
+        """
+        User clicked Yes or No on the "automate this?" suggestion widget.
+        Runs on Qt thread — bus.publish() is thread-safe.
+        """
+        if not self._pending_trust_suggestion:
+            log.warning("panel_controller: trust answer but no pending suggestion")
+            return
+
+        task_id, command, prompt_type = self._pending_trust_suggestion
+        self._pending_trust_suggestion = None
+
+        log.info(
+            "panel_controller: trust suggestion answered accept=%s command=%r",
+            accept, command,
+        )
+
+        if self._bridge:
+            self._bridge.sig_hide_trust_suggestion.emit()
+
+        try:
+            self._bus.publish(
+                "trust_suggestion_answered",
+                {
+                    "task_id":     task_id,
+                    "command":     command,
+                    "prompt_type": prompt_type,
+                    "accept":      accept,
+                },
+                source="panel",
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish trust_suggestion_answered — %s", exc)
 
     # ------------------------------------------------------------------
     # Renderer signal handlers  (Qt thread — direct calls are safe)
