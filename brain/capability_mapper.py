@@ -220,6 +220,58 @@ class CapabilityMapper:
         self.logger.debug("No explicit tool metadata for '%s'", capability_name)
         return None
 
+    # ── Plugin intent lookup ─────────────────────────────────────────── #
+
+    def _find_plugin_for_intent(self, intent: str) -> str | None:
+        """
+        Check plugin_registry for a plugin whose capabilities match intent.
+        Returns the matched capability string, or None if no plugin found.
+        Uses the same fuzzy matching as intent_parser Tier 0.
+        """
+        try:
+            from plugins.registry import plugin_registry
+            from brain.intent_matcher import match_intent_local
+
+            normalized = intent.lower().replace("_", " ").strip()
+            cap_map: dict[str, str] = {}
+
+            for pname, entry in plugin_registry.entries.items():
+                caps = getattr(entry.manifest, "capabilities", []) or []
+                for cap in caps:
+                    cap_str = str(cap).lower().replace("_", " ")
+                    cap_map[cap_str] = cap_str
+                cap_map[pname.replace("_", " ")] = pname.replace("_", " ")
+
+            if not cap_map:
+                return None
+
+            threshold = float(getattr(
+                __import__("core.config", fromlist=["settings"]).settings,
+                "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55
+            ))
+            matched, score = match_intent_local(
+                normalized, list(cap_map.keys()), threshold=threshold
+            )
+
+            # Substring fallback — catches vague verbs like "click" in "auto clicker"
+            if not matched:
+                for cap in cap_map:
+                    if (normalized in cap or cap in normalized) and len(normalized) >= 3:
+                        matched = cap
+                        break
+
+            if matched:
+                self.logger.debug(
+                    "Plugin intent match: '%s' → '%s' (score=%.2f)",
+                    intent, matched, score,
+                )
+                return matched
+
+        except Exception as exc:
+            self.logger.debug("Plugin intent lookup failed (non-fatal): %s", exc)
+
+        return None
+
     # ── Main handler ──────────────────────────────────────────────────── #
 
     async def map_intent_to_capability(self, event: object) -> None:
@@ -230,7 +282,30 @@ class CapabilityMapper:
         normalized = await self.normalize_intent(raw_intent)
         args = self.normalize_args(normalized, extracted)
 
+        # ── Plugin registry check ─────────────────────────────────────────────
+        # plugin_registry is separate from capability_registry.
+        # Before firing mapping_failed, check if a loaded plugin handles
+        # this intent — if so, route it as capability_mapped so the executor
+        # can dispatch it via the direct plugin dispatch block.
         if not normalized or capability_registry.get(normalized) is None:
+            plugin_match = self._find_plugin_for_intent(normalized or raw_intent)
+            if plugin_match:
+                # A plugin handles this intent — map it directly
+                suggested_tool = "plugin"
+                mapping_result = {
+                    "task_id":       task_id,
+                    "intent":        plugin_match,
+                    "capability":    plugin_match,
+                    "suggested_tool": suggested_tool,
+                    "parameters":    args,
+                }
+                self.logger.info(
+                    "Mapped '%s' → plugin capability '%s'",
+                    raw_intent, plugin_match,
+                )
+                bus.publish("capability_mapped", mapping_result, source="capability_mapper")
+                return
+
             self.logger.warning(
                 "Unknown or unregistered intent: %s (normalized: %s)",
                 raw_intent, normalized,
@@ -238,10 +313,10 @@ class CapabilityMapper:
             bus.publish(
                 "mapping_failed",
                 {
-                    "task_id": task_id,
+                    "task_id":    task_id,
                     "raw_intent": raw_intent,
                     "normalized": normalized,
-                    "args": args,
+                    "args":       args,
                 },
                 source="capability_mapper",
             )
