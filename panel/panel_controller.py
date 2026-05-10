@@ -107,13 +107,16 @@ if _HAS_QT:
         sig_show_confirmation   = _pyqtSignal(object)         # payload dict
         sig_hide_confirmation   = _pyqtSignal()               # dismiss banner
 
+        # ── NEW: sudo password prompt signals ─────────────────────────────
+        # sig_show_sudo_password — show the password input widget in the panel.
+        #   Carries the full payload: {task_id, command, message}.
+        # sig_hide_sudo_password — dismiss the widget after submit or cancel.
+        sig_show_sudo_password  = _pyqtSignal(object)         # payload dict
+        sig_hide_sudo_password  = _pyqtSignal()
+
         # ── NEW: hybrid execution signals ──────────────────────────────────
-        # sig_show_output_snippet — display Ghost command output inline in
-        #   the Command tab so the user gets immediate feedback.
-        # sig_show_target_selection — show Target Selection UI when the
-        #   executor finds multiple equally-matching terminals (AmbiguousTarget).
-        sig_show_output_snippet     = _pyqtSignal(object)    # output payload dict
-        sig_show_target_selection   = _pyqtSignal(object)    # candidates payload dict
+        sig_show_output_snippet     = _pyqtSignal(object)
+        sig_show_target_selection   = _pyqtSignal(object)
 
         def __init__(self, parent: QObject | None = None) -> None:
             super().__init__(parent)
@@ -191,6 +194,11 @@ class PanelController:
         # ── Target selection state ─────────────────────────────────────────
         self._pending_target_selection_task_id: str | None = None
 
+        # ── Sudo password state ────────────────────────────────────────────
+        # Stores task_id while waiting for user to type the sudo password
+        # in the panel password widget.
+        self._pending_sudo_task_id: str | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -257,14 +265,17 @@ class PanelController:
         self._renderer.mode_change_requested.connect(self._on_mode_change_requested)
 
         # ── NEW: wire confirmation response from renderer → controller ─────
-        # PanelRenderer.confirmation_responded(choice: str) fires when the
-        # user clicks Allow or Deny inside the panel confirmation banner.
         self._renderer.confirmation_responded.connect(self._on_confirmation_respond)
 
         # ── NEW: wire target selection response from renderer → controller ──
-        # PanelRenderer.target_selection_responded(payload: dict) fires when
-        # the user clicks a terminal in the Target Selection UI.
         self._renderer.target_selection_responded.connect(self._on_target_selection_respond)
+
+        # ── NEW: wire sudo password signals ───────────────────────────────
+        # Bridge: asyncio thread → Qt thread (show/hide widget)
+        self._bridge.sig_show_sudo_password.connect(self._renderer.show_sudo_password)
+        self._bridge.sig_hide_sudo_password.connect(self._renderer.hide_sudo_password)
+        # Bridge: Qt thread → controller (password submitted by user)
+        self._renderer.sudo_password_submitted.connect(self._on_sudo_password_submitted)
 
         # ── Pre-populate UI ───────────────────────────────────────────────
         self._renderer.set_theme_selection(self._state.theme)
@@ -344,6 +355,12 @@ class PanelController:
             "command_output_ready":       self._on_command_output_ready,
             "command_dispatched":         self._on_command_dispatched,
             "target_selection_required":  self._on_target_selection_required,
+
+            # ── Sudo password prompt ───────────────────────────────────────
+            # shell_tool._execute_panel_sudo publishes this when a sudo/apt
+            # command needs a password.  The panel shows a secure input widget.
+            # The widget is dismissed by _on_command_output_ready (reused above).
+            "sudo_password_required":     self._on_sudo_password_required,
         }
         for event, handler in handlers.items():
             try:
@@ -482,14 +499,18 @@ class PanelController:
 
     def _on_command_output_ready(self, event: Any) -> None:
         """
-        Ghost profile finished execution.
+        Ghost / panel_sudo profile finished execution.
         Show the output snippet inline in the panel Command tab.
+        Also dismisses the sudo password widget if it was visible.
         Runs on asyncio thread — use bridge signal.
         """
         payload = event.data if hasattr(event, "data") else event
         if not isinstance(payload, dict):
             return
         if self._bridge:
+            # Dismiss sudo password widget if this output is for a panel_sudo command
+            if payload.get("profile") == "panel_sudo":
+                self._bridge.sig_hide_sudo_password.emit()
             self._bridge.sig_show_output_snippet.emit(payload)
 
     def _on_command_dispatched(self, event: Any) -> None:
@@ -570,6 +591,66 @@ class PanelController:
             )
         except Exception as exc:
             log.error("panel_controller: failed to publish target_selected — %s", exc)
+
+    # ── Sudo password handlers ─────────────────────────────────────────────
+
+    def _on_sudo_password_required(self, event: Any) -> None:
+        """
+        shell_tool._execute_panel_sudo published sudo_password_required.
+        Signal the Qt thread to show the password input widget in the panel.
+        Runs on asyncio thread — use bridge signal.
+        """
+        payload = event.data if hasattr(event, "data") else event
+        if not isinstance(payload, dict):
+            return
+
+        task_id = payload.get("task_id")
+        log.info(
+            "panel_controller: sudo password required for task [%s] command='%s'",
+            task_id, payload.get("command", ""),
+        )
+
+        # Store task_id so _on_sudo_password_submitted can include it
+        self._pending_sudo_task_id = task_id
+
+        if self._bridge:
+            self._bridge.sig_show_sudo_password.emit(payload)
+            # Make panel visible if hidden so user sees the prompt
+            if self._window and not (
+                self._window.isVisible() if hasattr(self._window, "isVisible") else True
+            ):
+                self._bridge.sig_toggle.emit()
+
+    def _on_sudo_password_submitted(self, password: str) -> None:
+        """
+        User submitted a password in the panel sudo widget.
+        Runs on the Qt thread (connected to renderer.sudo_password_submitted).
+
+        Publishes sudo_password_provided on the bus so shell_tool._execute_panel_sudo
+        can read it from its waiting Future and pipe it to subprocess stdin.
+        Then hides the password widget immediately (password never stays visible).
+        """
+        task_id = getattr(self, "_pending_sudo_task_id", None)
+        if not task_id:
+            log.warning("panel_controller: sudo password submitted but no pending task")
+            return
+
+        self._pending_sudo_task_id = None
+
+        log.info("panel_controller: sudo password submitted for task [%s]", task_id)
+
+        # Hide widget immediately — password must not linger on screen
+        if self._bridge:
+            self._bridge.sig_hide_sudo_password.emit()
+
+        try:
+            self._bus.publish(
+                "sudo_password_provided",
+                {"task_id": task_id, "password": password},
+                source="panel",
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish sudo_password_provided — %s", exc)
 
     # ------------------------------------------------------------------
     # Renderer signal handlers  (Qt thread — direct calls are safe)
