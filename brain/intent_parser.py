@@ -42,6 +42,17 @@ _BRIDGE_KEYWORDS: frozenset[str] = frozenset({
     "cd", "alias", "nvm", "pyenv", "rbenv", "conda",
 })
 
+# Commands that require a password prompt shown in the panel (panel_sudo profile).
+# These run via `sudo -S` with stdin piped from the panel password widget.
+# They must NOT go to Bridge (which injects blind text into another terminal)
+# and must NOT go to Ghost (which has no stdin).
+_PANEL_SUDO_KEYWORDS: frozenset[str] = frozenset({
+    "sudo",
+    "apt", "apt-get", "dpkg",
+    "snap", "flatpak",
+    "dnf", "yum", "pacman", "zypper", "brew",
+})
+
 # Commands that benefit from a visible interactive terminal (Lab profile).
 _LAB_KEYWORDS: frozenset[str] = frozenset({
     "pytest", "npm run", "yarn", "make", "docker", "jupyter",
@@ -254,12 +265,32 @@ Example:
         Fast offline check — returns a forced profile if the first token of
         the command is in a known set.  Never calls the LLM.
 
+        Priority order:
+          1. panel_sudo — sudo / package managers that need a password typed
+                          in the panel widget, piped to `sudo -S` stdin.
+          2. bridge     — shell environment modifiers (source, export, cd…)
+          3. lab        — long-running interactive processes (pytest, docker…)
+
         Called before _parse_async so even when the LLM is unavailable the
-        profile hint is correct for the most critical cases (source, export…).
+        profile hint is correct for the most critical cases.
         """
-        stripped = text.strip().lstrip("run ").lstrip("execute ").lstrip("the command ")
+        # Strip natural-language preamble so "run the command sudo apt…"
+        # correctly identifies "sudo" as the first token.
+        stripped = text.strip()
+        for prefix in ("run the command ", "execute the command ", "run ", "execute "):
+            if stripped.lower().startswith(prefix):
+                stripped = stripped[len(prefix):]
+                break
         first_token = stripped.split()[0].lower() if stripped.split() else ""
-        text_lower = text.lower()
+        text_lower  = text.lower()
+
+        # panel_sudo takes priority — these need the password widget
+        if first_token in _PANEL_SUDO_KEYWORDS:
+            return "panel_sudo"
+
+        # package manager invoked via sudo (e.g. "sudo apt install …")
+        # first token is "sudo", second might be a package manager — already
+        # caught above since "sudo" is in _PANEL_SUDO_KEYWORDS.
 
         if first_token in _BRIDGE_KEYWORDS:
             return "bridge"
@@ -304,6 +335,12 @@ Example:
             params.get("command", "")
         )
 
+        # If profile is panel_sudo, stamp needs_password into params so the
+        # executor and shell_tool know to show the panel password widget and
+        # run via `sudo -S` with stdin piped from the panel.
+        if profile_hint == "panel_sudo":
+            params = {**params, "needs_password": True}
+
         self.logger.info(
             "🔍 Validating intent: '%s' for task %s (profile_hint=%s)",
             raw_intent, task_id, profile_hint,
@@ -330,7 +367,14 @@ Example:
                 "parameters":   params,
                 "profile_hint": profile_hint,
                 "steps": [
-                    {"action": resolved_intent, "args": {**params, "profile_hint": profile_hint}}
+                    {
+                        "action": resolved_intent,
+                        "args": {
+                            **params,
+                            "profile_hint":  profile_hint,
+                            "needs_password": profile_hint == "panel_sudo",
+                        },
+                    }
                 ],
             }
             await bus.emit("confirmation_required", {
