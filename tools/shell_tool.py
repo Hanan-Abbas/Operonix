@@ -134,10 +134,19 @@ class ShellTool:
         """
         Read the pre-resolved profile from args["_profile"] (injected by the
         executor).  If not present, resolve now using terminal_resolver.
+
+        panel_sudo is handled here before the normal profile objects — it is
+        signalled by args["needs_password"]=True or profile_hint="panel_sudo"
+        and does NOT go through terminal_resolver (it uses its own subprocess
+        flow with `sudo -S` and panel password widget).
         """
         command = args.get("command") or args.get("cmd", "")
         if not command:
             return False, "ShellTool: no command provided."
+
+        # ── panel_sudo: password entered in the panel, piped to sudo -S ────────
+        if args.get("needs_password") or args.get("profile_hint") == "panel_sudo":
+            return await self._execute_panel_sudo(command, args)
 
         profile: Optional[ResolveResult] = args.get("_profile")
 
@@ -163,16 +172,180 @@ class ShellTool:
             return await self._execute_lab(command, args, profile)
 
         if isinstance(profile, AmbiguousTarget):
-            # Should have been caught by the executor and shown a selection UI.
-            # If we reach here, fall back to Ghost and log a warning.
             log.warning(
                 "ShellTool: AmbiguousTarget reached _dispatch — falling back to Ghost"
             )
             ghost = GhostTarget(cwd=args.get("cwd"))
             return await self._execute_ghost(command, args, ghost)
 
-        # Unknown profile type
         return False, f"ShellTool: unknown profile type {type(profile)}"
+
+    # ── Profile: panel_sudo ───────────────────────────────────────────────── #
+
+    async def _execute_panel_sudo(
+        self, command: str, args: dict
+    ) -> tuple[bool, str]:
+        """
+        Panel sudo profile — shows a password input widget in the panel,
+        then runs the command via `sudo -S` with the password piped to stdin.
+
+        Flow:
+          1. Publish "sudo_password_required" on the bus.
+             panel_controller subscribes → shows password widget in panel.
+          2. Await "sudo_password_provided" (max 120 s).
+             panel_controller emits this after the user submits the password.
+          3. Build the command:
+               - If command already starts with "sudo": run as-is with -S flag.
+               - Otherwise: prepend "sudo -S".
+          4. Run via asyncio subprocess with password written to stdin.
+          5. Stream output back via "command_output_ready" and return result.
+
+        `sudo -S` reads the password from stdin.  We write "<password>\n" to
+        the process stdin immediately after it starts, then close stdin so sudo
+        stops waiting.  Output (stdout + stderr) is captured and shown in the
+        panel inline output area and the dashboard log.
+        """
+        task_id = args.get("task_id", "unknown")
+        cwd     = args.get("cwd") or str(os.path.expanduser("~"))
+
+        # ── Step 1: ask the panel to show a password widget ────────────────────
+        log.info("panel_sudo: requesting password from panel for task=%s", task_id)
+        bus.publish(
+            "sudo_password_required",
+            {
+                "task_id": task_id,
+                "command": command,
+                "message": f"Enter sudo password to run: {command}",
+            },
+            source="shell_tool",
+        )
+
+        # ── Step 2: wait for the panel to provide the password ─────────────────
+        loop    = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+
+        def _on_password_provided(event: object) -> None:
+            data = getattr(event, "data", {}) or {}
+            if data.get("task_id") == task_id and not fut.done():
+                fut.set_result(data.get("password", ""))
+
+        bus.subscribe("sudo_password_provided", _on_password_provided)
+
+        try:
+            password = await asyncio.wait_for(fut, timeout=120.0)
+        except asyncio.TimeoutError:
+            log.warning("panel_sudo: password not provided within 120 s — cancelled")
+            bus.publish(
+                "sudo_password_cancelled",
+                {"task_id": task_id, "reason": "timeout"},
+                source="shell_tool",
+            )
+            return False, "sudo: password prompt timed out — command cancelled."
+        finally:
+            # Always unsubscribe to avoid memory leaks
+            try:
+                from core.event_bus import bus as _bus
+                _bus._unsubscribe_dead(_on_password_provided)
+            except Exception:
+                pass
+
+        if not password:
+            return False, "sudo: no password provided — command cancelled."
+
+        # ── Step 3: build sudo -S command ──────────────────────────────────────
+        stripped = command.strip()
+        if stripped.startswith("sudo "):
+            # Already has sudo — insert -S after "sudo"
+            sudo_command = "sudo -S " + stripped[len("sudo "):]
+        else:
+            sudo_command = f"sudo -S {stripped}"
+
+        log.info("panel_sudo: executing '%s' (cwd=%s)", sudo_command, cwd)
+
+        # ── Step 4: run subprocess with password piped to stdin ────────────────
+        try:
+            process = await asyncio.create_subprocess_shell(
+                sudo_command,
+                stdin  = asyncio.subprocess.PIPE,
+                stdout = asyncio.subprocess.PIPE,
+                stderr = asyncio.subprocess.PIPE,
+                cwd    = cwd,
+            )
+
+            # Write password + newline, then close stdin so sudo stops waiting
+            stdout_bytes, stderr_bytes = await process.communicate(
+                input=(password + "\n").encode("utf-8")
+            )
+
+            exit_code = process.returncode
+            stdout    = stdout_bytes.decode(errors="replace").strip()
+            stderr    = stderr_bytes.decode(errors="replace").strip()
+
+            # sudo echoes "Sorry, try again." to stderr on wrong password
+            if "try again" in stderr.lower() or "incorrect password" in stderr.lower():
+                log.warning("panel_sudo: incorrect password for task=%s", task_id)
+                bus.publish(
+                    "command_output_ready",
+                    {
+                        "profile":   "panel_sudo",
+                        "command":   command,
+                        "stdout":    "",
+                        "stderr":    "Incorrect sudo password.",
+                        "exit_code": exit_code,
+                        "cwd":       cwd,
+                        "success":   False,
+                        "snippet":   "❌ Incorrect sudo password.",
+                        "task_id":   task_id,
+                    },
+                    source="shell_tool",
+                )
+                return False, "sudo: incorrect password."
+
+            ok     = exit_code == 0
+            output = stdout or stderr or ("Done." if ok else f"Exit {exit_code}")
+            snippet = (output[:300] + "…") if len(output) > 300 else output
+
+        except Exception as exc:
+            log.error("panel_sudo: subprocess failed — %s", exc)
+            bus.publish(
+                "command_output_ready",
+                {
+                    "profile":   "panel_sudo",
+                    "command":   command,
+                    "stdout":    "",
+                    "stderr":    str(exc),
+                    "exit_code": 1,
+                    "cwd":       cwd,
+                    "success":   False,
+                    "snippet":   f"Error: {exc}",
+                    "task_id":   task_id,
+                },
+                source="shell_tool",
+            )
+            return False, f"panel_sudo subprocess error: {exc}"
+
+        # ── Step 5: publish dual output ────────────────────────────────────────
+        bus.publish(
+            "command_output_ready",
+            {
+                "profile":   "panel_sudo",
+                "command":   command,
+                "stdout":    stdout,
+                "stderr":    stderr,
+                "exit_code": exit_code,
+                "cwd":       cwd,
+                "success":   ok,
+                "snippet":   snippet,
+                "task_id":   task_id,
+            },
+            source="shell_tool",
+        )
+
+        log.info(
+            "panel_sudo: task=%s exit_code=%d success=%s",
+            task_id, exit_code, ok,
+        )
+        return ok, output
 
     # ── Profile A: Ghost ──────────────────────────────────────────────────── #
 
