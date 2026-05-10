@@ -61,6 +61,16 @@ from core.terminal_resolver import (
 log = logging.getLogger("ShellTool")
 
 
+def _pattern_label(command: str) -> str:
+    """Return a short human-readable label for a command pattern."""
+    tokens = command.strip().split()
+    if len(tokens) >= 3 and tokens[0] == "sudo":
+        return f"{tokens[1]} {tokens[2]}"
+    if len(tokens) >= 2:
+        return f"{tokens[0]} {tokens[1]}"
+    return tokens[0] if tokens else command
+
+
 class ShellTool:
     name = "shell_tool"
     tool_type = "shell_tool"
@@ -144,9 +154,12 @@ class ShellTool:
         if not command:
             return False, "ShellTool: no command provided."
 
-        # ── panel_sudo: password entered in the panel, piped to sudo -S ────────
+        # ── panel_sudo / interactive: password entered in panel, streamed output ─
+        # Also catches non-sudo commands that might have y/n prompts
+        # (e.g. plain "apt install" without sudo — requires password escalation).
         if args.get("needs_password") or args.get("profile_hint") == "panel_sudo":
-            return await self._execute_panel_sudo(command, args)
+            args["_original_command"] = command
+            return await self._execute_interactive(command, args)
 
         profile: Optional[ResolveResult] = args.get("_profile")
 
@@ -345,6 +358,242 @@ class ShellTool:
             "panel_sudo: task=%s exit_code=%d success=%s",
             task_id, exit_code, ok,
         )
+        return ok, output
+
+    # ── Profile: panel_sudo / streaming interactive ───────────────────────── #
+
+    async def _execute_interactive(
+        self, command: str, args: dict
+    ) -> tuple[bool, str]:
+        """
+        Unified streaming executor for all interactive commands.
+
+        Handles three categories:
+          • sudo password     — shows password widget in panel, pipes to sudo -S
+          • y/n confirmations — ProcessBridge detects prompts mid-stream,
+                                panel shows Yes/No widget, response piped to stdin
+          • Adaptive Trust    — PromptTrustLayer decides if a known-trusted
+                                pattern should be auto-approved or a suggestion shown
+
+        Flow
+        ────
+        1. Collect sudo password from panel (if command needs sudo).
+        2. Ask PromptTrustLayer whether to auto, suggest, or prompt for y/n.
+        3. Start ProcessBridge — it streams stdout/stderr line by line.
+           ProcessBridge itself publishes interactive_prompt when it detects
+           a pattern; we subscribe here to handle each one through the Trust Layer.
+        4. Publish dual output when done.
+        """
+        from tools.process_bridge import ProcessBridge
+        from learning.prompt_trust import prompt_trust
+
+        task_id = args.get("task_id", "unknown")
+        cwd     = args.get("cwd") or str(os.path.expanduser("~"))
+
+        # ── Step 1: collect sudo password if needed ────────────────────────────
+        password = ""
+        needs_sudo = (
+            command.strip().startswith("sudo")
+            or args.get("needs_password", False)
+        )
+
+        if needs_sudo:
+            log.info("interactive: requesting sudo password for task=%s", task_id)
+            bus.publish(
+                "sudo_password_required",
+                {
+                    "task_id": task_id,
+                    "command": command,
+                    "message": f"Enter sudo password to run:\n{command}",
+                },
+                source="shell_tool",
+            )
+
+            loop = asyncio.get_running_loop()
+            pwd_fut: asyncio.Future = loop.create_future()
+
+            def _on_pwd(event: object) -> None:
+                data = getattr(event, "data", {}) or {}
+                if data.get("task_id") == task_id and not pwd_fut.done():
+                    pwd_fut.set_result(data.get("password", ""))
+
+            bus.subscribe("sudo_password_provided", _on_pwd)
+            try:
+                password = await asyncio.wait_for(pwd_fut, timeout=120.0)
+            except asyncio.TimeoutError:
+                bus.publish(
+                    "sudo_password_cancelled",
+                    {"task_id": task_id, "reason": "timeout"},
+                    source="shell_tool",
+                )
+                return False, "sudo: password prompt timed out — command cancelled."
+            finally:
+                bus._unsubscribe_dead(_on_pwd)
+
+            if not password:
+                return False, "sudo: no password provided — command cancelled."
+
+            # Insert -S so sudo reads password from stdin
+            stripped = command.strip()
+            if stripped.startswith("sudo ") and "-S" not in stripped:
+                command = "sudo -S " + stripped[len("sudo "):]
+
+        # ── Step 2: subscribe to interactive prompts from ProcessBridge ────────
+        # Each time ProcessBridge detects a y/n or free-text prompt it publishes
+        # interactive_prompt.  We handle it here using the Trust Layer decision.
+        loop = asyncio.get_running_loop()
+
+        async def _handle_interactive_prompt(event: object) -> None:
+            data        = getattr(event, "data", {}) or {}
+            if data.get("task_id") != task_id:
+                return
+            prompt_line = data.get("prompt_line", "")
+            prompt_type = data.get("prompt_type", "yn")
+
+            # Ask Trust Layer
+            action = prompt_trust.evaluate(command, prompt_type)
+
+            if action == "auto":
+                # Fully trusted — respond automatically, no widget shown
+                auto_resp = prompt_trust.get_auto_response(command, prompt_type)
+                log.info(
+                    "interactive: AUTO response=%r for task=%s pattern=%r",
+                    auto_resp, task_id, command,
+                )
+                bus.publish(
+                    "interactive_prompt_auto",
+                    {
+                        "task_id":  task_id,
+                        "response": auto_resp,
+                        "message":  f"Auto-approved (trusted pattern): {command[:60]}",
+                    },
+                    source="shell_tool",
+                )
+                bus.publish(
+                    "interactive_response",
+                    {"task_id": task_id, "response": auto_resp},
+                    source="shell_tool",
+                )
+
+            elif action == "suggest":
+                # Threshold reached — show suggestion widget, fall back to normal
+                # prompt while user decides
+                bus.publish(
+                    "trust_auto_approve_suggestion",
+                    {
+                        "task_id":    task_id,
+                        "command":    command,
+                        "prompt_type": prompt_type,
+                        "message": (
+                            f"I've noticed you always approve this.\n"
+                            f"Should I handle '{_pattern_label(command)}' "
+                            f"automatically from now on?"
+                        ),
+                    },
+                    source="shell_tool",
+                )
+                # Also show the normal y/n widget so the command doesn't hang
+                bus.publish(
+                    "interactive_prompt_widget",
+                    {
+                        "task_id":     task_id,
+                        "prompt_type": prompt_type,
+                        "message":     data.get("message", prompt_line),
+                        "prompt_line": prompt_line,
+                    },
+                    source="shell_tool",
+                )
+
+            else:
+                # Normal prompt — show widget and wait for user
+                bus.publish(
+                    "interactive_prompt_widget",
+                    {
+                        "task_id":     task_id,
+                        "prompt_type": prompt_type,
+                        "message":     data.get("message", prompt_line),
+                        "prompt_line": prompt_line,
+                    },
+                    source="shell_tool",
+                )
+
+        bus.subscribe("interactive_prompt", _handle_interactive_prompt)
+
+        # Also subscribe to interactive_response to record trust data after user responds
+        async def _handle_response_record(event: object) -> None:
+            data     = getattr(event, "data", {}) or {}
+            if data.get("task_id") != task_id:
+                return
+            response = data.get("response", "")
+            # Only record manual responses (not auto ones published above)
+            if not data.get("_auto"):
+                bus.publish(
+                    "interactive_prompt_responded",
+                    {
+                        "task_id":     task_id,
+                        "command":     command,
+                        "prompt_type": data.get("prompt_type", "yn"),
+                        "response":    response,
+                    },
+                    source="shell_tool",
+                )
+
+        bus.subscribe("interactive_response", _handle_response_record)
+
+        # ── Step 3: run ProcessBridge ──────────────────────────────────────────
+        bridge = ProcessBridge(
+            task_id  = task_id,
+            command  = command,
+            cwd      = cwd,
+            password = password,
+            timeout  = float(args.get("timeout", 300.0)),
+        )
+        try:
+            ok, output = await bridge.run()
+        finally:
+            bus._unsubscribe_dead(_handle_interactive_prompt)
+            bus._unsubscribe_dead(_handle_response_record)
+
+        # Wrong sudo password check
+        if needs_sudo and not ok and "try again" in output.lower():
+            bus.publish(
+                "command_output_ready",
+                {
+                    "profile":   "panel_sudo",
+                    "command":   command,
+                    "stdout":    "",
+                    "stderr":    "Incorrect sudo password.",
+                    "exit_code": 1,
+                    "cwd":       cwd,
+                    "success":   False,
+                    "snippet":   "❌ Incorrect sudo password.",
+                    "task_id":   task_id,
+                },
+                source="shell_tool",
+            )
+            return False, "sudo: incorrect password."
+
+        # ── Step 4: publish dual output ────────────────────────────────────────
+        profile_name = "panel_sudo" if needs_sudo else "interactive"
+        snippet      = (output[:300] + "…") if len(output) > 300 else output
+
+        bus.publish(
+            "command_output_ready",
+            {
+                "profile":   profile_name,
+                "command":   args.get("_original_command", command),
+                "stdout":    output,
+                "stderr":    "",
+                "exit_code": 0 if ok else 1,
+                "cwd":       cwd,
+                "success":   ok,
+                "snippet":   snippet,
+                "task_id":   task_id,
+            },
+            source="shell_tool",
+        )
+
+        log.info("interactive: task=%s success=%s", task_id, ok)
         return ok, output
 
     # ── Profile A: Ghost ──────────────────────────────────────────────────── #
