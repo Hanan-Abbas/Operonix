@@ -205,6 +205,11 @@ if _HAS_QT:
         # panel_controller._on_target_selection_respond() is connected to this.
         target_selection_responded = pyqtSignal(object)
 
+        # NEW: emitted when the user submits the sudo password in the panel widget.
+        # Carries the raw password string — controller hides the widget immediately.
+        # panel_controller._on_sudo_password_submitted() is connected to this.
+        sudo_password_submitted = pyqtSignal(str)
+
         def __init__(
             self,
             tokens: ThemeTokens,
@@ -521,6 +526,166 @@ if _HAS_QT:
             if self._confirm_banner is not None:
                 self._confirm_banner.setVisible(False)
             log.debug("panel_renderer: confirmation banner hidden")
+
+        # ------------------------------------------------------------------
+        # Sudo password prompt slots (called via _QtBridge — Qt thread)
+        # ------------------------------------------------------------------
+
+        def show_sudo_password(self, payload: Any) -> None:
+            """
+            Show a secure password input widget at the top of the Command tab.
+
+            The widget contains:
+              • A lock icon + command description (so user knows what they're
+                authorising the password for — never a blank prompt)
+              • A QLineEdit in Password echo mode (dots, never plaintext)
+              • A Submit button and a Cancel button
+
+            Submitting emits sudo_password_submitted(password_str) and the
+            controller hides the widget immediately — the password never stays
+            on screen after submission.
+
+            Called via _QtBridge.sig_show_sudo_password (always Qt thread).
+            """
+            if not isinstance(payload, dict):
+                return
+
+            t       = self._tokens
+            sp      = t.spacing_unit
+            command = payload.get("command", "")
+            message = payload.get("message", f"Sudo password required for: {command}")
+
+            self._remove_sudo_password_widget()
+
+            frame = QFrame()
+            frame.setObjectName("sudoPasswordFrame")
+            frame.setStyleSheet(
+                f"""
+                QFrame#sudoPasswordFrame {{
+                    background: {t.bg_secondary};
+                    border: 2px solid {t.accent};
+                    border-radius: {t.radius_md}px;
+                    margin: {sp // 2}px {sp}px;
+                }}
+                """
+            )
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(sp, sp, sp, sp)
+            layout.setSpacing(sp // 2)
+
+            # Header
+            header = QLabel(f"🔒 {message}")
+            header.setWordWrap(True)
+            header.setStyleSheet(
+                f"color: {t.text_primary}; font-size: {t.font_size_sm}pt;"
+                f" font-weight: bold; background: transparent; border: none;"
+            )
+            layout.addWidget(header)
+
+            # Password input — echo mode hides characters
+            pwd_input = QLineEdit()
+            pwd_input.setEchoMode(QLineEdit.EchoMode.Password)
+            pwd_input.setPlaceholderText("Enter sudo password…")
+            pwd_input.setStyleSheet(
+                f"""
+                QLineEdit {{
+                    background: {t.bg_primary};
+                    color: {t.text_primary};
+                    border: 1px solid {t.border_color};
+                    border-radius: {t.radius_sm}px;
+                    padding: {sp // 2}px {sp}px;
+                    font-size: {t.font_size_base}pt;
+                    font-family: {t.font_family};
+                    selection-background-color: {t.selection_bg};
+                }}
+                QLineEdit:focus {{ border-color: {t.accent}; }}
+                """
+            )
+            layout.addWidget(pwd_input)
+
+            # Button row
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+
+            submit_btn = QPushButton("🔑  Submit")
+            submit_btn.setFixedHeight(sp * 4)
+            submit_btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {t.accent};
+                    color: {t.accent_text};
+                    border: none;
+                    border-radius: {t.radius_sm}px;
+                    padding: 2px {sp * 2}px;
+                    font-size: {t.font_size_sm}pt;
+                    font-family: {t.font_family};
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{ opacity: 0.85; }}
+                """
+            )
+
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.setFixedHeight(sp * 4)
+            cancel_btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {t.text_muted};
+                    border: 1px solid {t.border_color};
+                    border-radius: {t.radius_sm}px;
+                    padding: 2px {sp}px;
+                    font-size: {t.font_size_sm}pt;
+                    font-family: {t.font_family};
+                }}
+                QPushButton:hover {{ color: {t.text_primary}; border-color: {t.accent}; }}
+                """
+            )
+
+            def _submit() -> None:
+                pwd = pwd_input.text()
+                pwd_input.clear()          # wipe immediately — never keep in memory longer than needed
+                self.sudo_password_submitted.emit(pwd)
+
+            def _cancel() -> None:
+                pwd_input.clear()
+                self.sudo_password_submitted.emit("")  # empty = cancelled
+
+            submit_btn.clicked.connect(_submit)
+            cancel_btn.clicked.connect(_cancel)
+            # Also submit on Enter key in the input field
+            pwd_input.returnPressed.connect(_submit)
+
+            btn_row.addWidget(submit_btn)
+            btn_row.addWidget(cancel_btn)
+            layout.addLayout(btn_row)
+
+            self._sudo_password_widget = frame
+
+            # Insert at top of Command tab (index 0 = after app badge)
+            command_tab = self._tabs.widget(0)
+            if command_tab and command_tab.layout():
+                command_tab.layout().insertWidget(1, frame)
+                self._tabs.setCurrentIndex(0)
+
+            # Focus the password input so user can type immediately
+            pwd_input.setFocus()
+            log.debug("panel_renderer: sudo password widget shown")
+
+        def hide_sudo_password(self) -> None:
+            """
+            Hide and destroy the sudo password widget.
+            Called via _QtBridge.sig_hide_sudo_password (always Qt thread).
+            """
+            self._remove_sudo_password_widget()
+            log.debug("panel_renderer: sudo password widget hidden")
+
+        def _remove_sudo_password_widget(self) -> None:
+            widget = getattr(self, "_sudo_password_widget", None)
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+                self._sudo_password_widget = None
 
         # ------------------------------------------------------------------
         # Hybrid execution output slots (called via _QtBridge — Qt thread)
@@ -1192,5 +1357,7 @@ else:
         def set_status(self, msg: str, level: str = "info") -> None: pass
         def show_confirmation(self, payload: Any) -> None: pass
         def hide_confirmation(self) -> None: pass
+        def show_sudo_password(self, payload: Any) -> None: pass
+        def hide_sudo_password(self) -> None: pass
         def show_output_snippet(self, payload: Any) -> None: pass
         def show_target_selection(self, payload: Any) -> None: pass
