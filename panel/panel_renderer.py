@@ -210,6 +210,14 @@ if _HAS_QT:
         # panel_controller._on_sudo_password_submitted() is connected to this.
         sudo_password_submitted = pyqtSignal(str)
 
+        # NEW: emitted when user responds to a y/n or free-text interactive prompt.
+        # Carries the response string: "y", "n", or free text.
+        interactive_prompt_responded = pyqtSignal(str)
+
+        # NEW: emitted when user answers the "automate this?" trust suggestion.
+        # Carries True (accept) or False (decline).
+        trust_suggestion_answered = pyqtSignal(bool)
+
         def __init__(
             self,
             tokens: ThemeTokens,
@@ -686,6 +694,230 @@ if _HAS_QT:
                 widget.setParent(None)
                 widget.deleteLater()
                 self._sudo_password_widget = None
+
+        # ------------------------------------------------------------------
+        # Interactive prompt slots (y/n and free-text — called via _QtBridge)
+        # ------------------------------------------------------------------
+
+        def show_interactive_prompt(self, payload: Any) -> None:
+            """
+            Show a y/n or free-text prompt widget in the Command tab.
+
+            For y/n:   two buttons — Yes and No
+            For free-text: a QLineEdit + Submit button
+
+            Emits interactive_prompt_responded(str) on user action.
+            Called via _QtBridge.sig_show_interactive_prompt (Qt thread).
+            """
+            if not isinstance(payload, dict):
+                return
+
+            t           = self._tokens
+            sp          = t.spacing_unit
+            prompt_type = payload.get("prompt_type", "yn")
+            message     = payload.get("message", "Command requires input:")
+            prompt_line = payload.get("prompt_line", "")
+
+            self._remove_interactive_prompt_widget()
+
+            frame = QFrame()
+            frame.setObjectName("interactivePromptFrame")
+            frame.setStyleSheet(
+                f"""
+                QFrame#interactivePromptFrame {{
+                    background: {t.bg_secondary};
+                    border: 2px solid {t.warning};
+                    border-radius: {t.radius_md}px;
+                    margin: {sp // 2}px {sp}px;
+                }}
+                """
+            )
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(sp, sp, sp, sp)
+            layout.setSpacing(sp // 2)
+
+            # Header
+            header = QLabel(f"⚡ {message}")
+            header.setWordWrap(True)
+            header.setStyleSheet(
+                f"color: {t.text_primary}; font-size: {t.font_size_sm}pt;"
+                f" font-weight: bold; background: transparent; border: none;"
+            )
+            layout.addWidget(header)
+
+            # Show the raw prompt line in monospace for context
+            if prompt_line:
+                raw_label = QLabel(prompt_line)
+                raw_label.setStyleSheet(
+                    f"color: {t.text_muted}; font-size: {t.font_size_sm}pt;"
+                    f" font-family: monospace; background: transparent; border: none;"
+                )
+                layout.addWidget(raw_label)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+
+            if prompt_type == "yn":
+                yes_btn = QPushButton("✓  Yes")
+                yes_btn.setFixedHeight(sp * 4)
+                yes_btn.setStyleSheet(
+                    f"QPushButton {{ background: {t.success}; color: {t.accent_text};"
+                    f" border: none; border-radius: {t.radius_sm}px;"
+                    f" padding: 2px {sp * 2}px; font-size: {t.font_size_sm}pt;"
+                    f" font-weight: bold; font-family: {t.font_family}; }}"
+                )
+                no_btn = QPushButton("✗  No")
+                no_btn.setFixedHeight(sp * 4)
+                no_btn.setStyleSheet(
+                    f"QPushButton {{ background: {t.error}; color: {t.accent_text};"
+                    f" border: none; border-radius: {t.radius_sm}px;"
+                    f" padding: 2px {sp * 2}px; font-size: {t.font_size_sm}pt;"
+                    f" font-weight: bold; font-family: {t.font_family}; }}"
+                )
+                yes_btn.clicked.connect(lambda: self.interactive_prompt_responded.emit("y"))
+                no_btn.clicked.connect(lambda: self.interactive_prompt_responded.emit("n"))
+                btn_row.addWidget(yes_btn)
+                btn_row.addWidget(no_btn)
+
+            else:
+                # Free-text input
+                text_input = QLineEdit()
+                text_input.setPlaceholderText("Type your response…")
+                text_input.setStyleSheet(
+                    f"QLineEdit {{ background: {t.bg_primary}; color: {t.text_primary};"
+                    f" border: 1px solid {t.border_color}; border-radius: {t.radius_sm}px;"
+                    f" padding: {sp // 2}px; font-family: {t.font_family};"
+                    f" font-size: {t.font_size_base}pt; }}"
+                    f" QLineEdit:focus {{ border-color: {t.accent}; }}"
+                )
+                layout.addWidget(text_input)
+
+                submit_btn = QPushButton("Submit")
+                submit_btn.setFixedHeight(sp * 4)
+                submit_btn.setStyleSheet(
+                    f"QPushButton {{ background: {t.accent}; color: {t.accent_text};"
+                    f" border: none; border-radius: {t.radius_sm}px;"
+                    f" padding: 2px {sp * 2}px; font-size: {t.font_size_sm}pt;"
+                    f" font-weight: bold; }}"
+                )
+
+                def _submit_text() -> None:
+                    self.interactive_prompt_responded.emit(text_input.text())
+
+                submit_btn.clicked.connect(_submit_text)
+                text_input.returnPressed.connect(_submit_text)
+                btn_row.addWidget(submit_btn)
+
+            layout.addLayout(btn_row)
+
+            self._interactive_prompt_widget = frame
+            command_tab = self._tabs.widget(0)
+            if command_tab and command_tab.layout():
+                command_tab.layout().insertWidget(1, frame)
+                self._tabs.setCurrentIndex(0)
+            log.debug("panel_renderer: interactive prompt shown (type=%s)", prompt_type)
+
+        def hide_interactive_prompt(self) -> None:
+            """Hide the interactive prompt widget. Called via bridge (Qt thread)."""
+            self._remove_interactive_prompt_widget()
+
+        def _remove_interactive_prompt_widget(self) -> None:
+            widget = getattr(self, "_interactive_prompt_widget", None)
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+                self._interactive_prompt_widget = None
+
+        # ------------------------------------------------------------------
+        # Trust suggestion slots (called via _QtBridge — Qt thread)
+        # ------------------------------------------------------------------
+
+        def show_trust_suggestion(self, payload: Any) -> None:
+            """
+            Show the Adaptive Trust suggestion widget.
+
+            Displays: "I've noticed you always approve this.
+                       Should I handle 'apt install' automatically from now on?"
+
+            Yes → trust_suggestion_answered(True)
+            No  → trust_suggestion_answered(False)
+            """
+            if not isinstance(payload, dict):
+                return
+
+            t       = self._tokens
+            sp      = t.spacing_unit
+            message = payload.get("message", "Should I automate this command?")
+            command = payload.get("command", "")
+
+            self._remove_trust_suggestion_widget()
+
+            frame = QFrame()
+            frame.setObjectName("trustSuggestionFrame")
+            frame.setStyleSheet(
+                f"""
+                QFrame#trustSuggestionFrame {{
+                    background: {t.bg_secondary};
+                    border: 2px solid {t.accent};
+                    border-radius: {t.radius_md}px;
+                    margin: {sp // 2}px {sp}px;
+                }}
+                """
+            )
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(sp, sp, sp, sp)
+            layout.setSpacing(sp // 2)
+
+            # Icon + message
+            header = QLabel(f"🤖 {message}")
+            header.setWordWrap(True)
+            header.setStyleSheet(
+                f"color: {t.text_primary}; font-size: {t.font_size_sm}pt;"
+                f" font-weight: bold; background: transparent; border: none;"
+            )
+            layout.addWidget(header)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+
+            yes_btn = QPushButton("Yes, automate it")
+            yes_btn.setFixedHeight(sp * 4)
+            yes_btn.setStyleSheet(
+                f"QPushButton {{ background: {t.accent}; color: {t.accent_text};"
+                f" border: none; border-radius: {t.radius_sm}px;"
+                f" padding: 2px {sp * 2}px; font-size: {t.font_size_sm}pt;"
+                f" font-weight: bold; }}"
+            )
+            no_btn = QPushButton("No, keep asking")
+            no_btn.setFixedHeight(sp * 4)
+            no_btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {t.text_muted};"
+                f" border: 1px solid {t.border_color}; border-radius: {t.radius_sm}px;"
+                f" padding: 2px {sp}px; font-size: {t.font_size_sm}pt; }}"
+            )
+            yes_btn.clicked.connect(lambda: self.trust_suggestion_answered.emit(True))
+            no_btn.clicked.connect(lambda: self.trust_suggestion_answered.emit(False))
+            btn_row.addWidget(yes_btn)
+            btn_row.addWidget(no_btn)
+            layout.addLayout(btn_row)
+
+            self._trust_suggestion_widget = frame
+            command_tab = self._tabs.widget(0)
+            if command_tab and command_tab.layout():
+                command_tab.layout().insertWidget(1, frame)
+                self._tabs.setCurrentIndex(0)
+            log.debug("panel_renderer: trust suggestion shown for command=%r", command)
+
+        def hide_trust_suggestion(self) -> None:
+            """Hide the trust suggestion widget. Called via bridge (Qt thread)."""
+            self._remove_trust_suggestion_widget()
+
+        def _remove_trust_suggestion_widget(self) -> None:
+            widget = getattr(self, "_trust_suggestion_widget", None)
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+                self._trust_suggestion_widget = None
 
         # ------------------------------------------------------------------
         # Hybrid execution output slots (called via _QtBridge — Qt thread)
@@ -1359,5 +1591,9 @@ else:
         def hide_confirmation(self) -> None: pass
         def show_sudo_password(self, payload: Any) -> None: pass
         def hide_sudo_password(self) -> None: pass
+        def show_interactive_prompt(self, payload: Any) -> None: pass
+        def hide_interactive_prompt(self) -> None: pass
+        def show_trust_suggestion(self, payload: Any) -> None: pass
+        def hide_trust_suggestion(self) -> None: pass
         def show_output_snippet(self, payload: Any) -> None: pass
         def show_target_selection(self, payload: Any) -> None: pass
