@@ -122,7 +122,21 @@
                         }
                     }
                 ],
-                "usage_count": 3,
+                "usage_count": 5,
+                "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "run_command",
+                        "args": {
+                            "command": "<COMMAND>",
+                            "needs_password": "<NEEDS_PASSWORD>",
+                            "profile_hint": "<PROFILE_HINT>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
                 "step_count": 1
             }
         ]
