@@ -51,7 +51,6 @@ class AutoClickerPlugin(BasePlugin):
     async def run(self, context: dict, args: dict) -> dict:
         try:
             import pyautogui
-            import keyboard
             import threading
 
             # ── Configuration from args (with safe defaults) ─────────────────
@@ -74,11 +73,39 @@ class AutoClickerPlugin(BasePlugin):
                     pyautogui.click()
                     stop.wait(iv)  # waits iv seconds OR until stop is set
 
-            # ── Stopper: listens for hotkey and sets stop event ────────────────
-            def _stopper(stop: threading.Event, hotkey: str) -> None:
+            # ── Stopper: listens for hotkey using pynput (no root required) ──────
+            def _stopper(stop: threading.Event, hotkey_str: str) -> None:
                 try:
-                    keyboard.wait(hotkey)  # blocks until hotkey pressed
-                finally:
+                    from pynput import keyboard as _kb
+                    parts    = [p.strip().lower() for p in hotkey_str.split("+")]
+                    _MOD_MAP = {
+                        "alt": _kb.Key.alt, "ctrl": _kb.Key.ctrl,
+                        "shift": _kb.Key.shift, "cmd": _kb.Key.cmd,
+                    }
+                    modifiers = {_MOD_MAP[p] for p in parts[:-1] if p in _MOD_MAP}
+                    char_key  = parts[-1]
+                    pressed   = set()
+
+                    def on_press(key):
+                        pressed.add(key)
+                        try:    k = key.char
+                        except: k = None
+                        if all(m in pressed for m in modifiers) and k == char_key:
+                            stop.set()
+                            return False  # stop listener
+
+                    def on_release(key):
+                        pressed.discard(key)
+
+                    with _kb.Listener(on_press=on_press, on_release=on_release) as lst:
+                        while not stop.is_set():
+                            time.sleep(0.05)
+                        lst.stop()
+                except ImportError:
+                    # pynput not installed — fall back to 60s auto-stop
+                    stop.wait(60)
+                    stop.set()
+                except Exception as _e:
                     stop.set()
 
             threading.Thread(
