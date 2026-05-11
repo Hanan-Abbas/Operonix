@@ -20,7 +20,7 @@ pyobjc-framework-Quartz; sys_platform == 'darwin'
 # --- TOOLS & AUTOMATION (The "Hands") ---
 pyautogui
 mouse
-keyboard
+pynput
 pillow
 faster-whisper
 pyaudio
