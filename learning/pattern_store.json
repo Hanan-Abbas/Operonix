@@ -164,7 +164,20 @@
                         }
                     }
                 ],
-                "usage_count": 8,
+                "usage_count": 20,
+                "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "auto clicker",
+                        "args": {
+                            "action": "<ACTION>",
+                            "target": "<TARGET>"
+                        }
+                    }
+                ],
+                "usage_count": 18,
                 "step_count": 1
             }
         ]
