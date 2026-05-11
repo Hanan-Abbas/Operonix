@@ -88,6 +88,11 @@ class Orchestrator:
         self._panel_thread:     Optional[threading.Thread] = None
         self._panel_ready = threading.Event()
 
+        # Dedup set: task_safety_cleared fires from multiple safety subscribers
+        # (safety_validator, permission_guard, planner) for the same task_id.
+        # Without this, the executor runs the plugin once per subscriber.
+        self._dispatched_safe: set[str] = set()
+
     async def start(self) -> None:
         self.is_running = True
         loop = asyncio.get_running_loop()
@@ -403,6 +408,17 @@ class Orchestrator:
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
 
+        # ── Dedup: task_safety_cleared fires once per safety subscriber
+        # (safety_validator, permission_guard, planner all publish it for the
+        # same task_id). Only the FIRST arrival routes to the executor.
+        if task_id in self._dispatched_safe:
+            logger.debug(
+                "Task [%s] task_safety_cleared already handled — ignoring duplicate.",
+                task_id,
+            )
+            return
+        self._dispatched_safe.add(task_id)
+
         logger.info("Task [%s] safety cleared — routing to executor.", task_id)
 
         payload = dict(event.data)
@@ -518,6 +534,8 @@ class Orchestrator:
         task_id    = event.data.get("task_id")
         error      = event.data.get("error")
         task       = self.active_tasks.get(task_id, {})
+        # Clear dedup entry so a failed task can be retried cleanly
+        self._dispatched_safe.discard(task_id)
         logger.error("Task [%s] failed: %s", task_id, error)
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
@@ -544,6 +562,8 @@ class Orchestrator:
     async def finalize_task(self, event: Any) -> None:
         task_id    = event.data.get("task_id")
         task       = self.active_tasks.pop(task_id, {})
+        # Clear dedup entry so this task_id can be safely reused
+        self._dispatched_safe.discard(task_id)
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
         )
