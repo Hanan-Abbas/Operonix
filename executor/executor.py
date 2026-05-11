@@ -94,8 +94,36 @@ class Executor:
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
-        # CAVEAT 1 — subscribe to BOTH execution trigger channels
-        bus.subscribe("task_safety_cleared",  self.execute_plan)
+        # SUBSCRIPTION ARCHITECTURE FIX:
+        #
+        # The execution trigger chain is:
+        #
+        #   safety_validator   → task_safety_cleared (low-risk, no confirmation needed)
+        #                      → confirmation_required (high-risk, needs user approval)
+        #   confirmation_manager → task_safety_cleared (after user clicks Allow)
+        #   orchestrator.handle_safety_cleared → task_dispatched_safe (enriches + re-emits)
+        #
+        # PROBLEM: subscribing executor to "task_safety_cleared" caused it to run
+        # on the safety_validator's event BEFORE the user confirmed anything.
+        # The safety_validator publishes task_safety_cleared for low-risk tasks,
+        # but for HIGH-RISK tasks it publishes confirmation_required — then
+        # confirmation_manager pauses and waits.  However the orchestrator ALSO
+        # subscribes to task_safety_cleared and re-emits task_dispatched_safe
+        # immediately.  The executor on task_safety_cleared fired on that first
+        # safety_validator event before the user saw any confirmation dialog.
+        #
+        # FIX: executor subscribes ONLY to "task_dispatched_safe".
+        #   • Low-risk path:  safety_validator → task_safety_cleared
+        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
+        #                     → executor (correct, no confirmation needed)
+        #   • High-risk path: safety_validator → confirmation_required
+        #                     → [user approves] → confirmation_manager → task_safety_cleared
+        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
+        #                     → executor (correct, AFTER user approval)
+        #
+        # This single change ensures the executor ALWAYS runs after orchestrator
+        # has enriched the payload with context + profile_hint, AND always runs
+        # after user confirmation for high-risk tasks.
         bus.subscribe("task_dispatched_safe", self.execute_plan)
         bus.subscribe("target_selected",      self._on_target_selected)
         self.is_running = True
@@ -145,6 +173,12 @@ class Executor:
 
         def _on_done(t: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
+            # Keep task_id in _seen_task_ids for 5 s after completion to absorb
+            # any late-arriving duplicate events (e.g. orchestrator re-emitting
+            # task_dispatched_safe on a different code path).
+            asyncio.get_event_loop().call_later(
+                5.0, self._seen_task_ids.discard, task_id
+            )
             if t.cancelled():
                 logger.info("Task [%s] was cancelled.", task_id)
             elif t.exception():
@@ -264,7 +298,6 @@ class Executor:
                     source="executor",
                 )
                 retry_manager.clear_task(task_id)
-                self._seen_task_ids.discard(task_id)
                 logger.error("Task [%s] failed at step %d: %s", task_id, step_index, result)
                 return
 
@@ -297,7 +330,6 @@ class Executor:
             source="executor",
         )
         retry_manager.clear_task(task_id)
-        self._seen_task_ids.discard(task_id)
         logger.info("Task [%s] completed (method=%s)", task_id, method_used)
 
     # ── Step execution ─────────────────────────────────────────────────────
