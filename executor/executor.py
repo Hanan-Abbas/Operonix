@@ -84,9 +84,14 @@ class Executor:
         self._pending_target_selections: dict[str, asyncio.Future] = {}
 
         # CAVEAT 1 — dedup guard
-        # Prevents double-execution when a task arrives on both
-        # task_safety_cleared and task_dispatched_safe.
         self._seen_task_ids: set[str] = set()
+
+        # ── Concurrent execution registry ──────────────────────────────────
+        # Maps task_id → asyncio.Task so running tasks can be inspected,
+        # cancelled, or awaited.  Tasks are removed on completion/failure.
+        # The event loop is never blocked — each task runs concurrently so
+        # new panel inputs and bus events are processed even during downloads.
+        self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
         # CAVEAT 1 — subscribe to BOTH execution trigger channels
@@ -100,19 +105,76 @@ class Executor:
     # ── Main entry point ───────────────────────────────────────────────────
 
     async def execute_plan(self, event: Any) -> None:
+        """
+        Receive a task and dispatch it as a background asyncio.Task.
+
+        CONCURRENCY FIX:
+        Previously execute_plan() awaited _run_plan() directly. This held the
+        entire executor coroutine — and therefore the event loop — blocked for
+        the full duration of the command (seconds to minutes for downloads).
+        No new panel input, bus event, or health poll could be processed.
+
+        Fix: wrap _run_plan() in asyncio.create_task(). The task runs
+        concurrently on the same event loop without blocking it. The panel
+        remains fully responsive while apt installs, files download, or
+        pytest runs in the background.
+
+        Multiple tasks can run simultaneously (e.g. a ghost background task
+        while waiting for a sudo password on another). Each has its own
+        task_id so bus events, dedup, and the running_tasks registry are
+        all cleanly scoped.
+        """
+        task_data = event.data
+        task_id   = task_data.get("task_id")
+
+        # Dedup guard — same task arriving on both channels
+        if task_id in self._seen_task_ids:
+            logger.debug(
+                "execute_plan: task [%s] already running — ignoring duplicate from '%s'.",
+                task_id, getattr(event, "name", "unknown"),
+            )
+            return
+        self._seen_task_ids.add(task_id)
+
+        # Wrap in a Task so the event loop stays free
+        task = asyncio.create_task(
+            self._run_plan(event),
+            name=f"operonix-task-{task_id}",
+        )
+        self._running_tasks[task_id] = task
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._running_tasks.pop(task_id, None)
+            if t.cancelled():
+                logger.info("Task [%s] was cancelled.", task_id)
+            elif t.exception():
+                logger.error("Task [%s] raised: %s", task_id, t.exception())
+
+        task.add_done_callback(_on_done)
+
+        # Publish immediately so dashboard shows the task as queued/running
+        bus.publish(
+            "task_queued",
+            {
+                "task_id":        task_id,
+                "concurrent_count": len(self._running_tasks),
+            },
+            source="executor",
+        )
+        logger.info(
+            "Task [%s] dispatched as background task (%d running).",
+            task_id, len(self._running_tasks),
+        )
+
+    async def _run_plan(self, event: Any) -> None:
+        """
+        The actual execution logic — runs inside a background Task.
+        Identical to the previous execute_plan() body.
+        """
         metrics.total_tasks += 1
         start     = time.time()
         task_data = event.data
         task_id   = task_data.get("task_id")
-
-        # CAVEAT 1 — dedup: skip if already running from the other channel
-        if task_id in self._seen_task_ids:
-            logger.debug(
-                "execute_plan: task [%s] already running — ignoring duplicate "
-                "from '%s'.", task_id, getattr(event, "name", "unknown"),
-            )
-            return
-        self._seen_task_ids.add(task_id)
 
         # BUG 1 FIX — task_safety_cleared carries the full confirmation_required
         # payload.  The executor's steps live at the top level when built by
