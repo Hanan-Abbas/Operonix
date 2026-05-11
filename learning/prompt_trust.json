@@ -1,0 +1,12 @@
+{
+  "sudo -S *::password": {
+    "pattern": "sudo -S *",
+    "prompt_type": "password",
+    "consecutive_approvals": 1,
+    "total_approvals": 1,
+    "total_denials": 0,
+    "state": "observe",
+    "last_seen": 1778495097.7302442,
+    "suggested_at": 0.0
+  }
+}
