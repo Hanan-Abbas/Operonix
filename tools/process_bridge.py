@@ -210,7 +210,15 @@ class ProcessBridge:
           1. Publish process_output_chunk for live display in the panel.
           2. Run the Pattern Recognition Engine.
           3. If a pattern matches → soft-lock → await user response.
+
+        SUPPRESSION: when the process was started with sudo -S and a password
+        was pre-supplied, the "[sudo] password for <user>:" echo line appears
+        on stderr AFTER the password is accepted.  This is purely informational
+        — sudo already authenticated.  We suppress it so it does not trigger a
+        second "password_sudo" interactive prompt in the panel.
         """
+        sudo_already_authenticated = bool(self.password and "-S" in self.command)
+
         while True:
             try:
                 raw = await stream.readline()
@@ -246,9 +254,19 @@ class ProcessBridge:
             # ── Pattern Recognition Engine ─────────────────────────────────
             pattern = _classify_line(line)
             if pattern:
+                # SUPPRESSION: if sudo -S was used and password pre-supplied,
+                # the "password for <user>:" echo is just stdout noise from sudo
+                # confirming it read the password. Authentication already happened
+                # — suppress to avoid showing a second password widget.
+                if pattern.category == "password" and sudo_already_authenticated:
+                    log.debug(
+                        "ProcessBridge: suppressed sudo password echo line (already authenticated)"
+                    )
+                    continue
+
                 log.info(
-                    "ProcessBridge: interactive prompt detected — pattern='%s' category='%s' line=%r",
-                    pattern.name, pattern.category, safe_line,
+                    "ProcessBridge: interactive prompt detected — pattern='%s' category='%s'",
+                    pattern.name, pattern.category,
                 )
                 response = await self._soft_lock_and_request(line, pattern)
                 if response is not None:
