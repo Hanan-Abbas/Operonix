@@ -146,6 +146,7 @@ PATTERN_LIBRARY = '''
 
 # ── PATTERN: Background loop with stop event (auto-clicker, monitor, etc.) ───
 # Use this for ANY "do X repeatedly until stopped" intent.
+# Uses pynput for hotkey detection (no root required on Linux).
 import threading
 import time
 
@@ -154,16 +155,51 @@ _stop_event = threading.Event()
 def _worker_loop(stop_event, interval=0.1):
     """Worker runs in a daemon thread. Exits cleanly when stop_event is set."""
     import pyautogui
-    pyautogui.FAILSAFE = True
+    pyautogui.FAILSAFE = False  # disable corner-abort so it runs freely
     while not stop_event.is_set():
         pyautogui.click()           # ← replace with your action
         stop_event.wait(interval)   # blocks for interval OR until set()
 
-def _listen_for_stop(stop_event, hotkey="alt+s"):
-    """Listens for a hotkey in a separate thread and sets the stop event."""
-    import keyboard
-    keyboard.wait(hotkey)           # blocks until hotkey is pressed
-    stop_event.set()
+def _listen_for_stop(stop_event, hotkey_str="alt+s"):
+    """
+    Listens for a hotkey using pynput (no root required on Linux).
+    Parses hotkey_str like "alt+s" into modifier + key.
+    Falls back to a 60-second timeout if pynput is unavailable.
+    """
+    try:
+        from pynput import keyboard as _kb
+        # Parse hotkey: "alt+s" -> modifier=Key.alt, key=KeyCode(char='s')
+        parts = [p.strip().lower() for p in hotkey_str.split("+")]
+        _MOD_MAP = {
+            "alt":   _kb.Key.alt,   "ctrl": _kb.Key.ctrl,
+            "shift": _kb.Key.shift, "cmd":  _kb.Key.cmd,
+        }
+        modifiers = {_MOD_MAP[p] for p in parts[:-1] if p in _MOD_MAP}
+        char_key  = parts[-1]
+        pressed   = set()
+
+        def on_press(key):
+            pressed.add(key)
+            try:
+                k = key.char
+            except AttributeError:
+                k = None
+            mods_held = all(m in pressed for m in modifiers)
+            if mods_held and (k == char_key or (not modifiers and str(key) == f"Key.{char_key}")):
+                stop_event.set()
+                return False  # stop listener
+
+        def on_release(key):
+            pressed.discard(key)
+
+        with _kb.Listener(on_press=on_press, on_release=on_release) as listener:
+            while not stop_event.is_set():
+                time.sleep(0.05)
+            listener.stop()
+    except Exception:
+        # pynput not available — fall back to 60s auto-stop
+        stop_event.wait(60)
+        stop_event.set()
 
 # Starting the background task:
 stop_event = threading.Event()
@@ -336,11 +372,37 @@ class {class_name}(BasePlugin):
                     pyautogui.click()
                     stop.wait(iv)  # waits iv seconds OR until stop is set
 
-            # ── Stopper: listens for hotkey and sets stop event ────────────────
-            def _stopper(stop: threading.Event, hotkey: str) -> None:
+            # ── Stopper: listens for hotkey using pynput (no root required) ──────
+            def _stopper(stop: threading.Event, hotkey_str: str) -> None:
                 try:
-                    keyboard.wait(hotkey)  # blocks until hotkey pressed
-                finally:
+                    from pynput import keyboard as _kb
+                    parts    = [p.strip().lower() for p in hotkey_str.split("+")]
+                    _MOD_MAP = {{
+                        "alt": _kb.Key.alt, "ctrl": _kb.Key.ctrl,
+                        "shift": _kb.Key.shift, "cmd": _kb.Key.cmd,
+                    }}
+                    modifiers = {{_MOD_MAP[p] for p in parts[:-1] if p in _MOD_MAP}}
+                    char_key  = parts[-1]
+                    pressed   = set()
+
+                    def on_press(key):
+                        pressed.add(key)
+                        try:    k = key.char
+                        except: k = None
+                        if all(m in pressed for m in modifiers) and k == char_key:
+                            stop.set()
+                            return False
+
+                    def on_release(key):
+                        pressed.discard(key)
+
+                    with _kb.Listener(on_press=on_press, on_release=on_release) as lst:
+                        while not stop.is_set():
+                            time.sleep(0.05)
+                        lst.stop()
+                except Exception:
+                    # pynput unavailable — auto-stop after 60s
+                    stop.wait(60)
                     stop.set()
 
             threading.Thread(
