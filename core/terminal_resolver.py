@@ -562,9 +562,31 @@ class TerminalResolver:
         terminals = self._list_terminals()
 
         if not terminals:
-            # No terminals visible — fall back to Ghost
             log.info("TerminalResolver: no terminals found — using Ghost profile")
             return GhostTarget(venv_path=venv_path, cwd=cwd)
+
+        # ── 2.5 Fast path: if focus stack has a recent terminal with a pts,
+        # use it immediately without waiting for CWD scoring.
+        # This handles the common case where the user:
+        #   1. Focused their terminal
+        #   2. Opened the panel with Ctrl+Space (panel takes focus)
+        #   3. Typed a command
+        # In this case cwd reflects the panel/VS Code window, NOT the terminal.
+        # CWD scoring would give a poor match, but recency is definitive.
+        if self._focus_stack:
+            most_recent_id = self._focus_stack[0]
+            for rec in terminals:
+                if rec.window_id == most_recent_id and rec.pts_path:
+                    log.info(
+                        "TerminalResolver: fast-path Bridge via focus stack → '%s' (pts=%s)",
+                        rec.title, rec.pts_path,
+                    )
+                    return BridgeTarget(
+                        pts_path=rec.pts_path,
+                        window_id=rec.window_id,
+                        window_title=rec.title,
+                        cwd=rec.cwd,
+                    )
 
         # ── 3. Score each terminal by CWD match + temporal recency ────────────
         scored: list[tuple[float, _TerminalRecord]] = []
@@ -578,21 +600,22 @@ class TerminalResolver:
                 recency = 0.0
             score = cwd_s * 0.7 + recency * 0.3
             scored.append((score, rec))
+            log.debug(
+                "TerminalResolver: scored terminal='%s' cwd='%s' cwd_score=%.2f recency=%.2f total=%.2f pts=%s",
+                rec.title, rec.cwd, cwd_s, recency, score, rec.pts_path,
+            )
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
         best_score, best_rec = scored[0]
 
         # ── 4. Check for ambiguity ─────────────────────────────────────────────
-        # Ambiguous if two or more terminals share the top score (within 0.05)
-        # AND their CWD matches equally — meaning we cannot pick deterministically.
         top_group = [
             rec for score, rec in scored
             if abs(score - best_score) < 0.05 and best_score > 0.0
         ]
 
         if len(top_group) > 1 and effective_hint == "bridge":
-            # Forced bridge but truly ambiguous — ask the user
             candidates = [
                 BridgeTarget(
                     pts_path=rec.pts_path or "",
@@ -604,17 +627,25 @@ class TerminalResolver:
                 if rec.pts_path
             ]
             if len(candidates) > 1:
-                log.info(
-                    "TerminalResolver: ambiguous Bridge — %d candidates", len(candidates)
-                )
+                log.info("TerminalResolver: ambiguous Bridge — %d candidates", len(candidates))
                 return AmbiguousTarget(candidates=candidates)
 
         # ── 5. Decide profile based on best score ─────────────────────────────
-        if best_score >= 0.3 and best_rec.pts_path:
-            # Good CWD match or recent focus — use Bridge
+        #
+        # FIX: lowered threshold from 0.3 to 0.0 and made recency alone
+        # sufficient to choose Bridge.  Previously a terminal with no CWD match
+        # but recent focus (recency=1.0) scored 0.3 exactly, which only passed
+        # if >= 0.3 AND pts_path was found.  Now ANY terminal with a pts_path
+        # that was recently focused is preferred over Ghost.
+        #
+        # The old 0.3 threshold was designed to avoid picking a random terminal
+        # with no relation to the task. With recency tracking this is no longer
+        # needed — the focus stack guarantees the user explicitly focused that
+        # terminal before opening the panel.
+        if best_rec.pts_path:
             log.info(
-                "TerminalResolver: Bridge → %s (score=%.2f, pts=%s)",
-                best_rec.title, best_score, best_rec.pts_path,
+                "TerminalResolver: Bridge → '%s' (score=%.2f, pts=%s, cwd=%s)",
+                best_rec.title, best_score, best_rec.pts_path, best_rec.cwd,
             )
             return BridgeTarget(
                 pts_path=best_rec.pts_path,
@@ -624,13 +655,14 @@ class TerminalResolver:
             )
 
         if effective_hint == "bridge":
-            # Caller explicitly wanted bridge but no good candidate
-            # → spawn a Lab terminal so the user still sees something
-            log.info("TerminalResolver: bridge requested but no match — falling to Lab")
+            log.info("TerminalResolver: bridge requested but no pts found — falling to Lab")
             return LabTarget(terminal_bin=self._terminal_bin or "xterm", cwd=cwd)
 
-        # Low/no CWD match and no forced profile → Ghost
-        log.info("TerminalResolver: Ghost profile (best_score=%.2f)", best_score)
+        # No terminals have a pts — fall back to Ghost
+        log.info(
+            "TerminalResolver: Ghost profile — no pts found on any terminal (best_score=%.2f)",
+            best_score,
+        )
         return GhostTarget(venv_path=venv_path, cwd=cwd)
 
 
