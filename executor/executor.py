@@ -83,47 +83,12 @@ class Executor:
         self.restricted_actions: set[str] = set()
         self._pending_target_selections: dict[str, asyncio.Future] = {}
 
-        # CAVEAT 1 — dedup guard
+        #dedup guard
         self._seen_task_ids: set[str] = set()
-
-        # ── Concurrent execution registry ──────────────────────────────────
-        # Maps task_id → asyncio.Task so running tasks can be inspected,
-        # cancelled, or awaited.  Tasks are removed on completion/failure.
-        # The event loop is never blocked — each task runs concurrently so
-        # new panel inputs and bus events are processed even during downloads.
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
-        # SUBSCRIPTION ARCHITECTURE FIX:
-        #
-        # The execution trigger chain is:
-        #
-        #   safety_validator   → task_safety_cleared (low-risk, no confirmation needed)
-        #                      → confirmation_required (high-risk, needs user approval)
-        #   confirmation_manager → task_safety_cleared (after user clicks Allow)
-        #   orchestrator.handle_safety_cleared → task_dispatched_safe (enriches + re-emits)
-        #
-        # PROBLEM: subscribing executor to "task_safety_cleared" caused it to run
-        # on the safety_validator's event BEFORE the user confirmed anything.
-        # The safety_validator publishes task_safety_cleared for low-risk tasks,
-        # but for HIGH-RISK tasks it publishes confirmation_required — then
-        # confirmation_manager pauses and waits.  However the orchestrator ALSO
-        # subscribes to task_safety_cleared and re-emits task_dispatched_safe
-        # immediately.  The executor on task_safety_cleared fired on that first
-        # safety_validator event before the user saw any confirmation dialog.
-        #
-        # FIX: executor subscribes ONLY to "task_dispatched_safe".
-        #   • Low-risk path:  safety_validator → task_safety_cleared
-        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
-        #                     → executor (correct, no confirmation needed)
-        #   • High-risk path: safety_validator → confirmation_required
-        #                     → [user approves] → confirmation_manager → task_safety_cleared
-        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
-        #                     → executor (correct, AFTER user approval)
-        #
-        # This single change ensures the executor ALWAYS runs after orchestrator
-        # has enriched the payload with context + profile_hint, AND always runs
-        # after user confirmation for high-risk tasks.
+        
         bus.subscribe("task_dispatched_safe", self.execute_plan)
         bus.subscribe("target_selected",      self._on_target_selected)
         self.is_running = True
