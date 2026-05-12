@@ -1,0 +1,32 @@
+{
+  "name": "app_opening_plugin",
+  "description": "This plugin handles the app opening intent by performing a series of predefined actions.",
+  "version": "1.0",
+  "author": "agent",
+  "intent": "app opening",
+  "capabilities": [
+    "app_opening"
+  ],
+  "tags": [
+    "app opening",
+    "auto-generated"
+  ],
+  "permissions": [
+    "ui_interaction"
+  ],
+  "status": "pending",
+  "risk_level": "low",
+  "trusted": false,
+  "safe_mode": true,
+  "requires_confirmation": true,
+  "previous_versions": [],
+  "changelog": [],
+  "total_runs": 0,
+  "total_successes": 0,
+  "total_failures": 0,
+  "last_run_at": "",
+  "last_reviewed": "",
+  "created_at": "2026-05-12T09:12:39.254858",
+  "updated_at": "2026-05-12T09:12:39.254909",
+  "allowed_services": []
+}
