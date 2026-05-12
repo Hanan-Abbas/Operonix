@@ -108,6 +108,9 @@ class Orchestrator:
         bus.subscribe("task_completed",         self.finalize_task)
         # Resume execution after user approves a high-risk confirmation.
         bus.subscribe("task_safety_cleared",    self.handle_safety_cleared)
+        # Mark tasks as high-risk so _check_low_risk_dispatch doesn't run them
+        # before the user approves them.
+        bus.subscribe("confirmation_required",  self._mark_high_risk)
 
         # Start the three-layer safety stack so each subscribes to its events.
         # Order matters: permission_guard must be first (fastest gate).
@@ -387,45 +390,142 @@ class Orchestrator:
 
         await bus.emit("request_capability_mapping", event.data, source="orchestrator")
 
+    async def _mark_high_risk(self, event: Any) -> None:
+        """
+        Subscribes to confirmation_required.
+        Sets _high_risk_pending=True on the task so _check_low_risk_dispatch
+        knows NOT to auto-dispatch — the user must approve first.
+        """
+        task_id = event.data.get("task_id")
+        task    = self.active_tasks.get(task_id)
+        if task is not None:
+            task["_high_risk_pending"] = True
+            logger.debug("Task [%s] marked as high-risk — awaiting user confirmation.", task_id)
+
     async def handle_safety_cleared(self, event: Any) -> None:
         """
-        Called when ConfirmationManager clears a task after user approval.
-        Merges accumulated context and preserves profile_hint so the executor
-        still knows which execution profile to use.
+        Called when a task_safety_cleared event arrives.
 
-        BUG 2+3 FIX:
-          confirmation_manager.handle_user_response() re-publishes the original
-          confirmation_required payload as task_safety_cleared.  That payload
-          has steps nested inside full_task, not at the top level.
-          This method promotes full_task.steps → top-level steps so the
-          executor finds them via task_data.get("steps").
+        ROOT CAUSE FIX — pre-approval execution:
+        ─────────────────────────────────────────
+        task_safety_cleared is published by TWO different components:
 
-          It also merges the context accumulated by handle_context_snapshot
-          (which has the real cwd from the user's terminal window) into the
-          payload, since inject_task_metadata is never re-called on the
-          confirmation path.
+          1. safety_validator  — fires immediately when a task passes static
+                                 risk rules. For HIGH-RISK tasks it publishes
+                                 BOTH confirmation_required AND task_safety_cleared
+                                 in the same handler. This is premature — the
+                                 user has not approved anything yet.
+
+          2. confirmation_manager — fires AFTER the user clicks Allow in the
+                                    panel or dashboard. This is the legitimate
+                                    trigger for execution.
+
+        The previous dedup guard (_dispatched_safe) blocked the second arrival
+        but let the first through — the wrong one. The fix is to check the
+        event source and only route to the executor when it comes from
+        confirmation_manager. When it comes from safety_validator we store it
+        as "pending" and wait for confirmation_manager to confirm it.
+
+        For LOW-RISK tasks that skip confirmation entirely, safety_validator
+        publishes task_safety_cleared without a matching confirmation_required.
+        In that case confirmation_manager never fires, so we use a short timeout
+        to detect "no confirmation came" and route the pending task directly.
         """
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
+        source  = getattr(event, "source", None) or event.data.get("_source", "")
 
-        # ── Dedup: task_safety_cleared fires once per safety subscriber
-        # (safety_validator, permission_guard, planner all publish it for the
-        # same task_id). Only the FIRST arrival routes to the executor.
+        # ── CASE 1: Source is confirmation_manager → user just approved ───────
+        # This is the ONLY legitimate trigger for high-risk task execution.
+        if source == "confirmation_manager":
+            if task_id in self._dispatched_safe:
+                logger.debug(
+                    "Task [%s] already dispatched — ignoring late confirmation_manager event.",
+                    task_id,
+                )
+                return
+            self._dispatched_safe.add(task_id)
+            logger.info("Task [%s] approved by user — dispatching to executor.", task_id)
+            await self._dispatch_to_executor(event, task)
+            return
+
+        # ── CASE 2: Source is safety_validator / permission_guard / planner ───
+        # This fires BEFORE the user sees any confirmation dialog for high-risk
+        # tasks. We must NOT dispatch immediately.
+        #
+        # Strategy: store the event payload as "pending_safe" on the task and
+        # schedule a short-window check. If confirmation_manager fires within
+        # 10 s, it will dispatch (Case 1). If no confirmation_required was
+        # published (low-risk task), we dispatch after a brief yield.
         if task_id in self._dispatched_safe:
             logger.debug(
-                "Task [%s] task_safety_cleared already handled — ignoring duplicate.",
+                "Task [%s] already dispatched — ignoring duplicate from '%s'.",
+                task_id, source,
+            )
+            return
+
+        # Store the event for potential low-risk passthrough
+        if task:
+            task["_pending_safe_event"] = event
+            task["_pending_safe_source"] = source
+
+        # Check whether confirmation_required was already published for this task.
+        # If it was, this task is high-risk — do NOT dispatch; wait for user.
+        # If it was NOT published within a brief window, it's low-risk — dispatch.
+        asyncio.get_event_loop().call_later(
+            0.1,  # 100 ms window — confirmation_required fires in the same batch
+            lambda: asyncio.ensure_future(
+                self._check_low_risk_dispatch(task_id)
+            ),
+        )
+
+    async def _check_low_risk_dispatch(self, task_id: str) -> None:
+        """
+        Called 100 ms after safety_validator publishes task_safety_cleared.
+
+        By this point, if the task is high-risk, confirmation_required will
+        have already been published and confirmation_manager will be waiting
+        for user input. In that case _dispatched_safe is still empty for this
+        task_id and task["_high_risk_pending"] will be True.
+
+        If no confirmation was needed (low-risk), we dispatch now.
+        """
+        if task_id in self._dispatched_safe:
+            # Already dispatched by confirmation_manager path — nothing to do.
+            return
+
+        task = self.active_tasks.get(task_id, {})
+
+        # If confirmation_manager is holding this task, do NOT dispatch.
+        # The flag is set by _mark_high_risk below.
+        if task.get("_high_risk_pending"):
+            logger.debug(
+                "Task [%s] is high-risk and awaiting user confirmation — not dispatching.",
                 task_id,
             )
             return
+
+        # Low-risk task — safe to dispatch directly.
+        pending_event = task.get("_pending_safe_event")
+        if pending_event is None:
+            return
+
         self._dispatched_safe.add(task_id)
+        logger.info(
+            "Task [%s] is low-risk — dispatching directly (no confirmation needed).",
+            task_id,
+        )
+        await self._dispatch_to_executor(pending_event, task)
 
-        logger.info("Task [%s] safety cleared — routing to executor.", task_id)
-
+    async def _dispatch_to_executor(self, event: Any, task: dict) -> None:
+        """
+        Shared dispatch logic: enrich payload and emit task_dispatched_safe.
+        Previously inlined in handle_safety_cleared.
+        """
+        task_id = event.data.get("task_id")
         payload = dict(event.data)
 
-        # ── BUG 2 FIX: promote full_task.steps to top-level ──────────────
-        # executor.execute_plan reads task_data.get("steps").
-        # If top-level steps is missing or empty, pull from full_task.
+        # Promote full_task.steps to top-level so executor finds them
         if not payload.get("steps"):
             full_task_steps = (payload.get("full_task") or {}).get("steps") or []
             if full_task_steps:
@@ -435,30 +535,17 @@ class Orchestrator:
                     task_id, len(full_task_steps),
                 )
 
-        # ── BUG 3 FIX: merge accumulated context (cwd, window_title, etc.) ─
-        # handle_context_snapshot() already populated active_tasks[task_id]["context"]
-        # with the real terminal cwd.  Merge it into the payload now since
-        # inject_task_metadata won't be called again on this path.
+        # Merge accumulated context (real terminal cwd, window_title, etc.)
         if task:
             accumulated_ctx = task.get("context") or {}
             existing_ctx    = payload.get("context") or {}
-            # accumulated_ctx wins for keys not already in payload context
             payload["context"] = {**accumulated_ctx, **existing_ctx}
-            if accumulated_ctx.get("cwd") and not existing_ctx.get("cwd"):
-                logger.debug(
-                    "Task [%s] context.cwd restored from active_tasks: %s",
-                    task_id, accumulated_ctx["cwd"],
-                )
 
-        # ── HYBRID EXECUTION: ensure profile_hint survives the safety pause ─
+        # Restore profile_hint if it survived the safety pause
         if not payload.get("profile_hint") and task.get("profile_hint"):
             payload["profile_hint"] = task["profile_hint"]
-            logger.debug(
-                "Task [%s] restoring profile_hint=%s after safety clearance",
-                task_id, payload["profile_hint"],
-            )
 
-        # Ensure steps carry profile_hint in their args (executor reads it there)
+        # Push profile_hint into each step's args
         steps = payload.get("steps") or []
         hint  = payload.get("profile_hint")
         if hint and steps:
@@ -534,8 +621,8 @@ class Orchestrator:
         task_id    = event.data.get("task_id")
         error      = event.data.get("error")
         task       = self.active_tasks.get(task_id, {})
-        # Clear dedup entry so a failed task can be retried cleanly
-        self._dispatched_safe.discard(task_id)
+        # Delay clearing so late task_safety_cleared duplicates are still blocked
+        asyncio.get_event_loop().call_later(5.0, self._dispatched_safe.discard, task_id)
         logger.error("Task [%s] failed: %s", task_id, error)
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
@@ -562,8 +649,8 @@ class Orchestrator:
     async def finalize_task(self, event: Any) -> None:
         task_id    = event.data.get("task_id")
         task       = self.active_tasks.pop(task_id, {})
-        # Clear dedup entry so this task_id can be safely reused
-        self._dispatched_safe.discard(task_id)
+        # Delay clearing so late task_safety_cleared duplicates are still blocked
+        asyncio.get_event_loop().call_later(5.0, self._dispatched_safe.discard, task_id)
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
         )
