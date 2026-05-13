@@ -52,24 +52,61 @@ class AppOpeningPlugin(BasePlugin):
 
     async def run(self, context: dict, args: dict) -> dict:
         try:
-            # ── Read args (with safe defaults) ────────────────────────────────
-            app_name = str(args.get("app_name", ""))
+            import shutil
 
-            # ── Perform the action ────────────────────────────────────────────
-            # Use shell command to open the app
-            result = subprocess.run(
-                ["xdg-open", app_name],                 # command as list (safe, no shell injection)
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            stdout = result.stdout
-            returncode = result.returncode
+            app_name = str(args.get("app_name", "")).strip()
 
-            if returncode == 0:
-                return {"status": "success", "result": "App opened successfully", "intent": "app opening"}
-            else:
-                return {"status": "error", "message": "Failed to open app", "intent": "app opening"}
+            # ── Common app name aliases (user-friendly → binary name) ─────────
+            _ALIASES = {
+                "chrome":        "google-chrome",
+                "google chrome": "google-chrome",
+                "firefox":       "firefox",
+                "vscode":        "code",
+                "vs code":       "code",
+                "visual studio code": "code",
+                "cursor":        "cursor",
+                "terminal":      "gnome-terminal",
+                "files":         "nautilus",
+                "calculator":    "gnome-calculator",
+                "text editor":   "gedit",
+            }
+            binary = _ALIASES.get(app_name.lower(), app_name)
+
+            # ── Strategy 1: run binary directly if found on PATH ──────────────
+            if shutil.which(binary):
+                subprocess.Popen(
+                    [binary],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,   # detach from parent process
+                )
+                return {
+                    "status":  "success",
+                    "result":  f"Launched '{binary}'",
+                    "intent":  "app opening",
+                    "app":     binary,
+                }
+
+            # ── Strategy 2: try common Linux launchers ────────────────────────
+            for launcher in ("gtk-launch", "gio", "xdg-open"):
+                if shutil.which(launcher):
+                    result = subprocess.run(
+                        [launcher, binary],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if result.returncode == 0:
+                        return {
+                            "status": "success",
+                            "result": f"Opened '{binary}' via {launcher}",
+                            "intent": "app opening",
+                        }
+
+            return {
+                "status":  "error",
+                "message": f"Could not find or launch '{app_name}' (tried binary='{binary}'). "
+                           f"Is it installed and on PATH?",
+                "intent":  "app opening",
+            }
 
         except Exception as e:
             return {"status": "error", "message": str(e), "intent": "app opening"}
