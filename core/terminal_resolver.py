@@ -287,8 +287,13 @@ class TerminalResolver:
                 continue
 
             # Check if this is a terminal window
+            title    = parts[4] if len(parts) > 4 else ""
             wm_class = self._get_wm_class(win_id)
-            if self._is_terminal_class(wm_class):
+            is_term  = self._is_terminal_class(wm_class)
+            if not is_term and not wm_class:
+                is_term = self._is_terminal_title(title)
+
+            if is_term:
                 # Push to focus stack if it's a new top entry
                 if not self._focus_stack or self._focus_stack[0] != win_id:
                     self._focus_stack.appendleft(win_id)
@@ -331,7 +336,9 @@ class TerminalResolver:
         if shutil.which("xprop"):
             try:
                 out = subprocess.check_output(
-                    ["xprop", "-id", win_id, "WM_CLASS"], text=True, timeout=1.0
+                    ["xprop", "-id", win_id, "WM_CLASS"],
+                    text=True, timeout=1.0,
+                    stderr=subprocess.DEVNULL,
                 )
                 return out.lower()
             except Exception:
@@ -340,52 +347,107 @@ class TerminalResolver:
 
     @staticmethod
     def _is_terminal_class(wm_class: str) -> bool:
+        """
+        Return True if the WM_CLASS string indicates a terminal emulator.
+
+        Also accepts empty wm_class with title-based hint since xprop can
+        fail on some window configurations.
+        """
         terminal_keywords = (
             "terminal", "konsole", "xterm", "alacritty",
             "kitty", "tilix", "gnome-terminal", "urxvt", "rxvt",
-            "lxterminal", "xfce4-terminal",
+            "lxterminal", "xfce4-terminal", "gnome-terminal-server",
         )
         return any(kw in wm_class for kw in terminal_keywords)
+
+    @staticmethod
+    def _is_terminal_title(title: str) -> bool:
+        """
+        Fallback: detect a terminal from its window title pattern.
+        GNOME Terminal titles look like: 'user@host: ~/somedir'
+        This catches cases where xprop fails to return WM_CLASS.
+        """
+        import re
+        # Matches: username@hostname: ~/path  or  username@hostname: /path
+        return bool(re.match(r'[\w-]+@[\w-]+:[\s~]', title))
 
     # ── Terminal discovery ────────────────────────────────────────────────────
 
     def _list_terminals(self) -> list[_TerminalRecord]:
         """
-        Return all visible terminal windows, sorted by Z-order
-        (topmost first), with our own windows excluded.
+        Return all visible terminal windows sorted by Z-order (topmost first),
+        with our own windows excluded.
+
+        Full debug logging so every decision is visible in the log file — this
+        makes diagnosing pts/wm_class failures straightforward.
         """
         if not shutil.which("wmctrl"):
+            log.warning(
+                "_list_terminals: wmctrl not found — install: sudo apt install wmctrl"
+            )
             return []
 
         try:
             out = subprocess.check_output(
-                ["wmctrl", "-l", "-p"], text=True, timeout=3.0
+                ["wmctrl", "-l", "-p"], text=True, timeout=3.0,
+                stderr=subprocess.DEVNULL,
             )
         except Exception as exc:
             log.debug("_list_terminals: wmctrl failed — %s", exc)
             return []
 
+        lines = out.strip().splitlines()
+        log.debug("_list_terminals: wmctrl returned %d windows", len(lines))
+
         records: list[_TerminalRecord] = []
-        for z_order, line in enumerate(out.strip().splitlines()):
+        for z_order, line in enumerate(lines):
             parts = line.split(None, 4)
             if len(parts) < 4:
                 continue
             win_id = parts[0]
+
             if win_id in self._own_window_ids:
+                log.debug("_list_terminals: skip own window %s", win_id)
                 continue
+
             try:
                 pid = int(parts[2])
             except ValueError:
                 continue
-            title = parts[4] if len(parts) > 4 else ""
 
-            # Filter to terminal windows only
+            if pid in self._own_pids:
+                log.debug("_list_terminals: skip own PID %d", pid)
+                continue
+
+            title    = parts[4] if len(parts) > 4 else ""
             wm_class = self._get_wm_class(win_id)
-            if not self._is_terminal_class(wm_class):
+            is_term  = self._is_terminal_class(wm_class)
+
+            # Fallback: if xprop returned nothing, try title pattern matching
+            # GNOME Terminal titles look like "user@host: ~/dir"
+            if not is_term and not wm_class:
+                is_term = self._is_terminal_title(title)
+                if is_term:
+                    log.debug(
+                        "_list_terminals: detected terminal by title pattern: %r", title[:60]
+                    )
+
+            log.debug(
+                "_list_terminals: z=%d win=%s pid=%d wm_class=%r is_terminal=%s title=%r",
+                z_order, win_id, pid,
+                wm_class.strip()[:60], is_term, title[:60],
+            )
+
+            if not is_term:
                 continue
 
             pts_path = self._find_pts(pid)
-            cwd = self._read_proc_cwd(pid)
+            cwd      = self._read_proc_cwd(pid)
+
+            log.info(
+                "_list_terminals: TERMINAL z=%d win=%s pid=%d pts=%s cwd=%s title=%r",
+                z_order, win_id, pid, pts_path, cwd, title[:60],
+            )
 
             records.append(_TerminalRecord(
                 window_id=win_id,
@@ -395,6 +457,11 @@ class TerminalResolver:
                 title=title,
                 z_order=z_order,
             ))
+
+        if not records:
+            log.info(
+                "_list_terminals: no terminals found among %d windows", len(lines)
+            )
 
         return records
 
