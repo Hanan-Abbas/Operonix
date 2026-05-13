@@ -143,6 +143,17 @@ PATTERN_LIBRARY = '''
 # ══════════════════════════════════════════════════════════════════════════════
 # OPERONIX PLUGIN PATTERN LIBRARY — copy the patterns relevant to your intent
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# RUNTIME ENVIRONMENT: Linux (Ubuntu 24). NOT macOS. NOT Windows.
+# Key differences from macOS:
+#   - Use subprocess.Popen(["app_binary"]) to launch apps — NOT "open app_name"
+#   - "open" is a macOS command — it does NOT exist on Linux
+#   - Use shutil.which("binary") to check if an app is installed
+#   - Use xdg-open only for FILES and URLs, not for launching GUI apps
+#   - App binaries: google-chrome, firefox, code (VSCode), cursor, nautilus
+#   - Clipboard: use xclip or xsel (NOT pbcopy/pbpaste which are macOS)
+#   - Notifications: use notify-send (NOT osascript which is macOS)
+#   - Screenshots: use scrot or gnome-screenshot (NOT screencapture)
 
 # ── PATTERN: Background loop with stop event (auto-clicker, monitor, etc.) ───
 # Use this for ANY "do X repeatedly until stopped" intent.
@@ -210,6 +221,31 @@ stopper.start()
 # Return immediately — threads run in background
 result = {"status": "success", "result": "started", "stop_with": "alt+s"}
 
+# ── PATTERN: Launch a Linux application ──────────────────────────────────────
+import shutil, subprocess
+
+def launch_app(app_name: str) -> dict:
+    """
+    Launch a GUI application on Linux. Do NOT use 'open app_name' (macOS only).
+    Strategy: find binary on PATH → run directly → fallback to gtk-launch.
+    """
+    _ALIASES = {
+        "chrome": "google-chrome", "google chrome": "google-chrome",
+        "vscode": "code", "vs code": "code", "cursor": "cursor",
+        "terminal": "gnome-terminal", "files": "nautilus",
+    }
+    binary = _ALIASES.get(app_name.lower(), app_name)
+    if shutil.which(binary):
+        subprocess.Popen([binary], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return {"status": "success", "result": f"Launched '{binary}'"}
+    # Fallback: gtk-launch (uses .desktop files)
+    if shutil.which("gtk-launch"):
+        r = subprocess.run(["gtk-launch", binary], capture_output=True, timeout=5)
+        if r.returncode == 0:
+            return {"status": "success", "result": f"Launched via gtk-launch"}
+    return {"status": "error", "message": f"Cannot find '{binary}' on this Linux system"}
+
 # ── PATTERN: One-shot UI action (click, type, key press) ─────────────────────
 import pyautogui
 import time
@@ -230,11 +266,26 @@ screenshot.save("/tmp/screenshot.png")
 # text = pytesseract.image_to_string(screenshot)
 
 # ── PATTERN: Keyboard shortcut / hotkey ──────────────────────────────────────
-import keyboard
-keyboard.press_and_release("ctrl+c")   # send shortcut
-keyboard.send("alt+tab")               # switch window
-keyboard.write("hello world")          # type text
-keyboard.add_hotkey("ctrl+shift+x", lambda: print("triggered"))
+# Use pyautogui for sending keys/shortcuts (no root required on Linux).
+# Use pynput only for LISTENING to hotkeys (e.g. stop triggers).
+# NEVER use the `keyboard` module — it requires root on Linux.
+import pyautogui
+pyautogui.hotkey("ctrl", "c")          # send shortcut
+pyautogui.hotkey("alt", "tab")         # switch window
+pyautogui.typewrite("hello world", interval=0.05)  # type text
+pyautogui.press("enter")               # single key press
+
+# Listening for a hotkey (e.g. stop trigger) — use pynput, not keyboard:
+# from pynput import keyboard as _kb
+# def on_press(key):
+#     try:
+#         if key.char == "s":  # example: listen for 's'
+#             stop_event.set()
+#             return False      # stop listener
+#     except AttributeError:
+#         pass
+# with _kb.Listener(on_press=on_press) as lst:
+#     lst.join()
 
 # ── PATTERN: HTTP / web request ───────────────────────────────────────────────
 import urllib.request
@@ -345,7 +396,6 @@ class {class_name}(BasePlugin):
     async def run(self, context: dict, args: dict) -> dict:
         try:
             import pyautogui
-            import keyboard
             import threading
 
             # ── Configuration from args (with safe defaults) ─────────────────
@@ -432,8 +482,9 @@ class {class_name}(BasePlugin):
     Category: automation (one-shot UI interaction)
 
     Pattern: performs a UI action and returns the result.
-    Uses pyautogui and keyboard directly — these are standalone libraries,
-    not registry services. Do NOT use capability_registry for UI actions.
+    Uses pyautogui for all UI actions (mouse, keyboard, screenshot).
+    Do NOT use the `keyboard` module — it requires root on Linux.
+    Do NOT use capability_registry for UI actions.
     """
     name             = "{plugin_name}"
     description      = "{description}"
@@ -823,7 +874,7 @@ class {class_name}(BasePlugin):
             # TODO: Implement the logic for intent "{intent}"
             # Refer to the PATTERN LIBRARY for copy-paste patterns:
             #   - Background loop → use threading.Event + daemon Thread
-            #   - UI action       → use pyautogui / keyboard
+            #   - UI action       → use pyautogui (hotkey, typewrite, click, press)
             #   - HTTP request    → use urllib.request
             #   - File operation  → use os / shutil
             #   - Shell command   → use subprocess.run(cmd_as_list)
@@ -904,9 +955,9 @@ def test_run_never_raises_on_bad_args(plugin, ctx):
 _TEST_BACKGROUND = '''\
 
 # ── Background plugin tests ───────────────────────────────────────────────────
-# We do NOT use @patch("plugin.keyboard.wait") because the LLM may import
-# keyboard inside run() or inside the worker function rather than at module
-# level. In that case "plugin.keyboard" does not exist as a module attribute
+# We do NOT use @patch("plugin.pynput.keyboard") because the LLM imports
+# pynput inside the worker/stopper function rather than at module level.
+# In that case "plugin.pynput" does not exist as a module attribute
 # and @patch raises AttributeError during test SETUP (not during the test),
 # which appears as a confusing mock internals traceback.
 # Instead we patch at the library level and test behaviour, not internals.
@@ -1104,7 +1155,7 @@ class TemplateEngine:
     1. Templates are WORKING examples, not empty stubs.
        The LLM fills in intent-specific logic, not boilerplate.
     2. Tests mock the right dependencies per category.
-       Background tests mock pyautogui+keyboard. Web tests mock urllib. Etc.
+       Background tests mock pyautogui+pynput. Web tests mock urllib. Etc.
     3. The pattern library is exposed for injection into the generator prompt.
        This gives the LLM concrete, copy-paste-ready patterns.
     4. No fake registry services. Templates only use what actually exists.
