@@ -185,10 +185,13 @@ Return ONLY JSON with these keys:
   intent       — snake_case string capturing the FULL action, not just a single verb.
                  WRONG: "click" for "start auto clicker"   RIGHT: "auto_clicker"
                  WRONG: "open"  for "open chrome"          RIGHT: "open_chrome"
+                 WRONG: "open"  for "open the app cursor"  RIGHT: "app_opening"
                  WRONG: "run"   for "run pytest"           RIGHT: "run_command"
+                 CRITICAL: "open <app>" requests are ALWAYS intent="app_opening" with
+                 parameters={{"app_name": "<app>"}}, NEVER intent="run_command".
                  Preserve compound/multi-word intents as snake_case.
   confidence   — float 0.0-1.0
-  parameters   — dict of specific values mentioned (path, interval, hotkey, url, query, command, etc.)
+  parameters   — dict of specific values mentioned (path, interval, hotkey, url, query, command, app_name, etc.)
   profile      — one of "ghost", "bridge", "lab", or null
                  ghost  = run silently in background (output piped, no visible terminal)
                  bridge = inject into user's active terminal (must use for: source, export, cd, activate, conda, nvm)
@@ -208,6 +211,22 @@ Example:
 Example:
   Input:  "list files in current directory"
   Output: {{"intent": "run_command", "confidence": 0.95, "parameters": {{"command": "ls -la"}}, "profile": "ghost"}}
+
+Example:
+  Input:  "open the app named cursor"
+  Output: {{"intent": "app_opening", "confidence": 0.97, "parameters": {{"app_name": "cursor"}}, "profile": null}}
+
+Example:
+  Input:  "open chrome"
+  Output: {{"intent": "app_opening", "confidence": 0.95, "parameters": {{"app_name": "google-chrome"}}, "profile": null}}
+
+Example:
+  Input:  "launch vscode"
+  Output: {{"intent": "app_opening", "confidence": 0.96, "parameters": {{"app_name": "code"}}, "profile": null}}
+
+Example:
+  Input:  "start the auto clicker"
+  Output: {{"intent": "auto_clicker", "confidence": 0.95, "parameters": {{"interval": 0.1, "stop_hotkey": "alt+s"}}, "profile": null}}
 """
         try:
             raw = await asyncio.wait_for(
