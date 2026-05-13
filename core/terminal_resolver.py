@@ -227,27 +227,76 @@ class TerminalResolver:
 
     async def _poll_focus_loop(self) -> None:
         """
-        Every 0.5 s, query the active window.  If it is a terminal (and not
-        our own window), push its window ID onto the temporal focus stack.
+        Every 0.5 s, build a ranked terminal list from wmctrl Z-order and
+        push the topmost non-blacklisted terminal onto the focus stack.
+
+        WHY NOT xdotool:
+          xdotool getactivewindow fails with XGetWindowProperty[_NET_ACTIVE_WINDOW]
+          on systems where the panel (Qt/Wayland surface) holds focus. When the
+          Operonix panel is open, xdotool returns nothing. This means the focus
+          stack was always empty — Bridge was never chosen.
+
+        WHY wmctrl Z-order works:
+          wmctrl -l lists windows in Z-order (topmost first). After the user
+          focuses a terminal and THEN opens the Operonix panel, the terminal
+          is at position 1 or 2 in the list (panel is at 0, terminal is next).
+          We push the first non-blacklisted terminal we find.
         """
         while True:
             try:
                 await asyncio.sleep(0.5)
-                win_id = await asyncio.get_running_loop().run_in_executor(
-                    None, self._get_active_window_id
+                # Run in thread executor so we don't block the event loop
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._update_focus_stack_from_zorder
                 )
-                if win_id and win_id not in self._own_window_ids:
-                    # Only push if it looks like a terminal
-                    wm_class = await asyncio.get_running_loop().run_in_executor(
-                        None, self._get_wm_class, win_id
-                    )
-                    if self._is_terminal_class(wm_class):
-                        if not self._focus_stack or self._focus_stack[0] != win_id:
-                            self._focus_stack.appendleft(win_id)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 log.debug("_poll_focus_loop: %s", exc)
+
+    def _update_focus_stack_from_zorder(self) -> None:
+        """
+        Read wmctrl Z-order and push the topmost visible terminal
+        (excluding our own windows) onto the focus stack.
+
+        Called from the polling loop via run_in_executor.
+        """
+        if not shutil.which("wmctrl"):
+            return
+        try:
+            out = subprocess.check_output(
+                ["wmctrl", "-l", "-p"],
+                text=True, timeout=2.0,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            return
+
+        for line in out.strip().splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 4:
+                continue
+            win_id = parts[0]
+            if win_id in self._own_window_ids:
+                continue
+            try:
+                pid = int(parts[2])
+            except ValueError:
+                continue
+            if pid in self._own_pids:
+                continue
+
+            # Check if this is a terminal window
+            wm_class = self._get_wm_class(win_id)
+            if self._is_terminal_class(wm_class):
+                # Push to focus stack if it's a new top entry
+                if not self._focus_stack or self._focus_stack[0] != win_id:
+                    self._focus_stack.appendleft(win_id)
+                    log.debug(
+                        "_update_focus_stack: pushed terminal win_id=%s wm_class=%s",
+                        win_id, wm_class.strip(),
+                    )
+                return  # Only care about the topmost terminal
 
     @staticmethod
     def _get_active_window_id() -> Optional[str]:
@@ -354,16 +403,20 @@ class TerminalResolver:
         """
         Find the pseudo-terminal device (pts) for a terminal window.
 
-        wmctrl reports the window manager PID — for gnome-terminal this is
-        the gnome-terminal-server process, NOT the bash shell inside it.
-        The bash shell is a child (or grandchild) of that server process and
-        is the actual owner of the /dev/pts/* device.
+        GNOME Terminal problem:
+          wmctrl reports the gnome-terminal-server PID (D-Bus activated).
+          The bash shell is several levels deep in its process tree.
+          Walking /proc/<pid>/task/<tid>/children only works reliably for
+          direct children — gnome-terminal-server may not be the direct
+          parent of bash depending on D-Bus activation mode.
 
-        Strategy:
-          1. Check the reported PID's own fds first.
-          2. Walk one level of children via /proc/<pid>/task/*/children
-             and check each child's fds.
-          3. Fallback: parse /proc/<pid>/stat tty_nr field.
+        Strategy (three tiers):
+          1. Check the reported PID's own fds.
+          2. Walk up to 3 levels of children via /proc/<pid>/task/<tid>/children.
+          3. Scan ALL /proc/*/fd/ entries for pts devices — filter to processes
+             whose session ID (sid) matches the reported PID's session.
+             This is the most reliable: bash always has a pts fd, and it
+             shares a session with its terminal emulator parent.
         """
         def _pts_from_pid(p: int) -> Optional[str]:
             fd_dir = f"/proc/{p}/fd"
@@ -379,61 +432,86 @@ class TerminalResolver:
                 pass
             return None
 
-        # Step 1 — check the reported PID directly
-        result = _pts_from_pid(pid)
-        if result:
-            return result
-
-        # Step 2 — walk children (shell is a child of the terminal server)
-        child_pids: list[int] = []
-        try:
-            # /proc/<pid>/task/<tid>/children lists child PIDs
-            task_dir = f"/proc/{pid}/task"
-            for tid in os.listdir(task_dir):
-                children_file = f"{task_dir}/{tid}/children"
-                try:
-                    with open(children_file) as f:
-                        for cpid_str in f.read().split():
-                            try:
-                                child_pids.append(int(cpid_str))
-                            except ValueError:
-                                pass
-                except OSError:
-                    pass
-        except OSError:
-            pass
-
-        for cpid in child_pids:
-            result = _pts_from_pid(cpid)
-            if result:
-                return result
-            # One more level — grandchildren (some terminals nest deeper)
+        def _children_of(p: int) -> list[int]:
+            children = []
+            task_dir = f"/proc/{p}/task"
             try:
-                task_dir2 = f"/proc/{cpid}/task"
-                for tid2 in os.listdir(task_dir2):
-                    children_file2 = f"{task_dir2}/{tid2}/children"
+                for tid in os.listdir(task_dir):
                     try:
-                        with open(children_file2) as f:
-                            for gcpid_str in f.read().split():
+                        with open(f"{task_dir}/{tid}/children") as f:
+                            for tok in f.read().split():
                                 try:
-                                    result = _pts_from_pid(int(gcpid_str))
-                                    if result:
-                                        return result
-                                except (ValueError, OSError):
+                                    children.append(int(tok))
+                                except ValueError:
                                     pass
                     except OSError:
                         pass
             except OSError:
                 pass
+            return children
 
-        # Step 3 — tty_nr fallback from /proc/<pid>/stat
+        # Tier 1: direct
+        result = _pts_from_pid(pid)
+        if result:
+            return result
+
+        # Tier 2: walk up to 3 levels of descendants
+        frontier = _children_of(pid)
+        for _ in range(3):
+            next_frontier = []
+            for cpid in frontier:
+                result = _pts_from_pid(cpid)
+                if result:
+                    return result
+                next_frontier.extend(_children_of(cpid))
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        # Tier 3: scan all /proc/*/fd/ for pts, filtered by session ID
+        # Get the session ID of the reported PID (gnome-terminal-server)
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                stat_fields = f.read().split()
+                target_sid = int(stat_fields[5])   # field index 5 = session
+        except (OSError, IndexError, ValueError):
+            target_sid = None
+
+        if target_sid and target_sid > 1:
+            try:
+                for entry in os.listdir("/proc"):
+                    if not entry.isdigit():
+                        continue
+                    try:
+                        epid = int(entry)
+                        # Check session ID matches
+                        with open(f"/proc/{epid}/stat") as f:
+                            efields = f.read().split()
+                            esid = int(efields[5])
+                        if esid != target_sid:
+                            continue
+                        result = _pts_from_pid(epid)
+                        if result:
+                            log.debug(
+                                "_find_pts: found pts=%s via session scan (pid=%d sid=%d)",
+                                result, epid, target_sid,
+                            )
+                            return result
+                    except (OSError, IndexError, ValueError):
+                        continue
+            except OSError:
+                pass
+
+        # Tier 4: tty_nr fallback from stat
         try:
             with open(f"/proc/{pid}/stat") as f:
                 fields = f.read().split()
                 tty_nr = int(fields[6])
                 if tty_nr > 0:
                     minor = tty_nr & 0xFF
-                    return f"/dev/pts/{minor}"
+                    pts = f"/dev/pts/{minor}"
+                    if os.path.exists(pts):
+                        return pts
         except (OSError, IndexError, ValueError):
             pass
         return None
@@ -441,44 +519,58 @@ class TerminalResolver:
     @staticmethod
     def _read_proc_cwd(pid: int) -> Optional[str]:
         """
-        Read the cwd of the shell running inside the terminal window.
+        Read the working directory of the shell inside the terminal.
 
-        Same child-walking logic as _find_pts: wmctrl reports the server PID
-        whose cwd is typically / or the install dir.  We want the bash shell's
-        cwd which is what the user sees at their prompt.
+        Uses the same session-scan fallback as _find_pts: gnome-terminal-server
+        cwd is typically / but the bash shell's cwd is what the user sees.
         """
         def _cwd_from_pid(p: int) -> Optional[str]:
             try:
-                return os.readlink(f"/proc/{p}/cwd")
+                cwd = os.readlink(f"/proc/{p}/cwd")
+                if cwd and cwd not in ("/", "/usr", "/usr/bin", "/usr/local"):
+                    return cwd
             except OSError:
-                return None
+                pass
+            return None
 
-        # Check reported PID first
+        # Direct check
         result = _cwd_from_pid(pid)
-        # Skip cwd that looks like a system root (server process default)
-        if result and result not in ("/", "/usr", "/usr/bin"):
+        if result:
             return result
 
-        # Walk children to find the shell cwd
+        # Session scan — find the shell with a real cwd
         try:
-            task_dir = f"/proc/{pid}/task"
-            for tid in os.listdir(task_dir):
-                children_file = f"{task_dir}/{tid}/children"
-                try:
-                    with open(children_file) as f:
-                        for cpid_str in f.read().split():
-                            try:
-                                cwd = _cwd_from_pid(int(cpid_str))
-                                if cwd and cwd not in ("/", "/usr", "/usr/bin"):
-                                    return cwd
-                            except ValueError:
-                                pass
-                except OSError:
-                    pass
-        except OSError:
-            pass
+            with open(f"/proc/{pid}/stat") as f:
+                stat_fields = f.read().split()
+                target_sid = int(stat_fields[5])
+        except (OSError, IndexError, ValueError):
+            target_sid = None
 
-        return result  # return whatever we had even if it's /
+        if target_sid and target_sid > 1:
+            try:
+                for entry in os.listdir("/proc"):
+                    if not entry.isdigit():
+                        continue
+                    try:
+                        epid = int(entry)
+                        with open(f"/proc/{epid}/stat") as f:
+                            efields = f.read().split()
+                            esid = int(efields[5])
+                        if esid != target_sid:
+                            continue
+                        cwd = _cwd_from_pid(epid)
+                        if cwd:
+                            return cwd
+                    except (OSError, IndexError, ValueError):
+                        continue
+            except OSError:
+                pass
+
+        # Return whatever we have even if it's /
+        try:
+            return os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return None
 
     # ── CWD scoring ───────────────────────────────────────────────────────────
 
