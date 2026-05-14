@@ -1,11 +1,12 @@
 {
   "name": "app_opening_plugin",
-  "description": "This plugin handles the app opening intent by performing a series of predefined actions.",
+  "description": "Launches any GUI application by name using PATH lookup and Linux launchers.",
   "version": "1.0",
   "author": "agent",
   "intent": "app opening",
   "capabilities": [
-    "app_opening"
+    "app_opening",
+    "app opening"
   ],
   "tags": [
     "app opening",
@@ -14,11 +15,11 @@
   "permissions": [
     "ui_interaction"
   ],
-  "status": "pending",
+  "status": "trusted",
   "risk_level": "low",
-  "trusted": false,
+  "trusted": true,
   "safe_mode": true,
-  "requires_confirmation": true,
+  "requires_confirmation": false,
   "previous_versions": [],
   "changelog": [],
   "total_runs": 0,
@@ -27,6 +28,20 @@
   "last_run_at": "",
   "last_reviewed": "",
   "created_at": "2026-05-12T09:12:39.254858",
-  "updated_at": "2026-05-12T09:12:39.254909",
-  "allowed_services": []
+  "updated_at": "2026-05-14T00:00:00.000000",
+  "allowed_services": [],
+  "parameter_schema": [
+    {
+      "name": "app_name",
+      "required": true,
+      "aliases": ["command", "target", "name", "application", "app"]
+    }
+  ],
+  "intent_patterns": [
+    {
+      "raw_intents": ["run_command", "open", "launch", "start", "open_file"],
+      "command_is_verb": true,
+      "args_is_target": true
+    }
+  ]
 }
