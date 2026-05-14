@@ -187,8 +187,9 @@ Return ONLY JSON with these keys:
                  WRONG: "open"  for "open chrome"          RIGHT: "open_chrome"
                  WRONG: "open"  for "open the app cursor"  RIGHT: "app_opening"
                  WRONG: "run"   for "run pytest"           RIGHT: "run_command"
-                 CRITICAL: "open <app>" requests are ALWAYS intent="app_opening" with
-                 parameters={{"app_name": "<app>"}}, NEVER intent="run_command".
+                 CRITICAL: "open <app>" or "launch <app>" requests are ALWAYS
+                 intent="app_opening" with parameters={{"app_name": "<app>"}}.
+                 NEVER use intent="run_command" for opening GUI applications.
                  Preserve compound/multi-word intents as snake_case.
   confidence   — float 0.0-1.0
   parameters   — dict of specific values mentioned (path, interval, hotkey, url, query, command, app_name, etc.)
@@ -213,16 +214,16 @@ Example:
   Output: {{"intent": "run_command", "confidence": 0.95, "parameters": {{"command": "ls -la"}}, "profile": "ghost"}}
 
 Example:
-  Input:  "open the app named cursor"
-  Output: {{"intent": "app_opening", "confidence": 0.97, "parameters": {{"app_name": "cursor"}}, "profile": null}}
+  Input:  "open the app named gedit"
+  Output: {{"intent": "app_opening", "confidence": 0.97, "parameters": {{"app_name": "gedit"}}, "profile": null}}
 
 Example:
   Input:  "open chrome"
   Output: {{"intent": "app_opening", "confidence": 0.95, "parameters": {{"app_name": "google-chrome"}}, "profile": null}}
 
 Example:
-  Input:  "launch vscode"
-  Output: {{"intent": "app_opening", "confidence": 0.96, "parameters": {{"app_name": "code"}}, "profile": null}}
+  Input:  "launch cursor"
+  Output: {{"intent": "app_opening", "confidence": 0.96, "parameters": {{"app_name": "cursor"}}, "profile": null}}
 
 Example:
   Input:  "start the auto clicker"
@@ -256,6 +257,13 @@ Example:
         effective_profile = keyword_profile or (
             llm_profile if llm_profile in ("ghost", "bridge", "lab") else None
         )
+
+        # ── Post-processing: manifest-driven intent rerouting ────────────────
+        # Each plugin declares intent_patterns in its manifest describing which
+        # raw LLM intent+arg shapes should be rerouted to it.
+        # This replaces ALL hardcoded reroute rules — adding a new plugin with
+        # the right intent_patterns is sufficient; no parser changes needed.
+        llm_intent, parameters = self._reroute_via_manifests(llm_intent, parameters)
 
         # Resolve against the capability registry (exact + semantic).
         resolved = await self._resolve_intent(llm_intent)
@@ -323,10 +331,20 @@ Example:
         Bare-minimum keyword matcher used only when the LLM is unavailable.
         Maps common English verbs to generic intent names.  Never hardcodes
         application-specific logic — just structural command words.
+
+        "open/launch/start" are mapped to app_opening (not open_file) so the
+        offline path routes app-launch requests to the correct plugin.
+        The planner's _resolve_args_for_intent will fill app_name from context.
         """
         lower = text.lower()
+        # App-open verbs checked before generic file ops
+        if any(v in lower for v in ("open", "launch", "start")):
+            # Distinguish "open a file/folder/url" from "open an app"
+            _FILE_HINTS = ("file", "folder", "directory", ".txt", ".py", ".md", "http", "/")
+            if any(h in lower for h in _FILE_HINTS):
+                return "open_file"
+            return "app_opening"
         mapping = {
-            ("open", "launch", "start", "run"):     "open_file",
             ("close", "quit", "exit", "kill"):      "close_app",
             ("search", "find", "look"):             "web_search",
             ("write", "create", "make", "new"):     "create_file",
@@ -335,6 +353,7 @@ Example:
             ("edit", "modify", "change", "update"): "modify_code",
             ("copy", "duplicate"):                  "copy_file",
             ("move", "rename"):                     "move_file",
+            ("run", "execute"):                     "run_command",
         }
         for verbs, intent in mapping.items():
             if any(v in lower for v in verbs):
@@ -527,6 +546,171 @@ Example:
 
         return None
 
+    # ── Manifest-driven helpers ───────────────────────────────────────────────
+
+    @staticmethod
+    def _load_all_manifests() -> list:
+        """
+        Load all installed plugin manifests from disk.
+        Returns a list of PluginManifest objects.
+        Cached per-call only — cheap enough for parse() frequency.
+        """
+        try:
+            from plugins.loader import plugin_loader
+            from plugins.manifest_schema import PluginManifest
+            import os
+            manifests = []
+            for entry in plugin_loader.list_plugins():
+                plugin_dir = entry.get("plugin_dir", "")
+                if plugin_dir:
+                    m = PluginManifest.load(plugin_dir)
+                    if m:
+                        manifests.append(m)
+            return manifests
+        except Exception:
+            return []
+
+    def _reroute_via_manifests(
+        self, llm_intent: str, parameters: dict
+    ) -> tuple[str, dict]:
+        """
+        Manifest-driven intent rerouting.
+
+        Each plugin declares intent_patterns in its manifest:
+          [{"raw_intents": ["run_command","open","launch"],
+            "command_is_verb": true,
+            "args_is_target": true}]
+
+        When the LLM returns a misclassified intent that matches a pattern,
+        this method reroutes to the correct plugin intent and normalizes
+        the parameters using the plugin's parameter_schema.
+
+        This replaces ALL hardcoded reroute rules in the intent parser.
+        New plugins self-describe their patterns — no parser edits needed.
+        """
+        _LAUNCH_VERBS: frozenset[str] = frozenset({
+            "open", "launch", "start", "run", "execute",
+        })
+
+        for manifest in self._load_all_manifests():
+            if not manifest.intent_patterns:
+                continue
+
+            for pattern in manifest.intent_patterns:
+                raw_intents = [r.lower() for r in (pattern.get("raw_intents") or [])]
+                if llm_intent.lower() not in raw_intents:
+                    continue
+
+                # This manifest claims this raw intent — try to extract target
+                command_is_verb = pattern.get("command_is_verb", False)
+                args_is_target  = pattern.get("args_is_target", False)
+
+                cmd       = str(parameters.get("command", "")).strip()
+                args_list = parameters.get("args", [])
+
+                target: str | None = None
+
+                # Shape A: command is a verb, positional args[0] is the target
+                if (
+                    command_is_verb
+                    and args_is_target
+                    and cmd.lower() in _LAUNCH_VERBS
+                    and isinstance(args_list, list)
+                    and len(args_list) == 1
+                    and isinstance(args_list[0], str)
+                    and " " not in args_list[0].strip()
+                    and not args_list[0].strip().startswith("-")
+                ):
+                    target = args_list[0].strip()
+
+                # Shape B: command itself is the target (not a verb)
+                elif (
+                    command_is_verb
+                    and cmd
+                    and " " not in cmd
+                    and cmd.lower() not in _LAUNCH_VERBS
+                    and not cmd.startswith("-")
+                    and "/" not in cmd
+                    and "." not in cmd
+                ):
+                    target = cmd
+
+                # Shape C: "open cursor" inline in command field
+                elif command_is_verb and cmd and " " in cmd:
+                    parts = cmd.split()
+                    if (
+                        len(parts) == 2
+                        and parts[0].lower() in _LAUNCH_VERBS
+                        and not parts[1].startswith("-")
+                        and "/" not in parts[1]
+                        and "." not in parts[1]
+                    ):
+                        target = parts[1]
+
+                if target is None:
+                    continue
+
+                # Build normalized parameters from manifest parameter_schema
+                new_params: dict = {}
+                for param in (manifest.parameter_schema or []):
+                    p_name     = param.get("name", "")
+                    p_required = param.get("required", False)
+                    p_aliases  = param.get("aliases", [])
+
+                    # Check if already present under name or any alias
+                    value = parameters.get(p_name)
+                    if value is None:
+                        for alias in p_aliases:
+                            value = parameters.get(alias)
+                            if value is not None:
+                                break
+
+                    # If still missing and this is the primary required param,
+                    # use the extracted target value
+                    if value is None and p_required:
+                        value = target
+
+                    if value is not None:
+                        new_params[p_name] = value
+
+                # If schema produced nothing useful, just put target under the
+                # first required param name (or "target" as fallback)
+                if not new_params:
+                    schema = manifest.parameter_schema or []
+                    first_required = next(
+                        (p["name"] for p in schema if p.get("required")), "target"
+                    )
+                    new_params = {first_required: target}
+
+                # Use the canonical intent from the manifest
+                new_intent = manifest.capabilities[0] if manifest.capabilities else manifest.intent
+
+                self.logger.debug(
+                    "Manifest reroute: '%s' → '%s' via plugin '%s' (target=%r)",
+                    llm_intent, new_intent, manifest.name, target,
+                )
+                return new_intent, new_params
+
+        # No manifest claimed this intent — return unchanged
+        return llm_intent, parameters
+
+    def _get_manifest_risk(self, intent: str) -> str | None:
+        """
+        Look up the risk_level for an intent from installed plugin manifests.
+        Returns "low", "medium", or "high" if a manifest matches, else None.
+        Matching is done against manifest.capabilities and manifest.intent.
+        """
+        intent_normalized = intent.lower().replace("_", " ").strip()
+        for manifest in self._load_all_manifests():
+            # Match against declared capabilities
+            for cap in (manifest.capabilities or []):
+                if cap.lower().replace("_", " ").strip() == intent_normalized:
+                    return manifest.risk_level.value if manifest.risk_level else None
+            # Match against the primary intent field
+            if manifest.intent.lower().replace("_", " ").strip() == intent_normalized:
+                return manifest.risk_level.value if manifest.risk_level else None
+        return None
+
     async def _on_plugin_registry_changed(self, event: Any) -> None:
         """
         Re-indexes plugin capabilities into the vector store whenever
@@ -550,7 +734,24 @@ Example:
             self.logger.debug("Could not re-index plugin intents: %s", exc)
 
     async def _is_risky(self, intent: str, params: dict) -> bool:
-        """Evaluates if an action could damage the system or compromise security."""
+        """
+        Evaluates if an action could damage the system or compromise security.
+
+        Risk is determined from three sources in priority order:
+          1. Plugin manifest risk_level — single source of truth for plugin intents.
+             low  → never risky (no confirmation)
+             medium/high → risky (confirmation required)
+          2. RISKY_INTENTS config — for built-in capabilities with no plugin manifest.
+          3. LLM scoring — last resort for unknown intents.
+
+        No hardcoded intent names here. New plugins self-declare their risk.
+        """
+        # ── 1. Manifest-declared risk level (covers all plugin intents) ───────
+        manifest_risk = self._get_manifest_risk(intent)
+        if manifest_risk is not None:
+            return manifest_risk in ("medium", "high")
+
+        # ── 2. Configured RISKY_INTENTS (built-in capabilities) ──────────────
         if intent in getattr(settings, "RISKY_INTENTS", []):
             return True
 
@@ -561,13 +762,15 @@ Example:
                 self.logger.warning("🛡️ Core modification attempt blocked: %s", target_file)
                 return True
 
+        # ── 3. LLM scoring — last resort ─────────────────────────────────────
         prompt = f"""
 Rate the security risk of this AI operation (1-10):
 Operation: {intent}
 Parameters: {json.dumps(params)}
 
-Rule: File deletions, code modifications, or shell commands are 8-10.
+Rule: File deletions, code modifications, or raw shell commands are 8-10.
 Rule: Reading files or checking system status are 1-3.
+Rule: Launching GUI applications or opening apps is always 1-2.
 
 Return ONLY JSON: {{"risk_score": <int>}}
 """
