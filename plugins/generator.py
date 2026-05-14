@@ -325,12 +325,30 @@ Output EXACTLY this format — no other text before or after:
         meta_prompt = f"""Return ONLY valid JSON metadata for a plugin named '{plugin_name}'.
 No markdown, no explanation, just the JSON object.
 
+The plugin handles intent: "{intent}"
+
+Rules:
+- risk_level: "low" for read/open/display actions, "medium" for write/create, "high" for delete/shell
+- capabilities: all intent strings this plugin should match (include synonyms)
+- parameter_schema: list every arg the plugin's validate() method requires or accepts
+  Each entry: {{"name": "<arg>", "required": true|false, "aliases": ["<other_names>"]}}
+  aliases = other names the LLM or planner might use for the same value
+- intent_patterns: how to detect when a misclassified LLM intent should be rerouted here
+  Each entry: {{"raw_intents": ["run_command","open","launch"], "command_is_verb": true, "args_is_target": true}}
+  command_is_verb=true means: the LLM put a verb like "open"/"launch" in the command field
+  args_is_target=true means: the real target value is in args[0] positional list
+  Leave intent_patterns as [] if no rerouting is needed.
+
 {{
     "name": "{plugin_name}",
-    "description": "<one sentence: what this plugin does for intent '{intent}'>",
+    "description": "<one sentence: what this plugin does>",
     "permissions": ["ui_interaction"],
     "risk_level": "low",
-    "capabilities": ["{intent}"]
+    "capabilities": ["{intent}"],
+    "parameter_schema": [
+        {{"name": "<primary_arg_name>", "required": true, "aliases": ["<alias1>", "<alias2>"]}}
+    ],
+    "intent_patterns": []
 }}
 """
         try:
@@ -396,20 +414,27 @@ No markdown, no explanation, just the JSON object.
         """Writes the plugin files and creates a PENDING manifest."""
         # plugin.py and test file already written by sandbox_runner
         # Write the manifest
+        # Derive requires_confirmation from risk_level — low-risk plugins
+        # never need confirmation; the manifest is the single source of truth.
+        _risk_str = metadata.get("risk_level", "medium")
+        _requires_confirm = _risk_str in ("medium", "high")
+
         manifest = PluginManifest(
             name=plugin_name,
             description=metadata.get("description", f"Plugin for {intent}"),
             intent=intent,
             version="1.0",
-            # capabilities exposed by this plugin — used by loader.list_plugins()
-            # and the dashboard to show what each plugin can do
             capabilities=metadata.get("capabilities", [intent]),
             permissions=metadata.get("permissions", []),
-            risk_level=RiskLevel(metadata.get("risk_level", "medium")),
+            risk_level=RiskLevel(_risk_str),
             status=PluginStatus.PENDING,
             trusted=False,
-            requires_confirmation=True,
+            requires_confirmation=_requires_confirm,
             tags=[intent, "auto-generated"],
+            # Self-describing contract — consumed by intent_parser and planner
+            # so they never need hardcoded rules for this plugin.
+            parameter_schema=metadata.get("parameter_schema", []),
+            intent_patterns=metadata.get("intent_patterns", []),
         )
         manifest.save(plugin_dir)
 
