@@ -545,6 +545,18 @@ class Orchestrator:
         if not payload.get("profile_hint") and task.get("profile_hint"):
             payload["profile_hint"] = task["profile_hint"]
 
+        # Inject preferred_method — confirmation_manager re-publishes the
+        # confirmation_required payload which was built by intent_parser and
+        # never includes preferred_method. Without it executor sees None and
+        # runs focus_manager, causing "Failed to focus target window" failures.
+        if not payload.get("preferred_method") and task.get("preferred_method"):
+            payload["preferred_method"] = task["preferred_method"]
+        # Also check full_task for preferred_method
+        if not payload.get("preferred_method"):
+            full_task_pm = (payload.get("full_task") or {}).get("preferred_method")
+            if full_task_pm:
+                payload["preferred_method"] = full_task_pm
+
         # Push profile_hint into each step's args
         steps = payload.get("steps") or []
         hint  = payload.get("profile_hint")
