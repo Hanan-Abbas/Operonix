@@ -110,29 +110,26 @@ class Planner:
         task_data: dict,
     ) -> dict:
         """
-        Translate semantic arg values into concrete filesystem paths where
-        needed, so capabilities receive structured, unambiguous arguments.
+        Translate semantic arg values into concrete values where needed, so
+        capabilities and plugins receive structured, unambiguous arguments.
 
-        Currently handles:
-          - "location": "current window"  ->  real CWD from context
-          - "dir_name" + resolved location -> "path" key
-
-        This is fully data-driven: new intents that use the same pattern
-        get path resolution for free.
+        Handles:
+          - "location": "current window"  →  real CWD from context
+          - "dir_name" + resolved location → "path" key
+          - app_opening: ensures app_name is always populated, extracting it
+            from 'command', positional 'args', or 'target' if missing.
+            This is the last-resort contract normalizer before the planner
+            emits the step — it means the executor's _normalize_args_for_plugin
+            never has to guess for app_opening tasks.
         """
         resolved = dict(args or {})
-        location = str(resolved.get("location", "")).lower()
 
-        # Resolve "current window" / "current" to a real CWD
-        # Resolve all natural-language "here" variants to the active CWD.
-        # The LLM may produce: "here", "current", "current window",
-        # "current directory", "this folder", etc.
+        # ── CWD / location resolution ─────────────────────────────────────────
+        location = str(resolved.get("location", "")).lower()
         _HERE_SYNONYMS = {"here", "current", "this", "pwd", "active", "open"}
         location_words = set(location.replace("_", " ").split())
 
         if location_words & _HERE_SYNONYMS or "current" in location or "here" in location:
-            # Try context dict hierarchy (populated by window_detector /
-            # orchestrator at snapshot time)
             cwd = (
                 context.get("cwd")
                 or context.get("window_cwd")
@@ -142,14 +139,103 @@ class Planner:
             )
             resolved["cwd_resolved"] = cwd
 
-            # If there's a dir_name but no explicit path, build the path now
             if resolved.get("dir_name") and not resolved.get("path"):
                 resolved["path"] = str(Path(cwd) / resolved["dir_name"])
                 self.logger.debug(
                     "Resolved 'current window' -> path: %s", resolved["path"]
                 )
 
+        # ── Manifest-driven arg normalization ────────────────────────────────
+        # Each plugin declares parameter_schema in its manifest listing the args
+        # it needs and their aliases. If any required arg is missing from the
+        # resolved dict, we try to fill it from positional args, command field,
+        # or common alias keys — fully driven by the manifest, zero hardcoding.
+        resolved = self._fill_missing_args_from_manifest(intent, resolved)
+
         return resolved
+
+    def _fill_missing_args_from_manifest(self, intent: str, args: dict) -> dict:
+        """
+        Uses the matched plugin's parameter_schema to fill any missing required
+        args from the positional 'args' list, 'command' field, or alias keys.
+
+        This replaces the hardcoded app_opening block — it works for ANY plugin
+        that declares its parameter_schema in the manifest.
+        """
+        try:
+            from plugins.loader import plugin_loader
+            from plugins.manifest_schema import PluginManifest
+
+            intent_normalized = intent.lower().replace("_", " ").strip()
+            matched_manifest: PluginManifest | None = None
+
+            for entry in plugin_loader.list_plugins():
+                plugin_dir = entry.get("plugin_dir", "")
+                if not plugin_dir:
+                    continue
+                m = PluginManifest.load(plugin_dir)
+                if not m or not m.parameter_schema:
+                    continue
+                caps = [c.lower().replace("_", " ").strip() for c in (m.capabilities or [])]
+                intent_field = m.intent.lower().replace("_", " ").strip()
+                if intent_normalized in caps or intent_normalized == intent_field:
+                    matched_manifest = m
+                    break
+
+            if not matched_manifest:
+                return args
+
+            resolved = dict(args)
+            positional = resolved.get("args", [])
+            if not isinstance(positional, list):
+                positional = []
+            cmd = str(resolved.get("command", "")).strip()
+            _LAUNCH_VERBS = {"open", "launch", "start", "run", "execute"}
+
+            for param in matched_manifest.parameter_schema:
+                p_name    = param.get("name", "")
+                p_required = param.get("required", False)
+                p_aliases  = param.get("aliases", [])
+
+                if not p_name or resolved.get(p_name):
+                    continue  # already present
+
+                # Try aliases first
+                value = None
+                for alias in p_aliases:
+                    if resolved.get(alias):
+                        value = resolved[alias]
+                        break
+
+                # Try positional args[0]
+                if value is None and positional:
+                    value = str(positional[0]).strip() or None
+
+                # Try command field: if it's a verb+target, take the target
+                if value is None and cmd:
+                    parts = cmd.split()
+                    if len(parts) == 2 and parts[0].lower() in _LAUNCH_VERBS:
+                        value = parts[1]
+                    elif len(parts) == 1 and parts[0].lower() not in _LAUNCH_VERBS:
+                        value = parts[0]
+
+                if value:
+                    resolved[p_name] = value
+                    self.logger.debug(
+                        "Planner filled '%s'='%s' for intent='%s' via manifest schema",
+                        p_name, value, intent,
+                    )
+                elif p_required:
+                    self.logger.warning(
+                        "Planner: could not resolve required arg '%s' for intent='%s' "
+                        "from args=%s", p_name, intent, args,
+                    )
+
+            return resolved
+
+        except Exception as exc:
+            self.logger.debug("_fill_missing_args_from_manifest failed (non-fatal): %s", exc)
+            return args
 
     # ── Complexity check ──────────────────────────────────────────────────
 
