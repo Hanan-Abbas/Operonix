@@ -80,6 +80,23 @@ class PluginManifest:
     # Services this plugin is allowed to use (from capability registry)
     allowed_services: list[str] = field(default_factory=list)
 
+    # ── Self-describing contract fields ───────────────────────────────────────
+    # parameter_schema: declares what args this plugin's validate() expects.
+    # Each entry: {"name": "app_name", "required": True, "aliases": ["command", "target"]}
+    # The executor _normalize_args_for_plugin and planner arg resolver use this
+    # to translate any raw LLM arg shape — no hardcoding in intent_parser needed.
+    parameter_schema: list[dict] = field(default_factory=list)
+
+    # intent_patterns: describes raw LLM intent+arg shapes to reroute here.
+    # Each entry:
+    # {
+    #   "raw_intents":     ["run_command", "open", "launch", "start"],
+    #   "command_is_verb": true,   # command field is a launch verb
+    #   "args_is_target":  true,   # positional args[0] is the real target value
+    # }
+    # The intent parser reads these at runtime — zero parser edits for new plugins.
+    intent_patterns: list[dict] = field(default_factory=list)
+
     @property
     def success_rate(self) -> float:
         if self.total_runs == 0:
