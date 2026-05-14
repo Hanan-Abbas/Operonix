@@ -83,12 +83,47 @@ class Executor:
         self.restricted_actions: set[str] = set()
         self._pending_target_selections: dict[str, asyncio.Future] = {}
 
-        #dedup guard
+        # CAVEAT 1 — dedup guard
         self._seen_task_ids: set[str] = set()
+
+        # ── Concurrent execution registry ──────────────────────────────────
+        # Maps task_id → asyncio.Task so running tasks can be inspected,
+        # cancelled, or awaited.  Tasks are removed on completion/failure.
+        # The event loop is never blocked — each task runs concurrently so
+        # new panel inputs and bus events are processed even during downloads.
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
-        
+        # SUBSCRIPTION ARCHITECTURE FIX:
+        #
+        # The execution trigger chain is:
+        #
+        #   safety_validator   → task_safety_cleared (low-risk, no confirmation needed)
+        #                      → confirmation_required (high-risk, needs user approval)
+        #   confirmation_manager → task_safety_cleared (after user clicks Allow)
+        #   orchestrator.handle_safety_cleared → task_dispatched_safe (enriches + re-emits)
+        #
+        # PROBLEM: subscribing executor to "task_safety_cleared" caused it to run
+        # on the safety_validator's event BEFORE the user confirmed anything.
+        # The safety_validator publishes task_safety_cleared for low-risk tasks,
+        # but for HIGH-RISK tasks it publishes confirmation_required — then
+        # confirmation_manager pauses and waits.  However the orchestrator ALSO
+        # subscribes to task_safety_cleared and re-emits task_dispatched_safe
+        # immediately.  The executor on task_safety_cleared fired on that first
+        # safety_validator event before the user saw any confirmation dialog.
+        #
+        # FIX: executor subscribes ONLY to "task_dispatched_safe".
+        #   • Low-risk path:  safety_validator → task_safety_cleared
+        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
+        #                     → executor (correct, no confirmation needed)
+        #   • High-risk path: safety_validator → confirmation_required
+        #                     → [user approves] → confirmation_manager → task_safety_cleared
+        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
+        #                     → executor (correct, AFTER user approval)
+        #
+        # This single change ensures the executor ALWAYS runs after orchestrator
+        # has enriched the payload with context + profile_hint, AND always runs
+        # after user confirmation for high-risk tasks.
         bus.subscribe("task_dispatched_safe", self.execute_plan)
         bus.subscribe("target_selected",      self._on_target_selected)
         self.is_running = True
@@ -313,11 +348,18 @@ class Executor:
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}", "blocked"
 
-        # Skip window focus for plugin actions — background/automation plugins
-        # don't need a specific window focused first. Focusing causes failures
-        # when the active window title doesn't resolve via wmctrl/xdotool.
+        # Skip window focus for:
+        # 1. Plugin actions — background/automation plugins don't need a focused window
+        # 2. Shell/command actions — they run in terminals, not in specific GUI windows
+        #    (run_command, execute, git_op etc. target the terminal, not the active app)
+        # 3. Any action where no specific window target is needed
+        # Focusing causes failures when the active window title doesn't resolve
+        # via wmctrl/xdotool (e.g. "Untitled - Google Chrome" is generic).
         _SKIP_FOCUS_FOR_METHODS = {"plugin"}
-        _needs_focus = preferred_method not in _SKIP_FOCUS_FOR_METHODS
+        _needs_focus = (
+            preferred_method not in _SKIP_FOCUS_FOR_METHODS
+            and action not in _SHELL_ACTIONS   # shell actions target terminal, not GUI window
+        )
         window_title = context.get("window_title")
         if window_title and _needs_focus:
             focused = await focus_manager.ensure_focus(window_title)
@@ -396,48 +438,63 @@ class Executor:
                     plugin_instance = matched_entry.instance
                     plugin_name     = matched_entry.manifest.name
 
-                    validation_error = plugin_instance.validate(args or {})
+                    # ── Arg normalization ──────────────────────────────────
+                    # The intent-parser produces generic shapes (e.g.
+                    # {'command': 'open', 'args': ['cursor']}) that may not
+                    # match the plugin's declared parameter names (e.g.
+                    # 'app_name').  Normalize before validating so the plugin
+                    # receives the right keys regardless of how the planner
+                    # phrased the step.
+                    plugin_args = self._normalize_args_for_plugin(
+                        plugin_instance, args or {}, action, context,
+                    )
+
+                    validation_error = plugin_instance.validate(plugin_args)
                     if validation_error:
+                        # Normalization couldn't fully satisfy the plugin —
+                        # log and fall through to the waterfall rather than
+                        # dispatching with known-bad args.
                         logger.warning(
-                            "Plugin '%s' validation failed: %s — proceeding with defaults.",
+                            "Plugin '%s' validation still failed after normalization: %s "
+                            "— skipping plugin, falling through to waterfall.",
                             plugin_name, validation_error,
                         )
-
-                    logger.info(
-                        "🔌 Plugin dispatch: '%s' → '%s' (cap='%s', score=%.2f)",
-                        action, plugin_name, matched_cap, score,
-                    )
-                    bus.publish(
-                        "tool_selected",
-                        {
-                            "task_id":    task_id,
-                            "step_index": step_index,
-                            "tool_type":  "plugin",
-                            "tool_name":  plugin_name,
-                            "method":     "plugin",
-                        },
-                        source="executor",
-                    )
-
-                    try:
-                        plugin_result = await asyncio.wait_for(
-                            plugin_instance.run(context, args or {}),
-                            timeout=float(getattr(settings, "PLUGIN_TIMEOUT", 60.0)),
+                    else:
+                        logger.info(
+                            "🔌 Plugin dispatch: '%s' → '%s' (cap='%s', score=%.2f)",
+                            action, plugin_name, matched_cap, score,
                         )
-                        if isinstance(plugin_result, dict):
-                            if plugin_result.get("status") == "success":
-                                return True, plugin_result.get("result"), "plugin"
+                        bus.publish(
+                            "tool_selected",
+                            {
+                                "task_id":    task_id,
+                                "step_index": step_index,
+                                "tool_type":  "plugin",
+                                "tool_name":  plugin_name,
+                                "method":     "plugin",
+                            },
+                            source="executor",
+                        )
+
+                        try:
+                            plugin_result = await asyncio.wait_for(
+                                plugin_instance.run(context, plugin_args),
+                                timeout=float(getattr(settings, "PLUGIN_TIMEOUT", 60.0)),
+                            )
+                            if isinstance(plugin_result, dict):
+                                if plugin_result.get("status") == "success":
+                                    return True, plugin_result.get("result"), "plugin"
+                                else:
+                                    logger.warning(
+                                        "Plugin '%s' returned error: %s — falling through.",
+                                        plugin_name, plugin_result.get("message", "unknown"),
+                                    )
                             else:
-                                logger.warning(
-                                    "Plugin '%s' returned error: %s — falling through.",
-                                    plugin_name, plugin_result.get("message", "unknown"),
-                                )
-                        else:
-                            return True, plugin_result, "plugin"
-                    except asyncio.TimeoutError:
-                        logger.warning("Plugin '%s' timed out.", plugin_name)
-                    except Exception as plugin_exc:
-                        logger.warning("Plugin '%s' exception: %s — falling through.", plugin_name, plugin_exc)
+                                return True, plugin_result, "plugin"
+                        except asyncio.TimeoutError:
+                            logger.warning("Plugin '%s' timed out.", plugin_name)
+                        except Exception as plugin_exc:
+                            logger.warning("Plugin '%s' exception: %s — falling through.", plugin_name, plugin_exc)
         except Exception as exc:
             logger.debug("Plugin dispatch pre-check failed (non-fatal): %s", exc)
 
@@ -708,6 +765,128 @@ class Executor:
         logger.debug("cwd not in context — using process CWD: %s", context["cwd"])
 
     # ── Waterfall helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_args_for_plugin(
+        plugin_instance: Any,
+        args: dict,
+        action: str,
+        context: dict,
+    ) -> dict:
+        """
+        Translate the executor's raw step-args into the shape a plugin expects.
+
+        The intent-parser produces generic shapes like
+            {'command': 'open', 'args': ['cursor']}
+        while a plugin may declare specific parameters like 'app_name'.
+        This method asks the plugin to validate the raw args first; if that
+        fails it runs a series of heuristic mappings derived from the
+        validation error message and the plugin's own parameter names,
+        then re-validates.  The original args are never mutated.
+
+        Mapping rules (applied in order, first match wins per missing key):
+          1. If error mentions a key name and that key appears in one of the
+             known raw-arg positions, map it directly.
+          2. 'app_name'  ← args['args'][0] | args['target'] | args['name']
+                           | args['command'] (when command ≠ a known shell verb)
+          3. 'file_path' / 'path' ← args['args'][0] | args['file'] | args['target']
+          4. 'url'        ← args['args'][0] | args['target']
+          5. 'query'      ← args['args'][0] | args['text'] | args['target']
+          6. 'text'       ← args['args'][0] | args['query'] | args['target']
+          7. Fallback: spread positional args list into the first N missing keys.
+
+        Internal executor keys (_profile, task_id, cwd) are always forwarded
+        unchanged so shell_tool and process_bridge keep working.
+        """
+        _SHELL_VERBS: frozenset[str] = frozenset({
+            "open", "run", "execute", "launch", "start",
+            "xdg-open", "gtk-launch", "gio",
+        })
+        _INTERNAL_KEYS: frozenset[str] = frozenset({"_profile", "task_id", "cwd", "profile_hint"})
+
+        # Fast path — no normalization needed
+        first_error = plugin_instance.validate(args)
+        if first_error is None:
+            return args
+
+        normalized = {k: v for k, v in args.items() if k in _INTERNAL_KEYS}
+        positional: list[str] = [str(a) for a in (args.get("args") or [])]
+        command: str = str(args.get("command") or "").strip().lower()
+        target_val: str | None = (
+            positional[0] if positional else
+            args.get("target") or args.get("name") or None
+        )
+
+        # Collect all non-internal, non-positional raw args as candidates
+        raw_scalars: dict[str, Any] = {
+            k: v for k, v in args.items()
+            if k not in _INTERNAL_KEYS and k not in {"args", "command"}
+        }
+
+        # Determine which keys the plugin still needs by re-validating an
+        # empty candidate dict — we call validate repeatedly below so keep
+        # track of what we've already satisfied.
+        candidate: dict[str, Any] = dict(raw_scalars)
+
+        # ── Rule 2: app_name ──────────────────────────────────────────────
+        if "app_name" not in candidate:
+            if target_val and command in _SHELL_VERBS:
+                candidate["app_name"] = target_val
+            elif command and command not in _SHELL_VERBS:
+                candidate["app_name"] = command
+            elif target_val:
+                candidate["app_name"] = target_val
+
+        # ── Rule 3: file_path / path ──────────────────────────────────────
+        for fkey in ("file_path", "path"):
+            if fkey not in candidate and target_val:
+                candidate[fkey] = target_val
+
+        # ── Rule 4: url ───────────────────────────────────────────────────
+        if "url" not in candidate and target_val:
+            candidate["url"] = target_val
+
+        # ── Rule 5: query ─────────────────────────────────────────────────
+        if "query" not in candidate:
+            candidate["query"] = (
+                args.get("text") or target_val or action
+            )
+
+        # ── Rule 6: text ──────────────────────────────────────────────────
+        if "text" not in candidate:
+            candidate["text"] = (
+                args.get("query") or target_val or action
+            )
+
+        # ── Rule 7: generic positional spread ─────────────────────────────
+        # Re-validate to find remaining missing keys, then fill from positional
+        test_args = {**normalized, **candidate}
+        remaining_error = plugin_instance.validate(test_args)
+        if remaining_error and positional:
+            # Parse "Missing 'key'" style messages
+            import re as _re
+            missing_keys = _re.findall(r"['\"](\w+)['\"]", remaining_error)
+            for i, mkey in enumerate(missing_keys):
+                if mkey not in candidate and i < len(positional):
+                    candidate[mkey] = positional[i]
+
+        normalized.update(candidate)
+
+        # Final validation log
+        final_error = plugin_instance.validate(normalized)
+        if final_error:
+            logger.debug(
+                "_normalize_args_for_plugin: still invalid after normalization: %s "
+                "(action=%s, raw_args=%s)",
+                final_error, action, args,
+            )
+        else:
+            logger.debug(
+                "_normalize_args_for_plugin: normalized args for action='%s': %s",
+                action, {k: v for k, v in normalized.items() if k not in _INTERNAL_KEYS},
+            )
+
+        return normalized
 
     @staticmethod
     def _build_waterfall(preferred_method: str | None) -> list[str]:
