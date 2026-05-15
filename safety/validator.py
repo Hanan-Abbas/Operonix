@@ -3,36 +3,42 @@ safety/validator.py
 ────────────────────
 Safety gatekeeper for Operonix.
 
-FIX CHANGELOG (this revision)
-──────────────────────────────
-BUG 1 — intent was read from step.get("intent") but steps use "action" key.
-    The planner builds steps as {"action": "create_dir", "args": {...}}.
-    step.get("intent") always returned None, so every step fell through to
-    the else: risk = RiskLevel.SAFE branch.  That accidentally worked for
-    benign ops, but the intent was never correctly identified, meaning
-    destructive ops like delete_file would also have been SAFE.
-    FIX: read step.get("action") first, fall back to task_data.get("intent").
+CHANGES FROM PREVIOUS VERSION (this revision)
+──────────────────────────────────────────────
+BUG 1 (original) — intent was read from step.get("intent") but steps use
+    "action" key.  FIX: read step.get("action") first, fall back to
+    task_data.get("intent").  [unchanged from previous revision]
 
-BUG 2 — create_dir / delete_dir / list_dir were not in any category set.
-    They fell into the else: SAFE branch by accident.  This is correct
-    behaviour for create_dir (it IS safe), but it was untested.  Explicitly
-    added them to the correct sets so behaviour is intentional not accidental:
-      create_dir  → safe_file_ops (always SAFE, path checked)
-      list_dir    → read_only_intents (always SAFE)
-      delete_dir  → destructive_intents (HIGH, requires confirmation)
+BUG 2 (original) — create_dir / delete_dir / list_dir were not in any
+    category set.  FIX: explicitly added to correct sets.
+    [unchanged from previous revision]
 
-BUG 3 — context passed to context_validator was built from current_context
-    which was always {} (see orchestrator BUG 2).  Now that the orchestrator
-    correctly populates context, the validator builds the payload properly.
-    No code change needed here — just flows correctly once orchestrator is fixed.
+BUG 3 (original) — context passed to context_validator was always {}.
+    [unchanged from previous revision — flows correctly once orchestrator fixed]
 
-All other logic unchanged.
+BUG 4 (this revision) — Double confirmation prompt.
+    Both SafetyValidator AND PermissionGuard subscribe to "task_dispatched".
+    For a HIGH-risk task each published its own confirmation_required event,
+    giving the user two identical dialogs for the same task_id.
+    FIX: Added _seen_task_ids dedup set (same pattern as PermissionGuard and
+    Executor).  The first task_dispatched event for a given task_id is
+    processed normally; any duplicate is silently dropped.
+
+BUG 5 (this revision) — profile_hint not forwarded to get_command_risk().
+    The risk function now accepts an optional profile_hint so it can
+    distinguish bridge env-modifiers (LOW) from unknown ghost commands (HIGH).
+    Without forwarding it, the validator would still classify safe commands
+    like `ls` as HIGH if risk_rules later changed its defaults.
+    FIX: Extract profile_hint from task_data / step args and pass it through.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import time
+from typing import Optional
 
 from context.context_validator import context_validator
 from core.config import settings
@@ -44,6 +50,8 @@ from safety.risk_rules import (
     get_web_op_risk,
 )
 
+_DEDUP_TTL = 60.0  # seconds to remember a processed task_id
+
 
 class SafetyValidator:
 
@@ -52,42 +60,57 @@ class SafetyValidator:
         self.violation_counts: dict[str, int] = {}
         self.max_violations = 3
 
+        # BUG 4 FIX: dedup map  task_id → timestamp of first processing
+        self._seen: dict[str, float] = {}
+
         self.forbidden_patterns: list[str] = [
             r"node_modules",
             r"\.env$",
             r"\.git",
         ]
 
-        # Always SAFE — no risk evaluation needed
         self.read_only_intents: set[str] = {
             "read_file",
             "list_files",
-            "list_dir",        # BUG 2 FIX: explicit, was accidental SAFE
+            "list_dir",
             "get_file_info",
             "search_web",
         }
 
-        # SAFE after path check — get_file_op_risk handles dangerous sub-cases
         self.safe_file_ops: set[str] = {
             "write_file",
             "create_file",
-            "create_dir",      # BUG 2 FIX: explicit, was accidental SAFE
+            "create_dir",
             "move_file",
             "copy_file",
             "append_file",
         }
 
-        # HIGH by policy — always requires confirmation
         self.destructive_intents: set[str] = {
             "delete_file",
-            "delete_dir",      # BUG 2 FIX: explicit, was missing entirely
+            "delete_dir",
             "run_command",
             "shell_command",
         }
 
     async def start(self) -> None:
         bus.subscribe("task_dispatched", self.validate_task_safety)
+        asyncio.create_task(self._prune_seen_loop())
         self.logger.info("Safety Validator: Active and guarding execution.")
+
+    # ── Dedup helpers ──────────────────────────────────────────────────────
+
+    async def _prune_seen_loop(self) -> None:
+        """Background loop: remove expired task_id entries every 30 s."""
+        while True:
+            await asyncio.sleep(30)
+            now     = time.monotonic()
+            expired = [tid for tid, ts in self._seen.items()
+                       if now - ts > _DEDUP_TTL]
+            for tid in expired:
+                self._seen.pop(tid, None)
+
+    # ── Main validation entry ──────────────────────────────────────────────
 
     async def validate_task_safety(self, event: object) -> None:
         task_data       = event.data
@@ -95,14 +118,30 @@ class SafetyValidator:
         steps           = task_data.get("steps", [])
         current_context = task_data.get("context", {})
 
+        # BUG 4 FIX: drop duplicate events for the same task_id
+        now = time.monotonic()
+        if task_id in self._seen:
+            self.logger.debug(
+                "SafetyValidator: duplicate task_dispatched for [%s] — skipping.",
+                task_id,
+            )
+            return
+        if task_id:
+            self._seen[task_id] = now
+
         self.logger.debug("Assessing safety for task [%s]...", task_id)
+
+        # BUG 5 FIX: extract profile_hint for forwarding to get_command_risk()
+        profile_hint: Optional[str] = task_data.get("profile_hint")
+        if not profile_hint and steps:
+            profile_hint = steps[0].get("args", {}).get("profile_hint")
 
         for index, step in enumerate(steps):
             # BUG 1 FIX: steps use "action" key, not "intent"
             intent = step.get("action") or step.get("intent") or task_data.get("intent")
             args   = step.get("args", {})
 
-            # ── 1. Path normalisation ─────────────────────────────────────
+            # ── 1. Path normalisation ──────────────────────────────────────
             target_path = args.get("path") or args.get("target")
             if target_path:
                 normalized_path = os.path.normpath(target_path)
@@ -118,7 +157,7 @@ class SafetyValidator:
                 elif "target" in args:
                     args["target"] = normalized_path
 
-            # ── 2. Context & permission check ─────────────────────────────
+            # ── 2. Context & permission check ──────────────────────────────
             mock_state = {"target_path": target_path}
             mock_state.update(current_context.get("state", {}))
 
@@ -162,30 +201,34 @@ class SafetyValidator:
 
             elif intent in ("run_command", "shell_command"):
                 cmd  = args.get("command", "")
+                # BUG 5 FIX: pass profile_hint so run_command on safe cmds
+                # (ls, pwd, cat) resolves SAFE instead of always HIGH.
                 risk = self._safe_get_risk(
-                    get_command_risk, cmd, task_id=task_id, intent=intent
+                    get_command_risk, cmd, profile_hint,
+                    task_id=task_id, intent=intent,
                 )
 
             elif intent in self.safe_file_ops:
-                # create_dir, write_file etc. — SAFE unless path is dangerous
                 path = args.get("path") or args.get("target", "")
                 risk = self._safe_get_risk(
-                    get_file_op_risk, intent, path, task_id=task_id, intent=intent
+                    get_file_op_risk, intent, path,
+                    task_id=task_id, intent=intent,
                 )
 
             elif intent == "delete_file":
                 path = args.get("path") or args.get("target", "")
                 risk = self._safe_get_risk(
-                    get_file_op_risk, intent, path, task_id=task_id, intent=intent
+                    get_file_op_risk, intent, path,
+                    task_id=task_id, intent=intent,
                 )
                 if risk == RiskLevel.SAFE:
                     risk = RiskLevel.HIGH
 
             elif intent in self.destructive_intents:
-                # delete_dir and any future destructive ops
                 path = args.get("path") or args.get("target", "")
                 risk = self._safe_get_risk(
-                    get_file_op_risk, intent, path, task_id=task_id, intent=intent
+                    get_file_op_risk, intent, path,
+                    task_id=task_id, intent=intent,
                 )
                 if risk == RiskLevel.SAFE:
                     risk = RiskLevel.HIGH
@@ -193,7 +236,8 @@ class SafetyValidator:
             elif intent == "open_url":
                 url  = args.get("url") or args.get("query", "")
                 risk = self._safe_get_risk(
-                    get_web_op_risk, url, task_id=task_id, intent=intent
+                    get_web_op_risk, url,
+                    task_id=task_id, intent=intent,
                 )
 
             else:
@@ -209,30 +253,23 @@ class SafetyValidator:
 
             elif risk == RiskLevel.HIGH:
                 self.logger.warning(
-                    "⚠️ High-risk operation detected: %s. Escalating.",
-                    intent,
+                    "⚠️ High-risk operation detected: %s. Escalating.", intent,
                 )
                 self.logger.warning(
                     "Task [%s] step %d triggered HIGH RISK. Requesting confirmation.",
                     task_id, index,
                 )
-                # FIX 2: include the complete task_data payload so that
-                # ConfirmationManager can re-publish it intact when the user
-                # clicks Allow.  Previously only step-level fields were sent,
-                # so task_safety_cleared carried an incomplete payload that
-                # the executor could not run.
                 bus.publish(
                     "confirmation_required",
                     {
-                        "task_id":       task_id,
-                        "reason":        f"High risk on step {index} intent '{intent}'",
-                        "step_index":    index,
-                        "step_data":     step,
-                        "intent":        intent,
-                        "parameters":    args,
-                        "risk_level":    "high",
-                        # Full task payload — needed to resume execution on Allow
-                        "full_task":     task_data,
+                        "task_id":    task_id,
+                        "reason":     f"High risk on step {index} intent '{intent}'",
+                        "step_index": index,
+                        "step_data":  step,
+                        "intent":     intent,
+                        "parameters": args,
+                        "risk_level": "high",
+                        "full_task":  task_data,
                     },
                     source="safety_validator",
                 )
