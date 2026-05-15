@@ -38,10 +38,32 @@ class ConfirmationManager:
         )
 
     async def hold_for_confirmation(self, event):
-        """Intercepts a high-risk task and holds it in a pending state."""
+        """Intercepts a high-risk task and holds it in a pending state.
+
+        Both SafetyValidator and PermissionGuard subscribe to task_dispatched
+        and both independently publish confirmation_required for the same
+        task_id.  The dedup sets in those components only guard against their
+        own re-entrancy — they cannot suppress each other because both fire
+        in the same event-loop tick before either has written to its _seen set.
+
+        The correct fix is here: ConfirmationManager is the single consumer of
+        confirmation_required.  If a task_id is already pending, the second
+        (and any further) confirmation_required events are silently dropped so
+        only one UI prompt is ever shown per task.
+        """
         data = event.data
         task_id = data.get("task_id")
         reason = data.get("reason")
+
+        # DEDUP FIX: drop duplicate confirmation_required events for the same task.
+        # SafetyValidator and PermissionGuard both fire independently; the first
+        # one wins and the rest are discarded here before any UI prompt is sent.
+        if task_id in self.pending_confirmations:
+            self.logger.debug(
+                "ConfirmationManager: duplicate confirmation_required for [%s] — ignored.",
+                task_id,
+            )
+            return
 
         self.logger.warning(
             f"⏸️ Task [{task_id}] paused. Reason: {reason}. Awaiting user approval."
