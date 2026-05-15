@@ -13,22 +13,38 @@ Sits between the orchestrator and the executor in the event chain:
                   ├─ HIGH        →  confirmation_required  (human decides)
                   └─ FORBIDDEN   →  task_failed            (hard block)
 
-The SafetyValidator (safety/validator.py) performs deep per-step analysis
-using path normalisation, context validation, and pattern matching.
-PermissionGuard is intentionally lightweight — it is the FIRST gate and
-checks only the top-level intent and command string so that obviously safe
-tasks (read_file, search_web) are cleared instantly without spinning up the
-full validator machinery.
+CHANGES FROM PREVIOUS VERSION
+──────────────────────────────
+BUG 1 — Double confirmation prompt for the same task_id.
+    Both the orchestrator AND the planner publish "task_dispatched" for the
+    same task, so PermissionGuard.check() fired twice producing two
+    confirmation_required events.  The user saw two identical dialogs and
+    clicking Allow on the first one left the second one dangling.
+    FIX: Added _seen_task_ids dedup set.  The first event for a given task_id
+    is processed normally; any subsequent duplicate is silently dropped.
+    The set is pruned after 60 s to avoid unbounded growth across long sessions.
 
-Event flow:
-  • Subscribes to  : "task_dispatched"
-  • Publishes to   : "task_safety_cleared"   (SAFE / LOW)
-                     "confirmation_required"  (HIGH)
-                     "task_failed"            (FORBIDDEN)
+BUG 2 — run_command was unconditionally escalated to HIGH even for harmless
+    read-only commands like `ls -la`, `pwd`, `cat README.md`.
+    Root cause: the old code had `if risk == RiskLevel.SAFE: risk = RiskLevel.HIGH`
+    hardcoded for all _COMMAND_INTENTS regardless of what the command actually did.
+    FIX: Removed the forced escalation.  get_command_risk() in risk_rules.py now
+    contains a proper whitelist of read-only commands (SAFE) and policy-HIGH
+    commands that really do need confirmation.  The profile_hint from the LLM /
+    terminal_resolver is forwarded into get_command_risk() so the risk function
+    can make context-aware decisions (bridge env-modifiers are LOW; unknown ghost
+    commands are HIGH).
+
+The SafetyValidator (safety/validator.py) also subscribes to "task_dispatched"
+and performs deep per-step analysis.  PermissionGuard is the FIRST, lightweight
+gate — it checks only the top-level intent and command string so that obviously
+safe tasks are cleared instantly without spinning up the full validator machinery.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from core.event_bus import bus
@@ -45,27 +61,26 @@ logger = logging.getLogger("PermissionGuard")
 # Intent → risk-function routing table
 # ---------------------------------------------------------------------------
 
-# Intents that are always SAFE — cleared immediately, no analysis needed.
 _ALWAYS_SAFE: frozenset[str] = frozenset({
     "read_file", "list_files", "list_dir", "get_file_info",
-    "search_web", "open_url",
+    "search_web",
 })
 
-# Intents whose risk depends on the command string.
 _COMMAND_INTENTS: frozenset[str] = frozenset({
     "run_command", "shell_command",
 })
 
-# Intents whose risk depends on the file path.
 _FILE_INTENTS: frozenset[str] = frozenset({
     "write_file", "create_file", "create_dir", "move_file",
     "copy_file", "append_file", "delete_file", "delete_dir",
 })
 
-# Intents that are HIGH risk by policy regardless of args.
 _HIGH_BY_POLICY: frozenset[str] = frozenset({
     "delete_file", "delete_dir",
 })
+
+# How long to remember a seen task_id to absorb late duplicates (seconds).
+_DEDUP_TTL = 60.0
 
 
 class PermissionGuard:
@@ -79,6 +94,8 @@ class PermissionGuard:
 
     def __init__(self) -> None:
         self._started = False
+        # BUG 1 FIX: dedup map  task_id → timestamp of first seen
+        self._seen: dict[str, float] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -86,8 +103,21 @@ class PermissionGuard:
         if self._started:
             return
         bus.subscribe("task_dispatched", self.check)
+        asyncio.create_task(self._prune_seen_loop())
         self._started = True
         logger.info("PermissionGuard: online — guarding task_dispatched.")
+
+    # ── Dedup helpers ──────────────────────────────────────────────────────
+
+    async def _prune_seen_loop(self) -> None:
+        """Background loop: remove expired task_id entries every 30 s."""
+        while True:
+            await asyncio.sleep(30)
+            now     = time.monotonic()
+            expired = [tid for tid, ts in self._seen.items()
+                       if now - ts > _DEDUP_TTL]
+            for tid in expired:
+                self._seen.pop(tid, None)
 
     # ── Main gate ──────────────────────────────────────────────────────────
 
@@ -103,6 +133,17 @@ class PermissionGuard:
         intent     = data.get("intent") or data.get("capability") or ""
         parameters = data.get("parameters") or {}
 
+        # BUG 1 FIX: drop duplicate events for the same task_id
+        now = time.monotonic()
+        if task_id in self._seen:
+            logger.debug(
+                "PermissionGuard: duplicate task_dispatched for [%s] — skipping.",
+                task_id,
+            )
+            return
+        if task_id:
+            self._seen[task_id] = now
+
         # Also check first step if steps list is present (planner output).
         steps = data.get("steps") or []
         if steps and not intent:
@@ -110,11 +151,19 @@ class PermissionGuard:
             intent     = first_step.get("action") or first_step.get("intent") or ""
             parameters = first_step.get("args") or parameters
 
-        logger.debug(
-            "PermissionGuard: evaluating task [%s] intent=%r", task_id, intent
+        # Extract profile_hint so risk functions can make context-aware decisions.
+        # It may live at the top level or inside the first step's args.
+        profile_hint: str | None = (
+            data.get("profile_hint")
+            or (steps[0].get("args", {}).get("profile_hint") if steps else None)
         )
 
-        risk = self._evaluate_risk(intent, parameters, task_id)
+        logger.debug(
+            "PermissionGuard: evaluating task [%s] intent=%r profile=%s",
+            task_id, intent, profile_hint,
+        )
+
+        risk = self._evaluate_risk(intent, parameters, task_id, profile_hint)
 
         if risk == RiskLevel.FORBIDDEN:
             logger.warning(
@@ -143,8 +192,6 @@ class PermissionGuard:
                     "parameters": parameters,
                     "risk_level": "high",
                     "step_data":  steps[0] if steps else {},
-                    # Full task payload — ConfirmationManager re-publishes this
-                    # as task_safety_cleared when the user clicks Allow.
                     "full_task":  data,
                 },
                 source="permission_guard",
@@ -168,17 +215,19 @@ class PermissionGuard:
         intent: str,
         parameters: dict[str, Any],
         task_id: str | None,
+        profile_hint: str | None = None,
     ) -> RiskLevel:
         """
         Map intent + parameters to a RiskLevel using safety.risk_rules.
 
-        Does NOT duplicate SafetyValidator's deep per-step analysis — this
-        is intentionally a fast first-pass check on the top-level intent.
+        Forwards profile_hint into get_command_risk() so the risk function
+        can distinguish bridge env-modifiers (LOW) from unknown ghost
+        commands (HIGH) without hardcoding that logic here.
         """
         if not intent:
             return RiskLevel.LOW
 
-        # 1. Always-safe intents — skip all analysis.
+        # 1. Always-safe intents.
         if intent in _ALWAYS_SAFE:
             if intent == "open_url":
                 url = parameters.get("url") or parameters.get("query", "")
@@ -189,17 +238,15 @@ class PermissionGuard:
             return RiskLevel.SAFE
 
         # 2. Command-execution intents.
+        #    BUG 2 FIX: removed the unconditional `if risk == SAFE: risk = HIGH`
+        #    override.  get_command_risk() now handles whitelist / policy correctly.
+        #    profile_hint is forwarded so bridge env-modifiers are not escalated.
         if intent in _COMMAND_INTENTS:
-            cmd  = parameters.get("command", "")
-            risk = self._safe_call(
-                get_command_risk, cmd,
+            cmd = parameters.get("command", "")
+            return self._safe_call(
+                get_command_risk, cmd, profile_hint,
                 task_id=task_id, intent=intent,
             )
-            # run_command is always at least HIGH — even a safe-looking command
-            # needs explicit user awareness when the AI is running it.
-            if risk == RiskLevel.SAFE:
-                risk = RiskLevel.HIGH
-            return risk
 
         # 3. File-operation intents.
         if intent in _FILE_INTENTS:
@@ -212,7 +259,7 @@ class PermissionGuard:
                 risk = RiskLevel.HIGH
             return risk
 
-        # 4. Unknown intent — treat as LOW (SafetyValidator will do deeper check).
+        # 4. Unknown intent — LOW (SafetyValidator does deeper per-step check).
         logger.debug(
             "PermissionGuard: unknown intent %r for task [%s] — defaulting LOW.",
             intent, task_id,
@@ -229,11 +276,12 @@ class PermissionGuard:
             return result if result is not None else RiskLevel.LOW
         except Exception as exc:
             logger.warning(
-                "PermissionGuard: risk function %s raised for intent=%r task=[%s]: %s — defaulting LOW.",
-                getattr(func, '__name__', str(func)), intent, task_id, exc,
+                "PermissionGuard: risk function %s raised for intent=%r task=[%s]: %s "
+                "— defaulting LOW.",
+                getattr(func, "__name__", str(func)), intent, task_id, exc,
             )
             return RiskLevel.LOW
 
 
-# Global singleton — imported by orchestrator.start()
+# Global singleton
 permission_guard = PermissionGuard()
