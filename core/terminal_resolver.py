@@ -790,17 +790,6 @@ class TerminalResolver:
                 return AmbiguousTarget(candidates=candidates)
 
         # ── 5. Decide profile based on best score ─────────────────────────────
-        #
-        # FIX: lowered threshold from 0.3 to 0.0 and made recency alone
-        # sufficient to choose Bridge.  Previously a terminal with no CWD match
-        # but recent focus (recency=1.0) scored 0.3 exactly, which only passed
-        # if >= 0.3 AND pts_path was found.  Now ANY terminal with a pts_path
-        # that was recently focused is preferred over Ghost.
-        #
-        # The old 0.3 threshold was designed to avoid picking a random terminal
-        # with no relation to the task. With recency tracking this is no longer
-        # needed — the focus stack guarantees the user explicitly focused that
-        # terminal before opening the panel.
         if best_rec.pts_path:
             log.info(
                 "TerminalResolver: Bridge → '%s' (score=%.2f, pts=%s, cwd=%s)",
@@ -813,14 +802,37 @@ class TerminalResolver:
                 cwd=best_rec.cwd,
             )
 
+        # ── 5a. Last-resort: best terminal has no pts — try ANY terminal ──────
+        # This handles the case where scoring ranked a no-pts terminal first
+        # (e.g. because it had a better CWD match) but another terminal does
+        # have a pts. Any terminal with a pts is better than Ghost.
+        for _score, rec in scored:
+            if rec.pts_path:
+                log.info(
+                    "TerminalResolver: last-resort Bridge → '%s' (pts=%s) "
+                    "best had no pts",
+                    rec.title, rec.pts_path,
+                )
+                return BridgeTarget(
+                    pts_path=rec.pts_path,
+                    window_id=rec.window_id,
+                    window_title=rec.title,
+                    cwd=rec.cwd,
+                )
+
         if effective_hint == "bridge":
-            log.info("TerminalResolver: bridge requested but no pts found — falling to Lab")
+            log.info(
+                "TerminalResolver: bridge requested but NO terminal has a pts — "
+                "falling to Lab. Check ptrace_scope: "
+                "echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope"
+            )
             return LabTarget(terminal_bin=self._terminal_bin or "xterm", cwd=cwd)
 
-        # No terminals have a pts — fall back to Ghost
+        # No terminal has a pts at all — Ghost
         log.info(
-            "TerminalResolver: Ghost profile — no pts found on any terminal (best_score=%.2f)",
-            best_score,
+            "TerminalResolver: Ghost — no pts found on any of %d terminal(s). "
+            "Run setup.sh to check ptrace_scope and wmctrl.",
+            len(terminals),
         )
         return GhostTarget(venv_path=venv_path, cwd=cwd)
 
