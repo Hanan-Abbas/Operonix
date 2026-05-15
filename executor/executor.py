@@ -22,6 +22,13 @@ CAVEAT 3 FIX — Bridge PermissionError self-heal:
 
 HYBRID EXECUTION — unchanged from previous version.
 BUG FIX 1, 2, 3  — unchanged from previous version.
+
+CAVEAT 4 FIX — Output truncation:
+    Large command stdout (e.g. ls -la on a home directory with hundreds of
+    bash_history tmp files) flooded the panel event bus with thousands of
+    characters.  truncate_output() from safety.risk_rules is now called on
+    every string result before it is published to execution_step_success,
+    capping output at 2000 chars / 50 lines with a notice appended.
 """
 from __future__ import annotations
 
@@ -52,6 +59,7 @@ from core.metrics import metrics
 from brain.llm_client import llm_client
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
+from safety.risk_rules import truncate_output
 
 logger = logging.getLogger("Executor")
 
@@ -301,11 +309,16 @@ class Executor:
                 logger.error("Task [%s] failed at step %d: %s", task_id, step_index, result)
                 return
 
-            context["last_result"] = result
+            # Truncate string output before publishing to the panel so that
+            # large stdout (e.g. ls -la on a home dir) does not flood the UI.
+            display_result = (
+                truncate_output(result) if isinstance(result, str) else result
+            )
+            context["last_result"] = display_result
             context["last_action"] = action
             bus.publish(
                 "execution_step_success",
-                {"task_id": task_id, "step_index": step_index, "result": result},
+                {"task_id": task_id, "step_index": step_index, "result": display_result},
                 source="executor",
             )
             logger.info("Step %d completed: %s", step_index, action)
