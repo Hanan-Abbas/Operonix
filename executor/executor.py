@@ -29,6 +29,26 @@ CAVEAT 4 FIX — Output truncation:
     characters.  truncate_output() from safety.risk_rules is now called on
     every string result before it is published to execution_step_success,
     capping output at 2000 chars / 50 lines with a notice appended.
+
+REFLECTOR INTEGRATION:
+    After every task — success OR failure — executor publishes
+    "execution_complete" with a fully structured payload that the Reflector
+    consumes to grade outcomes, calibrate capability confidence scores, and
+    trigger self-evolution when needed.
+
+    RISK MITIGATIONS applied:
+      R1 — execution_complete is published inside a try/finally so a crash
+           in the publish call never silently swallows the task result.
+      R2 — elapsed time is captured from the local `start` variable, not
+           re-computed, so the duration in execution_complete always matches
+           the actual task wall-clock time.
+      R3 — On failure, steps[:step_index+1] is used (not the full list) so
+           the Reflector only sees steps that actually ran — no phantom steps
+           that never executed distort its analysis.
+      R4 — app_context falls back through three sources (app_name →
+           window_title → "unknown") to guarantee a non-None value.
+      R5 — error and error_type are safely extracted from both str and dict
+           result shapes so no AttributeError can occur.
 """
 from __future__ import annotations
 
@@ -305,6 +325,55 @@ class Executor:
                     },
                     source="executor",
                 )
+
+                # ── REFLECTOR FEED: execution_complete on failure ──────────
+                # RISK R3: pass only steps[:step_index+1] — steps that
+                #   actually ran. The full `steps` list includes future steps
+                #   that were never attempted; including them would mislead
+                #   the Reflector's root-cause analysis.
+                # RISK R5: result may be a str OR a dict {"type":...,
+                #   "message":...}. Extract safely without AttributeError.
+                # RISK R4: app_context falls back through three sources so
+                #   the Reflector never receives None.
+                # RISK R1: wrapped in try/except so a Reflector publish
+                #   failure cannot abort the task_failed flow above.
+                try:
+                    _err_str:  str | None = None
+                    _err_type: str | None = None
+                    if isinstance(result, str):
+                        _err_str = result
+                    elif isinstance(result, dict):
+                        _err_str  = result.get("message") or str(result)
+                        _err_type = result.get("type")
+                    else:
+                        _err_str = str(result) if result is not None else None
+
+                    bus.publish(
+                        "execution_complete",
+                        {
+                            "task_id":     task_id,
+                            "intent":      intent,
+                            "capability":  method_used,
+                            "app_context": (
+                                context.get("app_name")
+                                or context.get("window_title")
+                                or "unknown"
+                            ),
+                            "success":     False,
+                            "partial":     False,
+                            "error":       _err_str,
+                            "error_type":  _err_type,
+                            "steps":       steps[: step_index + 1],
+                            "duration_ms": round((time.time() - start) * 1000, 1),
+                        },
+                        source="executor",
+                    )
+                except Exception as _ref_exc:
+                    logger.debug(
+                        "execution_complete (failure) publish error (non-fatal): %s",
+                        _ref_exc,
+                    )
+
                 retry_manager.clear_task(task_id)
                 logger.error("Task [%s] failed at step %d: %s", task_id, step_index, result)
                 return
@@ -342,6 +411,41 @@ class Executor:
             },
             source="executor",
         )
+
+        # ── REFLECTOR FEED: execution_complete on success ──────────────────
+        # RISK R2: elapsed is captured from `start` defined at _run_plan()
+        #   entry — not re-computed here — so duration is the true wall-clock
+        #   time for this task, matching metrics.total_duration_seconds above.
+        # RISK R4: app_context falls back through three sources.
+        # RISK R1: wrapped in try/except so a Reflector publish error never
+        #   prevents retry_manager.clear_task() from running.
+        try:
+            bus.publish(
+                "execution_complete",
+                {
+                    "task_id":     task_id,
+                    "intent":      intent,
+                    "capability":  method_used,
+                    "app_context": (
+                        context.get("app_name")
+                        or context.get("window_title")
+                        or "unknown"
+                    ),
+                    "success":     True,
+                    "partial":     False,
+                    "error":       None,
+                    "error_type":  None,
+                    "steps":       steps,
+                    "duration_ms": round(elapsed * 1000, 1),
+                },
+                source="executor",
+            )
+        except Exception as _ref_exc:
+            logger.debug(
+                "execution_complete (success) publish error (non-fatal): %s",
+                _ref_exc,
+            )
+
         retry_manager.clear_task(task_id)
         logger.info("Task [%s] completed (method=%s)", task_id, method_used)
 
