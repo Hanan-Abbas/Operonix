@@ -519,6 +519,78 @@ class Executor:
         last_error: Any = f"No tool available for action: {action}"
         method_used     = "unknown"
 
+        # DOUBLE-EXECUTION FIX:
+        # capability_registry.execute() runs the actual shell/tool command
+        # internally (via command_ops / file_ops etc.).  It returns
+        # (True, action_data_dict) on success or (False, error_str) on failure.
+        #
+        # The old waterfall treated (True, dict) as "capability returned a
+        # descriptor — now find a tool and run it again", causing shell_tool
+        # to execute the same command twice:
+        #   1st run → capability_registry.execute() → shell_tool internally
+        #   2nd run → waterfall tier → tool_selector → shell_tool again
+        #
+        # FIX: call capability_registry.execute() ONCE before the waterfall.
+        # • If it succeeds  → return immediately, skip the waterfall entirely.
+        # • If it fails with a real error (not "no capability registered") →
+        #   return immediately as a definitive failure for this action so the
+        #   waterfall does NOT re-run the same command via a different tier.
+        # • If no capability is registered (unknown intent) → fall through to
+        #   the waterfall so tool_selector / ollama_tool can handle it.
+        _NO_CAP_PREFIX = "No capability registered"
+        try:
+            cap_ok, cap_result = await capability_registry.execute(action, context, args)
+
+            if cap_ok:
+                # Capability ran and succeeded.
+                if isinstance(cap_result, dict):
+                    if "success" in cap_result:
+                        if cap_result["success"]:
+                            return True, cap_result.get("result"), "plugin"
+                        else:
+                            # Capability ran but reported failure — definitive.
+                            last_error = cap_result.get("result", "Capability failed")
+                            return False, last_error, "plugin"
+                    else:
+                        # Plain dict result (e.g. file_ops returns metadata)
+                        return True, cap_result, "plugin"
+                else:
+                    return True, cap_result, "plugin"
+
+            else:
+                # cap_ok is False.
+                cap_err_str = str(cap_result)
+                if _NO_CAP_PREFIX not in cap_err_str:
+                    # A real capability was found but it failed (e.g. command
+                    # exited non-zero, file not found, network error).
+                    # Do NOT re-run via the waterfall — that would execute the
+                    # same shell command a second time.
+                    logger.warning(
+                        "Capability '%s' failed: %s — not retrying via waterfall.",
+                        action, cap_result,
+                    )
+                    last_error = cap_result
+                    category = await self._classify_error_dynamically(str(last_error))
+                    # Still honour retry logic (e.g. transient network errors)
+                    # but re-run through capability_registry, not a second tool.
+                    should_retry = await retry_manager.should_retry(
+                        task_id, step_index, error_type=category
+                    )
+                    if not should_retry:
+                        return (
+                            False,
+                            {"type": "exhausted", "message": last_error, "tried": [action]},
+                            "plugin",
+                        )
+                # else: "No capability registered" → fall through to waterfall below
+
+        except Exception as cap_exc:
+            logger.debug(
+                "capability_registry.execute pre-check raised for '%s': %s — "
+                "falling through to waterfall.",
+                action, cap_exc,
+            )
+
         for tier in waterfall:
             if fallback_attempts >= max_fallbacks:
                 break
@@ -551,36 +623,13 @@ class Executor:
             )
 
             try:
-                cap_ok, cap_result = await capability_registry.execute(action, context, args)
-
-                if cap_ok and isinstance(cap_result, dict) and "success" in cap_result:
-                    if cap_result["success"]:
-                        return True, cap_result.get("result"), method_used
-                    else:
-                        last_error = cap_result.get("result", "Capability failed")
-                        return False, last_error, method_used
-
-                if cap_ok and not isinstance(cap_result, dict):
-                    return True, cap_result, method_used
-
-                if cap_ok and isinstance(cap_result, dict):
-                    cap_intent = cap_result.get("intent") or action
-                    cap_args   = cap_result.get("args") or args
-                    resolved   = self._resolve_tool_call(cap_intent, cap_args)
-                    if resolved:
-                        tool_name_r, tool_action, tool_args = resolved
-                        tool = tool_registry.get_tool(tool_name_r)
-                        if tool:
-                            ok, tool_result = await tool.run(tool_action, tool_args)
-                            if ok:
-                                return True, tool_result, method_used
-                            last_error = tool_result
-                        else:
-                            last_error = f"Tool not registered: {tool_name_r}"
-                    else:
-                        return True, cap_result, method_used
-                else:
-                    last_error = cap_result
+                # Waterfall tier: use tool_selector's chosen tool directly.
+                # capability_registry was already called above and either
+                # succeeded (returned early) or found no registered capability.
+                ok, tool_result = await tool_instance.run(action, args)
+                if ok:
+                    return True, tool_result, method_used
+                last_error = tool_result
 
             except asyncio.TimeoutError:
                 last_error = "Execution timed out"
