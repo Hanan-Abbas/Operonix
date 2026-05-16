@@ -21,6 +21,26 @@ BUG FIX 3 — _needs_llm_reasoning() was returning False for simple intents
     still works correctly now that BUG FIX 1 & 2 are in place.  LLM reasoning
     is still triggered for genuinely complex / multi-parameter tasks.
 
+REFLECTOR INTEGRATION — _best_method_from_reflector():
+    When no preferred_method arrives from the intent_parser, the Planner now
+    consults the Reflector's persisted per-tier confidence scores (stored in
+    LongTermMemory) and selects the tier with the highest learned score as the
+    preferred_method hint for the Executor waterfall.  This closes the self-
+    evolution loop: consecutive failures on a tier lower its confidence and
+    automatically route future tasks around it.
+
+    RISK MITIGATIONS:
+      R1 — _best_method_from_reflector() is fully wrapped in try/except; any
+           LongTermMemory I/O failure returns None (no preferred_method), so
+           the waterfall falls back to its default order safely.
+      R2 — A _SIGNAL_THRESHOLD of 0.10 pp above the default (0.75) is
+           required before acting on a score, preventing noise from early
+           one-off failures causing premature re-routing.
+      R3 — LongTermMemory is instantiated fresh per call (lightweight), so
+           there is no shared mutable state between planning calls.
+      R4 — preferred_method is ONLY overridden when the caller did NOT
+           already supply one; explicit caller choices always win.
+
 Self-evolving: the LLM step generation path already fetches live capability
 names from the registry, so new capabilities auto-appear in LLM plans.
 """
@@ -83,6 +103,22 @@ class Planner:
 
         self.plan_storage[task_id] = steps
 
+        # ── REFLECTOR INTEGRATION: Reflector-informed preferred_method ─────
+        # If the caller (intent_parser / panel) already specified a preferred
+        # method, respect it unconditionally (RISK R4 — explicit wins).
+        # Otherwise, query the Reflector's persisted confidence scores to pick
+        # the tier most likely to succeed for this intent on this app.
+        # RISK R1: _best_method_from_reflector() is fully guarded; returns
+        #   None on any failure so we never block or raise here.
+        preferred_method = data.get("preferred_method")
+        if not preferred_method:
+            preferred_method = self._best_method_from_reflector(intent)
+            if preferred_method:
+                self.logger.info(
+                    "Planner: Reflector suggests preferred_method='%s' for intent='%s'",
+                    preferred_method, intent,
+                )
+
         # BUG FIX 1 — include the full context in the dispatched payload so
         # the executor's _enrich_context_with_cwd() has window data.
         bus.publish(
@@ -92,7 +128,7 @@ class Planner:
                 "intent":           intent,
                 "steps":            steps,
                 "context":          context,
-                "preferred_method": data.get("preferred_method"),
+                "preferred_method": preferred_method,
             },
             source="planner",
         )
@@ -306,6 +342,71 @@ All path values must be absolute filesystem paths.
         if suggested_tool:
             step["suggested_tool"] = suggested_tool
         return [step]
+
+    # ── Reflector-informed routing ────────────────────────────────────────
+
+    def _best_method_from_reflector(self, intent: str) -> str | None:
+        """
+        Queries the Reflector's persisted capability-confidence scores from
+        LongTermMemory and returns the tier with the highest learned score,
+        but ONLY when that score is meaningfully above the uninformed default
+        (0.75).  This prevents a single noisy success/failure from prematurely
+        re-routing tasks.
+
+        Tiers checked: plugin → api → command → ui  (waterfall order)
+
+        Returns
+        -------
+        str | None
+            The preferred capability tier name, or None if no reliable signal
+            exists (scores too close, LTM unavailable, or first-run).
+
+        Risk mitigations
+        ----------------
+        R1 — entire method is wrapped in try/except; any I/O or import failure
+             returns None without raising, so the planner always proceeds.
+        R2 — _SIGNAL_THRESHOLD (0.10 pp above default) filters noise from
+             early one-off events on a cold confidence store.
+        R3 — LongTermMemory is instantiated fresh (not cached on self) so
+             there is no shared mutable state that could skew concurrent plans.
+        R4 — called only when preferred_method is not already set by caller;
+             explicit caller intent always wins (enforced in create_plan).
+        """
+        _TIERS            = ["plugin", "api", "command", "ui"]
+        _DEFAULT_SCORE    = 0.75
+        _SIGNAL_THRESHOLD = 0.10   # must be ≥10 pp above default to act
+
+        try:
+            from memory.long_term_memory import LongTermMemory  # lazy import (R1, R3)
+            ltm = LongTermMemory()
+            scores: dict[str, float] = {
+                tier: ltm.get_float(f"confidence:{tier}", default=_DEFAULT_SCORE)
+                for tier in _TIERS
+            }
+
+            best_tier  = max(scores, key=lambda t: scores[t])
+            best_score = scores[best_tier]
+
+            if best_score >= _DEFAULT_SCORE + _SIGNAL_THRESHOLD:
+                self.logger.debug(
+                    "Planner._best_method_from_reflector: '%s' score=%.3f for intent='%s'",
+                    best_tier, best_score, intent,
+                )
+                return best_tier
+
+            self.logger.debug(
+                "Planner._best_method_from_reflector: no strong signal "
+                "(best=%s score=%.3f, threshold=%.3f) — using default waterfall.",
+                best_tier, best_score, _DEFAULT_SCORE + _SIGNAL_THRESHOLD,
+            )
+
+        except Exception as exc:
+            # R1 — never raise from here; degrade gracefully.
+            self.logger.debug(
+                "Planner._best_method_from_reflector failed (non-fatal): %s", exc
+            )
+
+        return None
 
 
 planner = Planner()
