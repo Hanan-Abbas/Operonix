@@ -106,14 +106,51 @@ class LLMClient:
     # ── Internal retry helper ─────────────────────────────────────────────────
 
     async def _retry(self, func, *args, retries: int = 2):
-        """Retry an async API call up to `retries` times."""
+        """
+        Retry an async API call up to `retries` times.
+
+        Enhancement: if the provider returns a 429 rate-limit response the
+        error text often contains 'Please try again in Xs'.  We parse that
+        wait time and sleep before the next attempt instead of retrying
+        immediately (which would just get another 429).
+        """
         for attempt in range(retries):
             try:
                 result = await func(*args)
                 if result:
                     return result
             except Exception as exc:
-                self.logger.warning("Attempt %d/%d failed: %s", attempt + 1, retries, exc)
+                wait = self._parse_retry_after(str(exc))
+                if wait and attempt < retries - 1:
+                    self.logger.warning(
+                        "Attempt %d/%d failed (rate-limited). "
+                        "Waiting %.1fs before retry: %s",
+                        attempt + 1, retries, wait, exc,
+                    )
+                    import asyncio as _aio
+                    await _aio.sleep(wait)
+                else:
+                    self.logger.warning(
+                        "Attempt %d/%d failed: %s", attempt + 1, retries, exc
+                    )
+        return None
+
+    @staticmethod
+    def _parse_retry_after(error_text: str) -> float | None:
+        """
+        Extract the suggested wait time from a rate-limit error message.
+
+        Groq:       'Please try again in 10.555s'
+        OpenRouter: 'Please retry shortly'  (no number — returns None)
+        Gemini:     'Retry after N seconds' (varies)
+        """
+        import re
+        m = re.search(r'try again in\s+([\d.]+)\s*s', error_text, re.IGNORECASE)
+        if m:
+            return float(m.group(1)) + 0.5   # small buffer
+        m = re.search(r'retry after\s+([\d.]+)\s*s', error_text, re.IGNORECASE)
+        if m:
+            return float(m.group(1)) + 0.5
         return None
 
     # ── Embedding ─────────────────────────────────────────────────────────────
@@ -215,6 +252,10 @@ class LLMClient:
                         result = await resp.json()
                         content = result["choices"][0]["message"]["content"]
                         return self._safe_json(content) if use_json else content
+                    elif resp.status == 429:
+                        body = await resp.text()
+                        self.logger.error("Groq returned %d: %s", resp.status, body[:300])
+                        raise RuntimeError(f"Groq 429: {body[:300]}")
                     else:
                         body = await resp.text()
                         self.logger.error(
@@ -273,6 +314,10 @@ class LLMClient:
                         content = result["choices"][0]["message"]["content"]
                         content = self._strip_think_tags(content)
                         return self._safe_json(content) if use_json else content
+                    elif resp.status == 429:
+                        body = await resp.text()
+                        self.logger.error("OpenRouter returned %d: %s", resp.status, body[:300])
+                        raise RuntimeError(f"OpenRouter 429: {body[:300]}")
                     else:
                         body = await resp.text()
                         self.logger.error(
@@ -324,6 +369,10 @@ class LLMClient:
                             result["candidates"][0]["content"]["parts"][0]["text"]
                         )
                         return self._safe_json(content) if use_json else content
+                    elif resp.status == 429:
+                        body = await resp.text()
+                        self.logger.error("Gemini returned %d: %s", resp.status, body[:200])
+                        raise RuntimeError(f"Gemini 429: {body[:200]}")
                     else:
                         body = await resp.text()
                         self.logger.error(
