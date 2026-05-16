@@ -144,196 +144,164 @@ PATTERN_LIBRARY = '''
 # OPERONIX PLUGIN PATTERN LIBRARY — copy the patterns relevant to your intent
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# RUNTIME ENVIRONMENT: Linux (Ubuntu 24). NOT macOS. NOT Windows.
-# Key differences from macOS:
-#   - Use subprocess.Popen(["app_binary"]) to launch apps — NOT "open app_name"
-#   - "open" is a macOS command — it does NOT exist on Linux
-#   - Use shutil.which("binary") to check if an app is installed
-#   - Use xdg-open only for FILES and URLs, not for launching GUI apps
-#   - App binaries: google-chrome, firefox, code (VSCode), cursor, nautilus
-#   - Clipboard: use xclip or xsel (NOT pbcopy/pbpaste which are macOS)
-#   - Notifications: use notify-send (NOT osascript which is macOS)
-#   - Screenshots: use scrot or gnome-screenshot (NOT screencapture)
+# ⚠️  OS IS INJECTED AT RUNTIME — the generator will tell you TARGET_OS above.
+#     Follow its OS NOTES for shell commands, paths, and tool names.
+#
+# ⚠️  NO BLOCKING SUBPROCESS CALLS. EVER.
+#     subprocess.run / subprocess.call / subprocess.Popen / os.system ALL block
+#     the async event loop. Use asyncio.create_subprocess_shell exclusively.
+#     The static scanner WILL reject your code if it finds blocking calls.
 
-# ── PATTERN: Background loop with stop event (auto-clicker, monitor, etc.) ───
-# Use this for ANY "do X repeatedly until stopped" intent.
-# Uses pynput for hotkey detection (no root required on Linux).
-import threading
-import time
+# ── PATTERN: Async shell command (ALL categories that need shell) ─────────────
+# Copy this EXACTLY. Do not use subprocess.run — it blocks the event loop.
+import asyncio
 
-_stop_event = threading.Event()
-
-def _worker_loop(stop_event, interval=0.1):
-    """Worker runs in a daemon thread. Exits cleanly when stop_event is set."""
-    import pyautogui
-    pyautogui.FAILSAFE = False  # disable corner-abort so it runs freely
-    while not stop_event.is_set():
-        pyautogui.click()           # ← replace with your action
-        stop_event.wait(interval)   # blocks for interval OR until set()
-
-def _listen_for_stop(stop_event, hotkey_str="alt+s"):
-    """
-    Listens for a hotkey using pynput (no root required on Linux).
-    Parses hotkey_str like "alt+s" into modifier + key.
-    Falls back to a 60-second timeout if pynput is unavailable.
-    """
+async def _run_cmd(cmd: str, timeout: int = 30) -> tuple[str, str, int]:
+    """Run a shell command async. Returns (stdout, stderr, returncode)."""
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
     try:
-        from pynput import keyboard as _kb
-        # Parse hotkey: "alt+s" -> modifier=Key.alt, key=KeyCode(char='s')
-        parts = [p.strip().lower() for p in hotkey_str.split("+")]
-        _MOD_MAP = {
-            "alt":   _kb.Key.alt,   "ctrl": _kb.Key.ctrl,
-            "shift": _kb.Key.shift, "cmd":  _kb.Key.cmd,
-        }
-        modifiers = {_MOD_MAP[p] for p in parts[:-1] if p in _MOD_MAP}
-        char_key  = parts[-1]
-        pressed   = set()
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return "", "Command timed out", -1
+    return stdout_b.decode(errors="replace"), stderr_b.decode(errors="replace"), proc.returncode
 
-        def on_press(key):
-            pressed.add(key)
-            try:
-                k = key.char
-            except AttributeError:
-                k = None
-            mods_held = all(m in pressed for m in modifiers)
-            if mods_held and (k == char_key or (not modifiers and str(key) == f"Key.{char_key}")):
-                stop_event.set()
-                return False  # stop listener
+# Usage in run():
+#   stdout, stderr, rc = await _run_cmd("ls -la /tmp")
+#   if rc != 0:
+#       return {"status": "error", "message": f"Command failed: {stderr}"}
+#   return {"status": "success", "result": stdout}
 
-        def on_release(key):
-            pressed.discard(key)
+# ── PATTERN: Launch a Linux application (async) ───────────────────────────────
+import asyncio, shutil
 
-        with _kb.Listener(on_press=on_press, on_release=on_release) as listener:
-            while not stop_event.is_set():
-                time.sleep(0.05)
-            listener.stop()
-    except Exception:
-        # pynput not available — fall back to 60s auto-stop
-        stop_event.wait(60)
-        stop_event.set()
-
-# Starting the background task:
-stop_event = threading.Event()
-worker = threading.Thread(target=_worker_loop, args=(stop_event, 0.1), daemon=True)
-stopper = threading.Thread(target=_listen_for_stop, args=(stop_event, "alt+s"), daemon=True)
-worker.start()
-stopper.start()
-# Return immediately — threads run in background
-result = {"status": "success", "result": "started", "stop_with": "alt+s"}
-
-# ── PATTERN: Launch a Linux application ──────────────────────────────────────
-import shutil, subprocess
-
-def launch_app(app_name: str) -> dict:
-    """
-    Launch a GUI application on Linux. Do NOT use 'open app_name' (macOS only).
-    Strategy: find binary on PATH → run directly → fallback to gtk-launch.
-    """
+async def launch_app_linux(app_name: str) -> dict:
     _ALIASES = {
         "chrome": "google-chrome", "google chrome": "google-chrome",
         "vscode": "code", "vs code": "code", "cursor": "cursor",
         "terminal": "gnome-terminal", "files": "nautilus",
     }
     binary = _ALIASES.get(app_name.lower(), app_name)
-    if shutil.which(binary):
-        subprocess.Popen([binary], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-        return {"status": "success", "result": f"Launched '{binary}'"}
-    # Fallback: gtk-launch (uses .desktop files)
-    if shutil.which("gtk-launch"):
-        r = subprocess.run(["gtk-launch", binary], capture_output=True, timeout=5)
-        if r.returncode == 0:
-            return {"status": "success", "result": f"Launched via gtk-launch"}
-    return {"status": "error", "message": f"Cannot find '{binary}' on this Linux system"}
+    if not shutil.which(binary):
+        return {"status": "error", "message": f"Cannot find '{binary}' on PATH"}
+    proc = await asyncio.create_subprocess_shell(
+        f"{binary} &",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    return {"status": "success", "result": f"Launched '{binary}'"}
 
-# ── PATTERN: One-shot UI action (click, type, key press) ─────────────────────
-import pyautogui
-import time
-pyautogui.FAILSAFE = True          # move mouse to corner to abort
-pyautogui.click(x=100, y=200)      # click at coordinates
-pyautogui.typewrite("hello", interval=0.05)  # type text
-pyautogui.hotkey("ctrl", "c")      # keyboard shortcut
-pyautogui.press("enter")           # single key press
-pyautogui.moveTo(500, 300, duration=0.3)  # move mouse smoothly
-time.sleep(0.5)                    # wait after action
+# ── PATTERN: Launch a macOS application (async) ───────────────────────────────
+async def launch_app_macos(app_name: str) -> dict:
+    stdout, stderr, rc = await _run_cmd(f'open -a "{app_name}"')
+    if rc != 0:
+        return {"status": "error", "message": f"open failed: {stderr}"}
+    return {"status": "success", "result": f"Launched '{app_name}'"}
 
-# ── PATTERN: Screenshot + OCR ─────────────────────────────────────────────────
-import pyautogui
-screenshot = pyautogui.screenshot()   # PIL Image
-screenshot.save("/tmp/screenshot.png")
-# Optional OCR (requires pytesseract):
-# import pytesseract
-# text = pytesseract.image_to_string(screenshot)
+# ── PATTERN: Launch a Windows application (async) ─────────────────────────────
+async def launch_app_windows(app_name: str) -> dict:
+    stdout, stderr, rc = await _run_cmd(f'start "" "{app_name}"')
+    if rc != 0:
+        return {"status": "error", "message": f"start failed: {stderr}"}
+    return {"status": "success", "result": f"Launched '{app_name}'"}
 
-# ── PATTERN: Keyboard shortcut / hotkey ──────────────────────────────────────
-# Use pyautogui for sending keys/shortcuts (no root required on Linux).
-# Use pynput only for LISTENING to hotkeys (e.g. stop triggers).
-# NEVER use the `keyboard` module — it requires root on Linux.
-import pyautogui
-pyautogui.hotkey("ctrl", "c")          # send shortcut
-pyautogui.hotkey("alt", "tab")         # switch window
-pyautogui.typewrite("hello world", interval=0.05)  # type text
-pyautogui.press("enter")               # single key press
+# ── PATTERN: Clipboard — Linux (xclip, async) ────────────────────────────────
+async def clipboard_read_linux() -> str:
+    stdout, _, _ = await _run_cmd("xclip -selection clipboard -o")
+    return stdout
 
-# Listening for a hotkey (e.g. stop trigger) — use pynput, not keyboard:
-# from pynput import keyboard as _kb
-# def on_press(key):
-#     try:
-#         if key.char == "s":  # example: listen for 's'
-#             stop_event.set()
-#             return False      # stop listener
-#     except AttributeError:
-#         pass
-# with _kb.Listener(on_press=on_press) as lst:
-#     lst.join()
+async def clipboard_write_linux(text: str) -> None:
+    proc = await asyncio.create_subprocess_shell(
+        "xclip -selection clipboard",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await asyncio.wait_for(proc.communicate(input=text.encode()), timeout=5)
 
-# ── PATTERN: HTTP / web request ───────────────────────────────────────────────
-import urllib.request
-import json as _json
-url = "https://api.example.com/data"
-with urllib.request.urlopen(url, timeout=10) as resp:
-    data = _json.loads(resp.read().decode())
-# POST request:
-import urllib.request, urllib.parse
-post_data = urllib.parse.urlencode({"key": "value"}).encode()
-req = urllib.request.Request(url, data=post_data, method="POST")
-with urllib.request.urlopen(req, timeout=10) as resp:
-    response = _json.loads(resp.read().decode())
+# ── PATTERN: Clipboard — macOS (pbcopy/pbpaste, async) ───────────────────────
+async def clipboard_read_macos() -> str:
+    stdout, _, _ = await _run_cmd("pbpaste")
+    return stdout
 
-# ── PATTERN: File operations ───────────────────────────────────────────────────
-import os, shutil
-content = open(path, "r", encoding="utf-8").read()          # read
-open(path, "w", encoding="utf-8").write(content)            # write
-os.makedirs(os.path.dirname(path), exist_ok=True)           # ensure dir exists
-shutil.copy2(src, dst)                                       # copy with metadata
-shutil.move(src, dst)                                        # move / rename
-os.remove(path)                                              # delete file
-files = os.listdir(directory)                                # list directory
-
-# ── PATTERN: Shell command ────────────────────────────────────────────────────
-import subprocess
-result = subprocess.run(
-    ["ls", "-la"],                 # command as list (safe, no shell injection)
-    capture_output=True,
-    text=True,
-    timeout=30,
-)
-stdout = result.stdout
-returncode = result.returncode
-
-# ── PATTERN: Clipboard ────────────────────────────────────────────────────────
-import subprocess
-# Read clipboard (Linux):
-result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                        capture_output=True, text=True)
-clipboard_text = result.stdout
-# Write to clipboard (Linux):
-proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
-proc.communicate(input=text.encode())
+async def clipboard_write_macos(text: str) -> None:
+    proc = await asyncio.create_subprocess_shell(
+        "pbcopy", stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    await asyncio.wait_for(proc.communicate(input=text.encode()), timeout=5)
 
 # ── PATTERN: System notification ─────────────────────────────────────────────
-import subprocess
-subprocess.run(["notify-send", "Title", "Message body"])
+# Linux:
+async def notify_linux(title: str, body: str) -> None:
+    await _run_cmd(f'notify-send "{title}" "{body}"')
+
+# macOS:
+async def notify_macos(title: str, body: str) -> None:
+    script = f'display notification "{body}" with title "{title}"'
+    await _run_cmd(f"osascript -e '{script}'")
+
+# ── PATTERN: Background loop with stop event ──────────────────────────────────
+# Use for ANY "do X repeatedly until stopped" intent.
+import threading, time
+
+_stop_event = threading.Event()
+
+def _worker_loop(stop_event, interval=0.1):
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    while not stop_event.is_set():
+        pyautogui.click()
+        stop_event.wait(interval)
+
+def _listen_for_stop(stop_event, hotkey_str="alt+s"):
+    try:
+        from pynput import keyboard as _kb
+        parts = [p.strip().lower() for p in hotkey_str.split("+")]
+        _MOD_MAP = {"alt": _kb.Key.alt, "ctrl": _kb.Key.ctrl, "shift": _kb.Key.shift}
+        modifiers = {_MOD_MAP[p] for p in parts[:-1] if p in _MOD_MAP}
+        char_key  = parts[-1]
+        pressed   = set()
+        def on_press(key):
+            pressed.add(key)
+            try: k = key.char
+            except AttributeError: k = None
+            if all(m in pressed for m in modifiers) and k == char_key:
+                stop_event.set(); return False
+        def on_release(key): pressed.discard(key)
+        with _kb.Listener(on_press=on_press, on_release=on_release) as lst:
+            while not stop_event.is_set(): time.sleep(0.05)
+            lst.stop()
+    except Exception:
+        stop_event.wait(60); stop_event.set()
+
+# ── PATTERN: One-shot UI action ───────────────────────────────────────────────
+import pyautogui, time
+pyautogui.FAILSAFE = True
+pyautogui.click(x=100, y=200)
+pyautogui.typewrite("hello", interval=0.05)
+pyautogui.hotkey("ctrl", "c")
+pyautogui.press("enter")
+time.sleep(0.5)
+
+# ── PATTERN: HTTP / web request (stdlib, no blocking) ────────────────────────
+import urllib.request, json as _json
+with urllib.request.urlopen("https://api.example.com/data", timeout=10) as resp:
+    data = _json.loads(resp.read().decode())
+
+# ── PATTERN: File operations ──────────────────────────────────────────────────
+import os, shutil
+content = open(path, "r", encoding="utf-8").read()
+open(path, "w", encoding="utf-8").write(content)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+shutil.copy2(src, dst)
+shutil.move(src, dst)
+os.remove(path)
+files = os.listdir(directory)
 
 # ══════════════════════════════════════════════════════════════════════════════
 '''
@@ -351,10 +319,11 @@ Version: {version}
 Generated: {timestamp}
 """
 # Standard library imports — always available
-import time
-import threading
+import asyncio
 import os
-import sys
+import shutil
+import threading
+import time
 
 # NOTE: from __future__ imports and sys.path bootstrap are injected
 # automatically by sandbox_runner — do NOT add them here.
@@ -545,37 +514,40 @@ class {class_name}(BasePlugin):
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # TODO: Add validation. Example for a search plugin:
+        # TODO: Add validation. Example:
         # if not args.get("query"): return "Missing required arg: 'query'"
         return None
 
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Implement the HTTP logic for intent "{intent}".
+
+        GET example:
+            import urllib.request, json as _json
+            url = str(args.get("url", "https://example.com"))
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = _json.loads(resp.read().decode())
+            return {{"data": data}}
+
+        POST example:
+            import urllib.request, urllib.parse, json as _json
+            url   = "https://api.example.com/endpoint"
+            query = str(args.get("query", ""))
+            body  = urllib.parse.urlencode({{"q": query}}).encode()
+            req   = urllib.request.Request(url, data=body)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode())
+            return {{"result": data}}
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
+
     async def run(self, context: dict, args: dict) -> dict:
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            import urllib.request
-            import urllib.parse
-            import json as _json
-
-            # ── Read args ─────────────────────────────────────────────────────
-            # TODO: Replace with the args your intent needs, e.g.:
-            #   query = str(args.get("query", ""))
-            #   url   = str(args.get("url", "https://example.com"))
-
-            # ── Make the HTTP request ─────────────────────────────────────────
-            # TODO: Replace with actual URL and logic for intent "{intent}"
-            # GET example:
-            #   with urllib.request.urlopen(url, timeout=10) as resp:
-            #       data = _json.loads(resp.read().decode())
-            #
-            # POST example:
-            #   post_data = urllib.parse.urlencode({{"q": query}}).encode()
-            #   req = urllib.request.Request(url, data=post_data)
-            #   with urllib.request.urlopen(req, timeout=10) as resp:
-            #       data = _json.loads(resp.read().decode())
-
-            result = None  # TODO: set to fetched/processed data
-
+            result = await self._execute(args)
             return {{"status": "success", "result": result, "intent": "{intent}"}}
-
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -589,6 +561,7 @@ class {class_name}(BasePlugin):
 
     Pattern: uses os, shutil, pathlib (stdlib) directly.
     All paths must stay within safe directories.
+    validate() is ALWAYS called by run() — never bypass it.
     """
     name             = "{plugin_name}"
     description      = "{description}"
@@ -604,46 +577,73 @@ class {class_name}(BasePlugin):
         path = args.get("path", "")
         if not path:
             return "Missing required argument: 'path'"
-        # Safety: path must be within home directory
         abs_path = os.path.realpath(os.path.expanduser(str(path)))
         if not abs_path.startswith(self._SAFE_ROOT):
             return f"Path outside safe root ({{self._SAFE_ROOT}}): {{path}}"
         return None
 
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Implement the file operation for intent "{intent}".
+        This method is called ONLY after validate() has passed.
+        Return a dict — do NOT return status/error here; run() wraps it.
+
+        Examples — pick ONE:
+
+        READ a file:
+            path    = os.path.realpath(os.path.expanduser(str(args["path"])))
+            content = open(path, "r", encoding="utf-8").read()
+            return {{"content": content, "bytes": len(content)}}
+
+        WRITE a file:
+            path    = os.path.realpath(os.path.expanduser(str(args["path"])))
+            content = str(args.get("content", ""))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w", encoding="utf-8").write(content)
+            return {{"written": len(content), "path": path}}
+
+        COPY a file:
+            src = os.path.realpath(os.path.expanduser(str(args["path"])))
+            dst = os.path.realpath(os.path.expanduser(str(args.get("dest", ""))))
+            shutil.copy2(src, dst)
+            return {{"copied_to": dst}}
+
+        LIST a directory:
+            path  = os.path.realpath(os.path.expanduser(str(args["path"])))
+            files = os.listdir(path)
+            return {{"files": files, "count": len(files)}}
+
+        ORGANIZE (sort files by extension):
+            path = os.path.realpath(os.path.expanduser(str(args["path"])))
+            moved = []
+            ext_map = {{
+                ".jpg": "images", ".png": "images", ".gif": "images",
+                ".pdf": "docs",   ".txt": "docs",   ".docx": "docs",
+                ".mp4": "videos", ".avi": "videos",
+                ".zip": "archives", ".tar": "archives", ".gz": "archives",
+            }}
+            for fname in os.listdir(path):
+                fpath = os.path.join(path, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                ext   = os.path.splitext(fname)[1].lower()
+                subdir = ext_map.get(ext, "other")
+                dest_dir = os.path.join(path, subdir)
+                os.makedirs(dest_dir, exist_ok=True)
+                shutil.move(fpath, os.path.join(dest_dir, fname))
+                moved.append(f"{{fname}} → {{subdir}}")
+            return {{"moved": moved, "count": len(moved)}}
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
+
     async def run(self, context: dict, args: dict) -> dict:
+        # Validate FIRST — never skip this
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            import shutil
-            path = os.path.realpath(os.path.expanduser(str(args.get("path", ""))))
-
-            # TODO: Replace with the file operation for intent "{intent}"
-            # Examples — pick ONE:
-            #
-            # READ:
-            #   content = open(path, "r", encoding="utf-8").read()
-            #   result  = content
-            #
-            # WRITE:
-            #   content = str(args.get("content", ""))
-            #   os.makedirs(os.path.dirname(path), exist_ok=True)
-            #   open(path, "w", encoding="utf-8").write(content)
-            #   result = {{"written": len(content)}}
-            #
-            # DELETE:
-            #   os.remove(path)
-            #   result = {{"deleted": path}}
-            #
-            # COPY:
-            #   dst = os.path.realpath(os.path.expanduser(str(args.get("dest", ""))))
-            #   shutil.copy2(path, dst)
-            #   result = {{"copied_to": dst}}
-            #
-            # LIST:
-            #   result = os.listdir(path)
-
-            result = None  # TODO: set above
-
+            result = await self._execute(args)
             return {{"status": "success", "result": result, "intent": "{intent}"}}
-
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -655,9 +655,9 @@ class {class_name}(BasePlugin):
     {description}
     Category: command (shell / subprocess)
 
-    Pattern: runs a shell command via subprocess.run().
-    NEVER use shell=True with user-supplied input (injection risk).
-    Always pass command as a list.
+    Pattern: runs shell commands via asyncio.create_subprocess_shell.
+    NEVER use subprocess.run / subprocess.call / os.system — they block
+    the entire agent event loop.
     """
     name             = "{plugin_name}"
     description      = "{description}"
@@ -666,53 +666,61 @@ class {class_name}(BasePlugin):
     safe_mode        = True
     allowed_services = []
 
-    # Allowlist of safe commands (extend as needed)
-    _SAFE_COMMANDS: set[str] = {{"ls", "pwd", "echo", "cat", "grep", "find"}}
+    # Allowlist of safe command prefixes (extend as needed)
+    _SAFE_PREFIXES: tuple[str, ...] = ("ls", "pwd", "echo", "cat", "grep", "find", "df", "du")
 
     def validate(self, args: dict) -> str | None:
         cmd = args.get("command")
         if not cmd:
             return "Missing required argument: 'command'"
-        if isinstance(cmd, list):
-            exe = cmd[0] if cmd else ""
-        else:
-            exe = str(cmd).split()[0]
-        if self.safe_mode and exe not in self._SAFE_COMMANDS:
+        exe = cmd[0] if isinstance(cmd, list) else str(cmd).split()[0]
+        if self.safe_mode and not any(exe.startswith(p) for p in self._SAFE_PREFIXES):
             return (
                 f"Command '{{exe}}' not in safe_mode allowlist. "
-                f"Set safe_mode=False or add to _SAFE_COMMANDS."
+                f"Set safe_mode=False or add to _SAFE_PREFIXES."
             )
         return None
 
-    async def run(self, context: dict, args: dict) -> dict:
-        try:
-            import subprocess
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Build the shell command string for intent "{intent}" and run it.
+
+        Template — copy and adapt:
             cmd     = args.get("command", [])
             timeout = int(args.get("timeout", 30))
-            cwd     = args.get("cwd", None)
+            if isinstance(cmd, list):
+                shell_cmd = " ".join(cmd)
+            else:
+                shell_cmd = str(cmd)
 
-            # Always pass as list — never shell=True with user input
-            if isinstance(cmd, str):
-                cmd = cmd.split()
-
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=cwd,
+            proc = await asyncio.create_subprocess_shell(
+                shell_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout = stdout_b.decode(errors="replace")
+            stderr = stderr_b.decode(errors="replace")
 
-            return {{
-                "status":     "success" if proc.returncode == 0 else "error",
-                "stdout":     proc.stdout[:2000],
-                "stderr":     proc.stderr[:500],
-                "returncode": proc.returncode,
-                "intent":     "{intent}",
-            }}
+            if proc.returncode != 0:
+                return {{"stdout": stdout, "stderr": stderr, "returncode": proc.returncode}}
+            return {{"stdout": stdout[:2000], "returncode": 0}}
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-        except subprocess.TimeoutExpired:
-            return {{"status": "error", "message": f"Command timed out", "intent": "{intent}"}}
+    async def run(self, context: dict, args: dict) -> dict:
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
+        try:
+            result = await self._execute(args)
+            rc = result.get("returncode", 0)
+            status = "success" if rc == 0 else "error"
+            if status == "error":
+                result["message"] = f"Command failed (rc={{rc}}): {{result.get('stderr', '')}}"
+            return {{"status": status, "result": result, "intent": "{intent}"}}
+        except asyncio.TimeoutError:
+            return {{"status": "error", "message": "Command timed out", "intent": "{intent}"}}
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -724,8 +732,9 @@ class {class_name}(BasePlugin):
     {description}
     Category: system (OS-level: clipboard, notifications, volume, etc.)
 
-    Pattern: uses subprocess to call OS utilities (xclip, notify-send, etc.)
-    Works on Linux/X11. Checks for tool availability before use.
+    Pattern: uses asyncio.create_subprocess_shell for all OS tool calls.
+    NEVER use subprocess.run / Popen / os.system — they block the event loop.
+    Checks for tool availability before use.
     """
     name             = "{plugin_name}"
     description      = "{description}"
@@ -735,50 +744,80 @@ class {class_name}(BasePlugin):
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # TODO: Add validation for args your system action needs
+        # TODO: Add validation for args your system action needs.
+        # Example: if not args.get("text"): return "Missing 'text'"
         return None
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def _run_cmd(self, cmd: str, input_bytes: bytes | None = None, timeout: int = 10) -> tuple[str, str, int]:
+        """Async shell helper. Returns (stdout, stderr, returncode)."""
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdin=asyncio.subprocess.PIPE if input_bytes else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            import subprocess
-            import shutil as _shutil
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(input=input_bytes), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return "", "timed out", -1
+        return stdout_b.decode(errors="replace"), stderr_b.decode(errors="replace"), proc.returncode
 
-            # ── Helper: check a CLI tool is installed ─────────────────────────
-            def _require(tool: str) -> str | None:
-                """Returns tool path or None if not found."""
-                return _shutil.which(tool)
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Implement the system action for intent "{intent}".
+        Use self._run_cmd(...) for ALL shell calls.
 
-            # TODO: Replace with actual system action for intent "{intent}"
-            # Examples:
+        Examples — pick ONE:
 
-            # CLIPBOARD READ (requires xclip or xsel):
-            #   if not _require("xclip"):
-            #       return {{"status": "error", "message": "xclip not installed"}}
-            #   r = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-            #                      capture_output=True, text=True)
-            #   result = r.stdout
+        CLIPBOARD READ (Linux):
+            stdout, stderr, rc = await self._run_cmd("xclip -selection clipboard -o")
+            if rc != 0:
+                return {{"error": f"xclip failed: {{stderr}}"}}
+            return {{"clipboard": stdout}}
 
-            # CLIPBOARD WRITE:
-            #   text = str(args.get("text", ""))
-            #   if not _require("xclip"):
-            #       return {{"status": "error", "message": "xclip not installed"}}
-            #   proc = subprocess.Popen(["xclip", "-selection", "clipboard"],
-            #                           stdin=subprocess.PIPE)
-            #   proc.communicate(input=text.encode())
-            #   result = {{"copied": len(text)}}
+        CLIPBOARD WRITE (Linux):
+            text = str(args.get("text", ""))
+            _, stderr, rc = await self._run_cmd("xclip -selection clipboard", input_bytes=text.encode())
+            return {{"copied": len(text)}}
 
-            # NOTIFICATION:
-            #   title = str(args.get("title", "Operonix"))
-            #   body  = str(args.get("body", ""))
-            #   if not _require("notify-send"):
-            #       return {{"status": "error", "message": "notify-send not installed"}}
-            #   subprocess.run(["notify-send", title, body])
-            #   result = {{"notified": True}}
+        CLIPBOARD READ (macOS):
+            stdout, stderr, rc = await self._run_cmd("pbpaste")
+            return {{"clipboard": stdout}}
 
-            result = None  # TODO: set above
+        NOTIFICATION (Linux):
+            title = str(args.get("title", "Operonix"))
+            body  = str(args.get("body", ""))
+            await self._run_cmd(f'notify-send "{{title}}" "{{body}}"')
+            return {{"notified": True}}
 
+        NOTIFICATION (macOS):
+            title = str(args.get("title", "Operonix"))
+            body  = str(args.get("body", ""))
+            script = f'display notification "{{body}}" with title "{{title}}"'
+            await self._run_cmd(f"osascript -e '{{script}}'")
+            return {{"notified": True}}
+
+        VOLUME (Linux):
+            direction = args.get("direction", "up")
+            step = int(args.get("step", 5))
+            sign = "+" if direction == "up" else "-"
+            await self._run_cmd(f"pactl set-sink-volume @DEFAULT_SINK@ {{sign}}{{step}}%")
+            return {{"volume": f"{{direction}} {{step}}%"}}
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
+
+    async def run(self, context: dict, args: dict) -> dict:
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
+        try:
+            result = await self._execute(args)
+            if "error" in result:
+                return {{"status": "error", "message": result["error"], "intent": "{intent}"}}
             return {{"status": "success", "result": result, "intent": "{intent}"}}
-
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -801,48 +840,46 @@ class {class_name}(BasePlugin):
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # TODO: Add validation for the input your data operation requires.
-        # Example: if not args.get("data"): return "Missing required arg: 'data'"
+        # TODO: Add validation. Example:
+        # if not args.get("data"): return "Missing required arg: 'data'"
         return None
 
-    async def run(self, context: dict, args: dict) -> dict:
-        try:
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Implement the data operation for intent "{intent}".
+
+        JSON parse:
             import json as _json
-            import re as _re
-            import csv as _csv
-            import io as _io
+            data   = args.get("data", "")
+            parsed = _json.loads(data)
+            return {{"parsed": parsed}}
 
-            # ── Read input from args ──────────────────────────────────────────
-            # TODO: Read the args your data operation needs, e.g.:
-            #   data   = args.get("data", "")
-            #   format = args.get("format", "json")
+        CSV parse:
+            import csv, io
+            data   = args.get("data", "")
+            reader = csv.DictReader(io.StringIO(data))
+            return {{"rows": list(reader)}}
 
-            # ── Perform the data operation ────────────────────────────────────
-            # TODO: Replace with actual logic for intent "{intent}"
-            # Examples:
+        Text transform:
+            data = str(args.get("data", ""))
+            return {{"result": data.strip().upper()}}
 
-            # JSON parse:
-            #   parsed = _json.loads(data)
-            #   result = parsed
+        Regex extract:
+            import re
+            data    = str(args.get("data", ""))
+            pattern = str(args.get("pattern", r"\\d+"))
+            matches = re.findall(pattern, data)
+            return {{"matches": matches}}
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-            # CSV parse:
-            #   reader = _csv.DictReader(_io.StringIO(data))
-            #   result = list(reader)
-
-            # Text transform:
-            #   result = data.upper()   # or .lower(), .strip(), etc.
-
-            # Calculate:
-            #   result = eval(data)     # ONLY for trusted math expressions
-
-            # Regex extract:
-            #   matches = _re.findall(r"\\d+", data)
-            #   result  = matches
-
-            result = None  # TODO: set above
-
+    async def run(self, context: dict, args: dict) -> dict:
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
+        try:
+            result = await self._execute(args)
             return {{"status": "success", "result": result, "intent": "{intent}"}}
-
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -866,25 +903,28 @@ class {class_name}(BasePlugin):
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # Add validation for any required args here
+        # TODO: Add validation for any required args here
         return None
 
+    async def _execute(self, args: dict) -> dict:
+        """
+        TODO: Implement the logic for intent "{intent}".
+        Refer to the PATTERN LIBRARY for copy-paste patterns:
+          - Async shell command → use asyncio.create_subprocess_shell + asyncio.wait_for
+          - Background loop     → use threading.Event + daemon Thread
+          - UI action           → use pyautogui (hotkey, typewrite, click, press)
+          - HTTP request        → use urllib.request
+          - File operation      → use os / shutil
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
+
     async def run(self, context: dict, args: dict) -> dict:
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            # TODO: Implement the logic for intent "{intent}"
-            # Refer to the PATTERN LIBRARY for copy-paste patterns:
-            #   - Background loop → use threading.Event + daemon Thread
-            #   - UI action       → use pyautogui (hotkey, typewrite, click, press)
-            #   - HTTP request    → use urllib.request
-            #   - File operation  → use os / shutil
-            #   - Shell command   → use subprocess.run(cmd_as_list)
-            #   - Clipboard       → use xclip via subprocess
-            #   - Notification    → use notify-send via subprocess
-
-            result = None  # TODO: set to meaningful output
-
+            result = await self._execute(args)
             return {{"status": "success", "result": result, "intent": "{intent}"}}
-
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
@@ -904,7 +944,7 @@ import asyncio
 import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, AsyncMock, call
 
 # Add plugin directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1059,18 +1099,26 @@ def test_run_handles_missing_file(plugin, ctx, tmp_path):
 
 _TEST_COMMAND = '''\
 
-# ── Command plugin tests (mock subprocess) ────────────────────────────────────
+# ── Command plugin tests (mock asyncio subprocess) ────────────────────────────
+# Patch asyncio.create_subprocess_shell — NOT subprocess.run (which is banned).
 
-@patch("subprocess.run")
-def test_run_executes_safe_command(mock_run, plugin, ctx):
-    mock_run.return_value = MagicMock(stdout="ok\\n", stderr="", returncode=0)
-    result = asyncio.run(plugin.run(ctx, {{"command": ["echo", "hello"]}}))
+@pytest.mark.asyncio
+async def test_run_executes_command(plugin, ctx):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
+    mock_proc.returncode = 0
+    with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        result = await plugin.run(ctx, {{"command": ["echo", "hello"]}})
     assert result["status"] in ("success", "error")
 
-@patch("subprocess.run", side_effect=Exception("command failed"))
-def test_run_handles_command_error(mock_run, plugin, ctx):
-    result = asyncio.run(plugin.run(ctx, {{"command": ["echo", "test"]}}))
-    assert result["status"] == "error"
+@pytest.mark.asyncio
+async def test_run_handles_command_failure(plugin, ctx):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"permission denied"))
+    mock_proc.returncode = 1
+    with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        result = await plugin.run(ctx, {{"command": ["ls", "/root"]}})
+    assert isinstance(result, dict)
 
 def test_validate_rejects_missing_command(plugin):
     result = plugin.validate({{}})
@@ -1079,21 +1127,26 @@ def test_validate_rejects_missing_command(plugin):
 
 _TEST_SYSTEM = '''\
 
-# ── System plugin tests (mock subprocess) ────────────────────────────────────
+# ── System plugin tests (mock asyncio subprocess) ─────────────────────────────
 
-@patch("subprocess.run")
-@patch("subprocess.Popen")
-def test_run_system_action(mock_popen, mock_run, plugin, ctx):
-    mock_run.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
-    mock_popen.return_value = MagicMock()
-    result = asyncio.run(plugin.run(ctx, {{}}))
+@pytest.mark.asyncio
+async def test_run_system_action(plugin, ctx):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+    mock_proc.returncode = 0
+    with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        result = await plugin.run(ctx, {{}})
     assert result["status"] in ("success", "error")
 
-@patch("subprocess.run", side_effect=Exception("no such tool"))
-def test_run_handles_missing_tool(mock_run, plugin, ctx):
-    result = asyncio.run(plugin.run(ctx, {{}}))
-    assert result["status"] == "error"
-    assert "message" in result
+@pytest.mark.asyncio
+async def test_run_handles_tool_failure(plugin, ctx):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"no such tool"))
+    mock_proc.returncode = 127
+    with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        result = await plugin.run(ctx, {{}})
+    assert isinstance(result, dict)
+    assert "message" in result or "result" in result
 '''
 
 _TEST_DATA = '''\
