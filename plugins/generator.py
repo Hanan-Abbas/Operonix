@@ -51,6 +51,9 @@ AUTO_APPROVE_RISK_LEVELS: set[str] = {"low"}  # Only auto-approve low-risk
 logger = logging.getLogger("PluginGenerator")
 
 MAX_GENERATION_ATTEMPTS: int = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
+# Maximum LLM critique calls per generation attempt (guards against TPM exhaustion
+# when multiple cloud providers cascade through 429s on the same request burst).
+MAX_LLM_CRITIQUE_CALLS_PER_ATTEMPT: int = 1
 PLUGINS_INSTALLED_DIR = os.path.join(
     str(getattr(settings, "PLUGINS_DIR", "plugins")), "installed"
 )
@@ -199,6 +202,14 @@ class PluginGenerator:
                 self.logger.warning(f"Generation attempt {attempt + 1} produced no code.")
                 continue
 
+            # Sanitize test patch targets before running the pipeline.
+            # LLMs frequently generate  patch("plugin.MagicMock")  which is not
+            # a valid patch path — MagicMock lives in unittest.mock, not in the
+            # plugin module.  Fix all such targets so pytest doesn't fail with
+            # a confusing "cannot import name 'MagicMock' from 'plugin'" error.
+            if tests:
+                tests = self._sanitize_test_patch_targets(tests, plugin_name)
+
             # Run full validation pipeline
             pipeline_report = await sandbox_runner.run_full_pipeline(
                 plugin_name=plugin_name,
@@ -233,6 +244,19 @@ class PluginGenerator:
                 f"Pipeline failed at stage '{stage}' for '{plugin_name}'. "
                 f"Applying feedback and retrying..."
             )
+
+            # ── Inter-attempt backoff (TPM guard) ─────────────────────────────
+            # Each failed attempt triggers LLM critique calls.  Back off before
+            # the next attempt so provider token-per-minute windows can refill.
+            # Base: 12s (enough for Groq's 12k TPM window to clear by ~60%).
+            # Cap:  60s on the final retry.
+            if attempt < MAX_GENERATION_ATTEMPTS - 1:
+                backoff_s = min(12 * (2 ** attempt), 60)
+                self.logger.info(
+                    f"⏳ Backing off {backoff_s}s before attempt "
+                    f"{attempt + 2}/{MAX_GENERATION_ATTEMPTS} to protect TPM limits."
+                )
+                await asyncio.sleep(backoff_s)
 
             # Feed failure context back into the PROMPT (not the skeleton)
             failure_summary = self._build_feedback_context(
@@ -551,6 +575,107 @@ Rules:
         })
         enriched["previous_attempts"] = prev_failures
         return enriched
+
+    @staticmethod
+    def _sanitize_test_patch_targets(test_code: str, plugin_name: str) -> str:
+        """
+        Fix incorrect patch() target paths in LLM-generated test code.
+
+        LLMs frequently write:
+            patch("plugin.MagicMock")
+            patch("plugin.AsyncMock")
+            patch("plugin.patch")
+
+        These are invalid — MagicMock/AsyncMock live in unittest.mock, not in
+        the plugin module.  pytest fails immediately with:
+            AttributeError: <module 'plugin'> does not have the attribute 'MagicMock'
+
+        Rules applied:
+        1. patch("plugin.MagicMock")  → removed (MagicMock is the patch utility
+           itself; you never patch MagicMock — you use it as the replacement).
+        2. patch("plugin.AsyncMock")  → same removal.
+        3. patch("plugin.patch")      → same removal.
+        4. patch("plugin.X") where X is an all-caps constant or stdlib name
+           that clearly doesn't live in the plugin → warn and leave unchanged
+           (the LLM retry will fix it with the error context).
+        5. Ensures 'from unittest.mock import MagicMock, AsyncMock, patch'
+           is present when any of those names are used in the test file.
+        """
+        import re
+
+        # ── 1. Remove nonsensical patch("plugin.MagicMock/AsyncMock/patch") ──
+        # These lines are always wrong and cause immediate pytest failure.
+        # They usually appear as:  with patch("plugin.MagicMock") as mock_bus:
+        invalid_targets = {"MagicMock", "AsyncMock", "patch", "Mock"}
+        lines = test_code.splitlines(keepends=True)
+        cleaned_lines = []
+        skip_with_block = False
+        for line in lines:
+            # Detect:  with patch("plugin.<invalid>") ...  or  @patch("plugin.<invalid>")
+            m = re.search(
+                r'(?:with\s+|@)patch\s*\(\s*["\']plugin\.(' +
+                '|'.join(invalid_targets) +
+                r')["\']',
+                line,
+            )
+            if m:
+                target = m.group(1)
+                # Replace entire line with a comment explaining the fix
+                indent = len(line) - len(line.lstrip())
+                cleaned_lines.append(
+                    " " * indent +
+                    f"# REMOVED: patch(\"plugin.{target}\") is invalid — "
+                    f"{target} is not an attribute of the plugin module.\n"
+                )
+                # If it's a 'with' statement, mark that the block body should
+                # remain but the context manager is gone — Python requires the
+                # body to stay valid, so we convert to a no-op context.
+                if "with patch" in line:
+                    skip_with_block = True
+                continue
+            # If we removed a 'with patch(...)' line, replace the ' as mock_X:'
+            # tail (already consumed above) — nothing more needed; body follows.
+            skip_with_block = False
+            cleaned_lines.append(line)
+
+        test_code = "".join(cleaned_lines)
+
+        # ── 2. Ensure unittest.mock imports cover what the test uses ──────────
+        mock_names_used = set(re.findall(
+            r'\b(MagicMock|AsyncMock|patch|Mock|call)\b', test_code
+        ))
+        if mock_names_used:
+            # Check whether import already exists
+            has_import = bool(re.search(
+                r'from\s+unittest\.mock\s+import', test_code
+            ))
+            if has_import:
+                # Extend existing import to include any missing names
+                def _extend_import(m):
+                    existing = {n.strip() for n in m.group(1).split(",")}
+                    combined = sorted(existing | mock_names_used)
+                    return f"from unittest.mock import {', '.join(combined)}"
+                test_code = re.sub(
+                    r'from\s+unittest\.mock\s+import\s+([\w,\s]+)',
+                    _extend_import,
+                    test_code,
+                    count=1,
+                )
+            else:
+                # Prepend import after the last 'import' line near the top
+                import_line = (
+                    f"from unittest.mock import {', '.join(sorted(mock_names_used))}\n"
+                )
+                # Insert after the last top-of-file import block
+                insert_after = 0
+                for i, line in enumerate(test_code.splitlines()):
+                    if line.startswith(("import ", "from ")):
+                        insert_after = i
+                lines = test_code.splitlines(keepends=True)
+                lines.insert(insert_after + 1, import_line)
+                test_code = "".join(lines)
+
+        return test_code
 
     @staticmethod
     def _intent_to_plugin_name(intent: str) -> str:
