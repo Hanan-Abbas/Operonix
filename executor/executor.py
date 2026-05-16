@@ -519,77 +519,138 @@ class Executor:
         last_error: Any = f"No tool available for action: {action}"
         method_used     = "unknown"
 
-        # DOUBLE-EXECUTION FIX:
-        # capability_registry.execute() runs the actual shell/tool command
-        # internally (via command_ops / file_ops etc.).  It returns
-        # (True, action_data_dict) on success or (False, error_str) on failure.
+        # ── PRE-WATERFALL: capability_registry (RISK 1-5 FIX) ─────────────
         #
-        # The old waterfall treated (True, dict) as "capability returned a
-        # descriptor — now find a tool and run it again", causing shell_tool
-        # to execute the same command twice:
-        #   1st run → capability_registry.execute() → shell_tool internally
-        #   2nd run → waterfall tier → tool_selector → shell_tool again
+        # DOUBLE-EXECUTION (Risk 1 original): capability_registry.execute()
+        # was called inside the waterfall loop, so a failed command was run
+        # again on the next tier.  Now called once here, before the loop.
         #
-        # FIX: call capability_registry.execute() ONCE before the waterfall.
-        # • If it succeeds  → return immediately, skip the waterfall entirely.
-        # • If it fails with a real error (not "no capability registered") →
-        #   return immediately as a definitive failure for this action so the
-        #   waterfall does NOT re-run the same command via a different tier.
-        # • If no capability is registered (unknown intent) → fall through to
-        #   the waterfall so tool_selector / ollama_tool can handle it.
+        # RISK 1 — retry loop was broken: should_retry=True had no loop,
+        #   so a retryable capability failure just fell off the end silently.
+        #   FIX: explicit retry loop using peek_should_retry() (non-consuming)
+        #   to check eligibility, then should_retry() (consuming + backoff)
+        #   to actually burn the slot before re-running the capability.
+        #
+        # RISK 3 — method_used hardcoded "plugin" for all cap results.
+        #   FIX: resolve from registry metadata; fall back to "api" if absent
+        #   so learning system records the correct method per intent.
+        #
+        # RISK 5 — should_retry() consumed a slot even when not retrying.
+        #   FIX: use peek_should_retry() to check eligibility without side
+        #   effects; only call should_retry() when actually about to retry.
+
         _NO_CAP_PREFIX = "No capability registered"
-        try:
-            cap_ok, cap_result = await capability_registry.execute(action, context, args)
+
+        # Resolve the correct method_used label for this capability (Risk 3)
+        _cap_meta   = capability_registry.metadata.get(action, {})
+        _cap_method = _cap_meta.get("method") or "api"
+
+        _cap_attempt = 0
+        _cap_max     = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
+
+        while _cap_attempt <= _cap_max:
+            try:
+                cap_ok, cap_result = await capability_registry.execute(
+                    action, context, args
+                )
+            except Exception as cap_exc:
+                # capability_registry itself raised (import error, bug, etc.)
+                # Not a command failure — fall through to waterfall.
+                logger.debug(
+                    "capability_registry.execute raised for '%s': %s — "
+                    "falling through to waterfall.",
+                    action, cap_exc,
+                )
+                break   # exit while loop → enter waterfall
 
             if cap_ok:
-                # Capability ran and succeeded.
-                if isinstance(cap_result, dict):
-                    if "success" in cap_result:
-                        if cap_result["success"]:
-                            return True, cap_result.get("result"), "plugin"
-                        else:
-                            # Capability ran but reported failure — definitive.
-                            last_error = cap_result.get("result", "Capability failed")
-                            return False, last_error, "plugin"
+                # ── Success path ──────────────────────────────────────────
+                if isinstance(cap_result, dict) and "success" in cap_result:
+                    if cap_result["success"]:
+                        return True, cap_result.get("result"), _cap_method
                     else:
-                        # Plain dict result (e.g. file_ops returns metadata)
-                        return True, cap_result, "plugin"
+                        # Capability ran but reported its own failure.
+                        # Treat as a definitive command failure — no waterfall.
+                        last_error = cap_result.get("result", "Capability failed")
+                        return False, last_error, _cap_method
                 else:
-                    return True, cap_result, "plugin"
+                    # Plain result (dict without "success" key, or non-dict)
+                    return True, cap_result, _cap_method
 
             else:
-                # cap_ok is False.
+                # ── Failure path ──────────────────────────────────────────
                 cap_err_str = str(cap_result)
-                if _NO_CAP_PREFIX not in cap_err_str:
-                    # A real capability was found but it failed (e.g. command
-                    # exited non-zero, file not found, network error).
-                    # Do NOT re-run via the waterfall — that would execute the
-                    # same shell command a second time.
-                    logger.warning(
-                        "Capability '%s' failed: %s — not retrying via waterfall.",
-                        action, cap_result,
-                    )
-                    last_error = cap_result
-                    category = await self._classify_error_dynamically(str(last_error))
-                    # Still honour retry logic (e.g. transient network errors)
-                    # but re-run through capability_registry, not a second tool.
-                    should_retry = await retry_manager.should_retry(
-                        task_id, step_index, error_type=category
-                    )
-                    if not should_retry:
-                        return (
-                            False,
-                            {"type": "exhausted", "message": last_error, "tried": [action]},
-                            "plugin",
-                        )
-                # else: "No capability registered" → fall through to waterfall below
 
-        except Exception as cap_exc:
-            logger.debug(
-                "capability_registry.execute pre-check raised for '%s': %s — "
-                "falling through to waterfall.",
-                action, cap_exc,
-            )
+                if _NO_CAP_PREFIX in cap_err_str:
+                    # No capability registered for this intent at all.
+                    # Fall through to the waterfall so tool_selector can
+                    # handle it (ollama_tool, api_tool, etc.).
+                    break   # exit while loop → enter waterfall
+
+                # A real capability was found but it failed.
+                # Do NOT re-run via the waterfall — that is the double-
+                # execution bug.  Instead, check if the error is retryable
+                # and loop back through capability_registry only.
+                last_error = cap_result
+                logger.warning(
+                    "Capability '%s' failed (attempt %d/%d): %s",
+                    action, _cap_attempt + 1, _cap_max, cap_result,
+                )
+
+                category = await self._classify_error_dynamically(
+                    str(last_error)
+                )
+
+                # Risk 5 fix: peek first (no side effects) to decide whether
+                # to loop; consume the slot only if we are actually retrying.
+                if retry_manager.peek_should_retry(
+                    task_id, step_index,
+                    error_type=category,
+                    max_retries=_cap_max,
+                ):
+                    # Consume the slot + apply backoff delay
+                    await retry_manager.should_retry(
+                        task_id, step_index,
+                        error_type=category,
+                        max_retries=_cap_max,
+                    )
+                    _cap_attempt += 1
+                    continue   # retry capability_registry
+                else:
+                    # Non-retryable or exhausted — definitive failure.
+                    bus.publish(
+                        "retry_failed",
+                        {"task_id": task_id, "step": step_index},
+                        source="retry_manager",
+                    )
+                    return (
+                        False,
+                        {
+                            "type":    "exhausted",
+                            "message": last_error,
+                            "tried":   [action],
+                        },
+                        _cap_method,
+                    )
+
+        # ── WATERFALL: for intents with no registered capability ───────────
+        # Reached only when capability_registry returned "No capability
+        # registered" or raised.  tool_selector picks the best available
+        # tool for this tier and we call tool_instance.run() directly.
+        #
+        # RISK 2 FIX — tool interface guard:
+        #   tool_instance.run() signature is (action, args) for shell/api
+        #   tools, but other tool types may differ.  We guard with hasattr
+        #   and a signature probe so a mismatched tool raises a clear error
+        #   instead of silently swallowing it in the broad except block.
+        #
+        # RISK 4 FIX — empty waterfall last_error:
+        #   If no tool is found in any tier, last_error was still the
+        #   generic "No tool available" string, which _classify_error
+        #   maps to "not_found" and retry_manager skips permanently.
+        #   Now last_error is set to a more descriptive string and
+        #   method_used is set to "none" so the learning system does not
+        #   record a misleading "unknown" entry.
 
         for tier in waterfall:
             if fallback_attempts >= max_fallbacks:
@@ -603,7 +664,13 @@ class Executor:
             )
 
             if not tool_instance:
-                logger.debug("No %s tool for '%s', trying next tier.", tier, action)
+                logger.debug(
+                    "No %s tool for '%s', trying next tier.", tier, action
+                )
+                # Risk 4: update last_error to reflect missing tool
+                last_error = (
+                    f"No {tier} tool registered for action '{action}'"
+                )
                 continue
 
             tool_name = getattr(tool_instance, "name", tool_type)
@@ -623,16 +690,43 @@ class Executor:
             )
 
             try:
-                # Waterfall tier: use tool_selector's chosen tool directly.
-                # capability_registry was already called above and either
-                # succeeded (returned early) or found no registered capability.
-                ok, tool_result = await tool_instance.run(action, args)
+                # Risk 2 fix: guard tool interface before calling run()
+                if not hasattr(tool_instance, "run"):
+                    raise TypeError(
+                        f"Tool '{tool_name}' has no run() method — "
+                        f"interface mismatch for action '{action}'"
+                    )
+                import inspect as _inspect
+                _sig = _inspect.signature(tool_instance.run)
+                _params = list(_sig.parameters.keys())
+                # Expect at least (action, args) or (self, action, args)
+                if len(_params) < 2:
+                    raise TypeError(
+                        f"Tool '{tool_name}'.run() has unexpected signature "
+                        f"{_params} — expected (action, args)"
+                    )
+
+                if asyncio.iscoroutinefunction(tool_instance.run):
+                    ok, tool_result = await tool_instance.run(action, args)
+                else:
+                    # Sync tool — run in thread so event loop stays free
+                    ok, tool_result = await asyncio.get_running_loop().run_in_executor(
+                        None, tool_instance.run, action, args
+                    )
+
                 if ok:
                     return True, tool_result, method_used
                 last_error = tool_result
 
             except asyncio.TimeoutError:
                 last_error = "Execution timed out"
+            except TypeError as type_exc:
+                # Interface mismatch — log clearly, don't swallow
+                last_error = str(type_exc)
+                logger.error(
+                    "Tool interface error for '%s' tier='%s': %s",
+                    action, tier, type_exc,
+                )
             except Exception as exc:
                 last_error = str(exc)
                 error_handler.handle_error(
@@ -645,7 +739,9 @@ class Executor:
                 task_id, step_index, error_type=category
             )
             if should_retry:
-                logger.info("Retrying step %d (error=%s)", step_index, category)
+                logger.info(
+                    "Retrying step %d via waterfall (error=%s)", step_index, category
+                )
                 continue
 
             fallback_attempts += 1
@@ -654,6 +750,11 @@ class Executor:
                 {"from": tier, "task_id": task_id, "step_index": step_index},
                 source="executor",
             )
+
+        # Risk 4: if waterfall ran but tried nothing, method_used is still
+        # "unknown" — set to "none" so learning system is not misled.
+        if method_used == "unknown" and not tried_tools:
+            method_used = "none"
 
         return (
             False,
