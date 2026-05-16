@@ -1,0 +1,68 @@
+{
+  "name": "folder_organizer_plugin",
+  "description": "Organizes folders based on user input",
+  "version": "1.0",
+  "author": "agent",
+  "intent": "folder_organizer",
+  "capabilities": [
+    "folder_organizer",
+    "file_manager",
+    "directory_arranger"
+  ],
+  "tags": [
+    "folder_organizer",
+    "auto-generated"
+  ],
+  "permissions": [
+    "ui_interaction",
+    "file_system"
+  ],
+  "status": "pending",
+  "risk_level": "medium",
+  "trusted": false,
+  "safe_mode": true,
+  "requires_confirmation": true,
+  "previous_versions": [],
+  "requires_admin": false,
+  "os_compatibility": ["linux"],
+  "changelog": [],
+  "total_runs": 0,
+  "total_successes": 0,
+  "total_failures": 0,
+  "last_run_at": "",
+  "last_reviewed": "",
+  "created_at": "2026-05-16T08:25:49.187682",
+  "updated_at": "2026-05-16T08:25:49.187746",
+  "allowed_services": [],
+  "parameter_schema": [
+    {
+      "name": "folder_path",
+      "required": true,
+      "aliases": [
+        "directory",
+        "path",
+        "location"
+      ]
+    },
+    {
+      "name": "organization_type",
+      "required": false,
+      "aliases": [
+        "sort_type",
+        "arrangement",
+        "organization"
+      ]
+    }
+  ],
+  "intent_patterns": [
+    {
+      "raw_intents": [
+        "organize",
+        "arrange",
+        "sort"
+      ],
+      "command_is_verb": true,
+      "args_is_target": true
+    }
+  ]
+}
