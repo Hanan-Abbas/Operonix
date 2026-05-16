@@ -93,10 +93,48 @@ class Orchestrator:
         # Without this, the executor runs the plugin once per subscriber.
         self._dispatched_safe: set[str] = set()
 
+        # Reflector instance — set during start() after the event loop is live.
+        # Typed as Optional[Any] to avoid a hard import at module load time,
+        # which would trigger LongTermMemory / EpisodicMemory DB connections
+        # before the process is fully initialised.
+        self._reflector: Optional[Any] = None
+
     async def start(self) -> None:
         self.is_running = True
         loop = asyncio.get_running_loop()
         self.wake_detector.loop = loop
+
+        # ── Boot the Reflector ─────────────────────────────────────────────
+        # Initialised HERE — before any bus.subscribe() calls — so it is
+        # already subscribed to "execution_complete" when the first task runs.
+        #
+        # RISK: deferred imports guard against DB / model initialisation
+        #   failures blocking the entire Orchestrator startup. If the
+        #   Reflector fails to init, Operonix continues without reflection
+        #   (degraded mode) and logs a warning.
+        # RISK: LongTermMemory and EpisodicMemory constructors may open
+        #   file handles / SQLite connections. We import lazily here (not at
+        #   module top) so those I/O operations only happen after the event
+        #   loop is running, avoiding "no current event loop" errors.
+        try:
+            from brain.reflector import Reflector
+            from memory.episodic import EpisodicMemory
+            from memory.long_term_memory import LongTermMemory
+            from brain.llm_client import llm_client as _llm_client
+            self._reflector = Reflector(
+                event_bus  = bus,
+                episodic   = EpisodicMemory(),
+                long_term  = LongTermMemory(),
+                llm_client = _llm_client,
+                settings   = settings,
+            )
+            logger.info("Reflector initialised and subscribed to execution_complete.")
+        except Exception as exc:
+            logger.warning(
+                "Reflector init failed — self-reflection disabled (degraded mode): %s",
+                exc,
+            )
+            self._reflector = None
 
         bus.subscribe("wake_word_detected",    self.handle_wake_word)
         bus.subscribe("text_query_received",   self._handle_panel_input)
@@ -663,6 +701,15 @@ class Orchestrator:
         task       = self.active_tasks.pop(task_id, {})
         # Delay clearing so late task_safety_cleared duplicates are still blocked
         asyncio.get_event_loop().call_later(5.0, self._dispatched_safe.discard, task_id)
+
+        # ── Store method_used so metrics, learning, and Reflector stats ──────
+        # have the resolved tier ("plugin"/"api"/"command"/"ui") on the task
+        # record even after active_tasks is popped above.
+        # RISK: event.data.get() is safe — event.data is always a dict here
+        #   (enforced by the EventBus shims).
+        if event.data.get("method_used"):
+            task["method_used"] = event.data["method_used"]
+
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
         )
