@@ -143,6 +143,50 @@ class SandboxRunner:
         )
         report["sandbox_run"] = sandbox_result.to_dict()
 
+        # ── stdout JSON extraction guard ───────────────────────────────────────
+        # If the plugin printed debug text before its JSON (e.g. "Emitting
+        # summary event\n{…}"), sandbox.py's json.loads() fails on the whole
+        # buffer.  We detect that pattern here and patch the error to give the
+        # LLM retry prompt precise, actionable feedback instead of a raw parse
+        # exception.
+        # NOTE: The definitive one-line fix lives in safety/sandbox.py —
+        # wherever it calls  json.loads(stdout),  replace with:
+        #   json.loads(SandboxRunner._extract_last_json(stdout))
+        # That single change makes the whole system tolerant of stray print()s.
+        raw_error = sandbox_result.error or ""
+        if not sandbox_result.success and (
+            "not valid JSON" in raw_error or "json" in raw_error.lower()
+        ):
+            raw_stdout = getattr(sandbox_result, "stdout", None) or raw_error
+            extracted = SandboxRunner._extract_last_json(raw_stdout)
+            if extracted != raw_stdout:
+                self.logger.info(
+                    "[Stage 2] Extracted clean JSON from noisy stdout for '%s'. "
+                    "Plugin emitted debug text before JSON — patching error message "
+                    "to give LLM precise feedback.", plugin_name
+                )
+                sandbox_result.error = (
+                    "Plugin printed debug text to stdout before the JSON return value. "
+                    "Remove ALL print() and logging.info() calls whose output appears "
+                    "before the final return dict. The sandbox captures stdout as the "
+                    "plugin output — only the JSON dict may be emitted there. "
+                    "Silence all other output (use self.logger.debug() which writes "
+                    "to the log file, not stdout)."
+                )
+
+        # ── Unwrap double-envelope if plugin AND sandbox_runner both wrapped ──
+        # Pattern: {"status":"success","result":{"status":"success","result":{…}}}
+        # We keep only the innermost payload.
+        raw_dict = report.get("sandbox_run") or {}
+        if (
+            isinstance(raw_dict, dict)
+            and raw_dict.get("status") == "success"
+            and isinstance(raw_dict.get("result"), dict)
+            and raw_dict["result"].get("status") == "success"
+            and "result" in raw_dict["result"]
+        ):
+            report["sandbox_run"] = raw_dict["result"]
+
         if not sandbox_result.success:
             if sandbox_result.timed_out:
                 self.logger.error(
@@ -399,6 +443,55 @@ class SandboxRunner:
         parts.append("\n" + body_after_doc)
 
         return "".join(parts)
+
+    @staticmethod
+    def _extract_last_json(stdout: str) -> str:
+        """
+        Given subprocess stdout that may contain debug prints before the JSON
+        payload (e.g. 'Emitting summary event\\n{…}'), extract and return only
+        the last complete JSON object or array in the string.
+
+        This makes sandbox execution robust against plugins that accidentally
+        print debug text before their JSON output.  The plugin should ideally
+        be silent, but this guard means one stray print() won't fail the whole
+        pipeline.
+
+        Returns the extracted JSON string, or the original stdout unchanged if
+        no balanced JSON object/array is found (so callers still get a
+        meaningful error message for debugging).
+        """
+        text = (stdout or "").strip()
+        for start_char, end_char in [('{', '}'), ('[', ']')]:
+            pos = text.rfind(start_char)
+            while pos >= 0:
+                candidate = text[pos:]
+                depth = 0
+                in_string = False
+                escape_next = False
+                end_pos = -1
+                for i, ch in enumerate(candidate):
+                    if escape_next:
+                        escape_next = False
+                        continue
+                    if ch == '\\' and in_string:
+                        escape_next = True
+                        continue
+                    if ch == '"' and not escape_next:
+                        in_string = not in_string
+                        continue
+                    if in_string:
+                        continue
+                    if ch == start_char:
+                        depth += 1
+                    elif ch == end_char:
+                        depth -= 1
+                        if depth == 0:
+                            end_pos = i
+                            break
+                if end_pos >= 0:
+                    return candidate[:end_pos + 1]
+                pos = text.rfind(start_char, 0, pos)
+        return stdout  # unchanged — caller sees original text for debugging
 
 
 # Global instance
