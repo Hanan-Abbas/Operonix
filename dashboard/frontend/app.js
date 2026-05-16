@@ -252,6 +252,10 @@ const App = (() => {
       _wsReady = true;
       _wsReconnectMs = CONFIG.WS_RECONNECT_INITIAL_MS;
       _setWsState("connected");
+      // Fetch a fresh health snapshot now that WS is up — after this the
+      // interval poll is suppressed while WS is alive (see health poll guard).
+      health.poll();
+      health.pollDetailed();
       // Subscribe to all channels
       ws.send({ action: "SUBSCRIBE", channels: [] });
       // Start heartbeat
@@ -806,9 +810,16 @@ const App = (() => {
     // 2. Connect WS
     _connect();
 
-    // 3. Health poll
+    // 3. Health poll — HTTP polling is the fallback when WS is disconnected.
+    // When WS is alive the server pushes health events over the socket, so
+    // parallel HTTP polls are redundant and cause the connection-churn seen
+    // in the stress test logs (new WS connection opened per poll cycle).
+    // We do an immediate poll on startup (WS may not be open yet), then only
+    // continue polling on the interval while WS is disconnected.
     health.poll();
     _healthInterval = setInterval(() => {
+      // Skip HTTP health poll when WebSocket is open — data arrives via WS.
+      if (_wsReady) return;
       health.poll();
       health.pollDetailed();
     }, CONFIG.HEALTH_POLL_MS);
