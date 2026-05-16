@@ -86,11 +86,19 @@ class SafetyValidator:
             "append_file",
         }
 
+        # run_command and shell_command are intentionally ABSENT here.
+        # PermissionGuard (gate 1) already evaluated them and either:
+        #   a) cleared them as SAFE/LOW  → task_safety_cleared was published,
+        #      SafetyValidator only sees the task via task_dispatched which
+        #      PermissionGuard already handled.
+        #   b) escalated them to HIGH    → confirmation_required was published.
+        # If SafetyValidator re-evaluates them here it produces a SECOND
+        # confirmation_required for the same task_id, causing the double prompt.
+        # SafetyValidator's job for command intents is path/context validation
+        # only — risk escalation is PermissionGuard's sole responsibility.
         self.destructive_intents: set[str] = {
             "delete_file",
             "delete_dir",
-            "run_command",
-            "shell_command",
         }
 
     async def start(self) -> None:
@@ -200,13 +208,14 @@ class SafetyValidator:
                 risk = RiskLevel.SAFE
 
             elif intent in ("run_command", "shell_command"):
-                cmd  = args.get("command", "")
-                # BUG 5 FIX: pass profile_hint so run_command on safe cmds
-                # (ls, pwd, cat) resolves SAFE instead of always HIGH.
-                risk = self._safe_get_risk(
-                    get_command_risk, cmd, profile_hint,
-                    task_id=task_id, intent=intent,
-                )
+                # DEDUP FIX: PermissionGuard (gate 1) is the sole owner of
+                # command risk escalation. It already evaluated this task and
+                # either cleared it or published confirmation_required.
+                # SafetyValidator re-evaluating here produces a second
+                # confirmation_required for the same task_id → double prompt.
+                # We still run path/context checks above; we just don't
+                # re-escalate the risk level here.
+                risk = RiskLevel.SAFE
 
             elif intent in self.safe_file_ops:
                 path = args.get("path") or args.get("target", "")
