@@ -306,6 +306,81 @@ class EpisodicMemory:
             "common_reasons": reasons[:5],
         }
 
+    # ── Reflector API ──────────────────────────────────────────────────────────
+
+    async def store(
+        self,
+        key: str,
+        content: dict,
+        tags: list[str] | None = None,
+    ) -> None:
+        """
+        Generic key-tagged store called by brain.Reflector to persist
+        structured Lesson objects after every task reflection cycle.
+
+        Maps onto the existing record_episode() infrastructure so no new
+        tables or schema changes are required.
+
+        Parameters
+        ----------
+        key     : unique string identifier, e.g. "lesson:create_dir:1716123456"
+        content : arbitrary dict — stored in the metadata JSON column
+        tags    : list of searchable string labels (intent, capability, outcome)
+
+        RISK MITIGATIONS:
+          R1 — Fully wrapped in try/except; a store failure is logged at
+               WARNING and never propagates to the Reflector's main loop.
+          R2 — Extracts intent/outcome/failure_reason from the content dict
+               so the existing get_failure_summary() and gap detector queries
+               still work correctly against Reflector-sourced episodes.
+          R3 — Uses a synthetic task_id derived from the key so episode rows
+               are uniquely identifiable without colliding with real task IDs.
+          R4 — DB may not be initialised yet (start() not called). Guards
+               against _conn being None to avoid AttributeError.
+        """
+        try:
+            if self._conn is None:          # R4 — DB not ready yet
+                self.logger.warning(
+                    "EpisodicMemory.store() called before start() — skipping: %s", key
+                )
+                return
+
+            # Extract structured fields from the Lesson content dict (R2)
+            intent         = content.get("intent", "unknown")
+            outcome        = content.get("outcome", "unknown")
+            failure_reason = content.get("root_cause") if outcome != "success" else None
+
+            # Normalise outcome to the DB CHECK constraint values
+            if outcome not in ("success", "failure"):
+                outcome = "failure" if "fail" in outcome else "success"
+
+            # Build steps list from capability_used tag if available
+            capability = content.get("capability_used", "")
+            steps      = [{"action": capability}] if capability else []
+
+            # Merge tags into metadata blob for future retrieval (R3)
+            metadata = {
+                "reflector_key":    key,
+                "tags":             tags or [],
+                "lesson":           content,
+            }
+
+            await self.record_episode(
+                task_id        = f"reflector:{key}",   # synthetic ID (R3)
+                intent         = intent,
+                steps          = steps,
+                outcome        = outcome,
+                failure_reason = failure_reason,
+                metadata       = metadata,
+            )
+            self.logger.debug("EpisodicMemory.store(): persisted lesson key='%s'", key)
+
+        except Exception as exc:
+            # R1 — never raise; Reflector's except block will catch None result
+            self.logger.warning(
+                "EpisodicMemory.store() failed (non-fatal): %s — key=%s", exc, key
+            )
+
 
 # Global instance
 episodic_memory = EpisodicMemory()
