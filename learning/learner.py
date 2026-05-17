@@ -50,8 +50,25 @@ class PatternLearner:
         """Subscribe to the EventBus."""
         bus.subscribe("task_completed",                 self.learn_from_success)
         bus.subscribe("execution_strategy_overridden",  self._learn_from_override)
+
+        # ── REFLECTOR INTEGRATION ──────────────────────────────────────────
+        # The Reflector publishes "reflection_complete" after every task with
+        # a structured Lesson dict (intent, capability_used, outcome, root_cause,
+        # confidence_delta, app_context). We subscribe here to:
+        #   1. Update per-capability success tallies for the suggestion engine.
+        #   2. Persist per-(app, intent, capability) performance data so
+        #      get_method_ranking() can return Reflector-informed rankings,
+        #      not just user-override-informed ones.
+        #
+        # RISK: reflection_complete fires for EVERY task (success AND failure).
+        #   _learn_from_reflection() guards against double-learning with the
+        #   task_completed subscription by only tracking capability-tier wins,
+        #   not full step patterns (those are handled by learn_from_success).
+        bus.subscribe("reflection_complete", self._learn_from_reflection)
+
         self.logger.info(
-            "🧠 Pattern Learner: Active. Watching task completions and panel overrides."
+            "🧠 Pattern Learner: Active. "
+            "Watching task completions, panel overrides, and Reflector lessons."
         )
 
     # ── Task pattern learning (unchanged) ─────────────────────────────────────
@@ -150,6 +167,76 @@ class PatternLearner:
 
         ranked = sorted(counts.items(), key=lambda kv: -kv[1])
         return [method for method, _ in ranked]
+
+    # ── Reflector lesson learning ──────────────────────────────────────────────
+
+    async def _learn_from_reflection(self, event: Any) -> None:
+        """
+        Called when the Reflector publishes "reflection_complete".
+
+        Extracts the capability tier that ran (plugin/api/command/ui) and the
+        outcome (success/failure) and updates per-(app, intent, capability)
+        counts so get_method_ranking() returns Reflector-informed rankings in
+        addition to user-override-informed ones.
+
+        This is complementary to _learn_from_override() — overrides capture
+        explicit user choices, reflections capture implicit performance data.
+
+        Lesson payload keys (from brain.Reflector.Lesson.to_dict()):
+            intent, capability_used, app_context, outcome,
+            confidence_delta, root_cause, suggested_fix, evolution_needed
+
+        RISK MITIGATIONS:
+          R1 — Fully wrapped in try/except; a bad Reflector payload never
+               crashes the learner's event loop.
+          R2 — Only SUCCESS outcomes update the ranking counts. Failures
+               already lower the Reflector's confidence score in LongTermMemory;
+               incrementing a failure count here too would double-penalise and
+               bias the ranking incorrectly.
+          R3 — capability_used may be a full tier name ("plugin") or a
+               specific plugin identifier ("plugin:coding_plugin"). We
+               normalise to the tier prefix so rankings stay at the tier level,
+               matching what the Planner and Executor use.
+          R4 — app_context and intent are normalised to lowercase strings to
+               match the format used in _override_counts and get_method_ranking.
+        """
+        try:
+            data            = event.data or {}
+            intent: str     = (data.get("intent") or "unknown").strip().lower()     # R4
+            app_context:str = (data.get("app_context") or "unknown").strip().lower() # R4
+            outcome: str    = data.get("outcome", "unknown")
+            capability: str = data.get("capability_used") or data.get("capability", "")
+
+            if not intent or not capability:
+                return
+
+            # R3 — normalise "plugin:coding_plugin" → "plugin"
+            tier = capability.split(":")[0].strip().lower() if ":" in capability else capability.lower()
+
+            # R2 — only count successes toward ranking
+            if outcome != "success":
+                self.logger.debug(
+                    "PatternLearner: skipping reflection for non-success outcome='%s' "
+                    "intent='%s'", outcome, intent,
+                )
+                return
+
+            # Use wildcard app key "*" as a cross-app signal in addition to the
+            # specific app, so ranking benefits transfer across applications.
+            for app_key in (app_context, "*"):
+                self._override_counts[app_key][intent][tier] += 1
+
+            self._save_override_store()
+
+            self.logger.debug(
+                "📡 Reflection learned: app=%s intent=%s tier=%s (success)",
+                app_context, intent, tier,
+            )
+
+        except Exception as exc:
+            self.logger.warning(
+                "_learn_from_reflection failed (non-fatal): %s", exc
+            )  # R1
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
