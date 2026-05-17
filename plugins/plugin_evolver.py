@@ -53,9 +53,30 @@ class PluginEvolver:
     async def start(self):
         """Subscribe to evolution requests."""
         bus.subscribe("plugin_evolution_requested", self._on_evolution_requested)
+
+        # ── REFLECTOR INTEGRATION ──────────────────────────────────────────
+        # The Reflector publishes "evolution_needed" when a plugin tier has
+        # accumulated enough consecutive failures to warrant structural
+        # improvement (not just a retry). This is distinct from
+        # "plugin_evolution_requested" which is fired by plugin_health_monitor
+        # based on a success-rate threshold.
+        #
+        # The Reflector signal carries intent, capability, failure_category,
+        # and a root_cause string — richer context than the health monitor's
+        # performance-based signal. We use it to evolve the specific plugin
+        # that handles the failing intent rather than the generic capability
+        # tier name.
+        #
+        # RISK: evolution_needed may arrive before a plugin for the intent
+        # even exists (capability_missing category). In that case, _on_evolution_needed
+        # detects the missing plugin and delegates to capability_gap_detector
+        # (via a "capability_gap_detected" publish) rather than trying to
+        # evolve a non-existent plugin.
+        bus.subscribe("evolution_needed", self._on_evolution_needed_reflector)
+
         self.logger.info("🧬 Plugin Evolver: Online.")
 
-    # ── Event Handler ─────────────────────────────────────────────────────────
+    # ── Event Handlers ─────────────────────────────────────────────────────────
 
     async def _on_evolution_requested(self, event):
         data        = event.data or {}
@@ -77,6 +98,122 @@ class PluginEvolver:
             await self.evolve(plugin_name=plugin_name, intent=intent, reason=reason)
         finally:
             self._evolving.discard(plugin_name)
+
+    async def _on_evolution_needed_reflector(self, event):
+        """
+        Handles the "evolution_needed" signal from brain.Reflector.
+
+        The Reflector provides richer context than plugin_health_monitor:
+        it includes failure_category, root_cause, and suggested_fix which
+        are injected into the evolution prompt for a more targeted improvement.
+
+        Flow:
+          1. capability_missing → no plugin exists yet. Delegate to generator
+             pipeline via "capability_gap_detected" event.
+          2. Plugin exists for this intent → call evolve() with Reflector's
+             root_cause as the reason so the LLM gets targeted context.
+          3. Non-plugin tier (api/command/ui) → skip; evolver only handles
+             plugin.py files.
+
+        RISK MITIGATIONS:
+          R1 — Fully wrapped in try/except; bad payload never crashes the loop.
+          R2 — Plugin registry lookup guarded with try/except; skips if not
+               populated yet.
+          R3 — capability_missing delegation avoids double-trigger via the
+               existing cooldown logic in _trigger_gap().
+          R4 — Non-plugin tiers are explicitly skipped.
+        """
+        try:
+            data             = event.data or {}
+            intent           = data.get("intent", "")
+            capability       = data.get("capability", "")
+            failure_category = data.get("failure_category", "")
+            root_cause       = data.get("root_cause", "Reflector-detected degradation")
+            suggested_fix    = data.get("suggested_fix", "")
+
+            if not intent:
+                return
+
+            # R4 — only act on plugin-tier failures
+            if capability and capability not in ("plugin", "unknown", ""):
+                self.logger.debug(
+                    "evolution_needed skipped: capability='%s' is not plugin tier.",
+                    capability,
+                )
+                return
+
+            # Case 1: no plugin exists yet — delegate to gap detector (R3)
+            if failure_category == "capability_missing":
+                self.logger.info(
+                    "⚡ Reflector: capability_missing for '%s' — "
+                    "delegating to capability_gap_detected pipeline.", intent,
+                )
+                bus.publish(
+                    "capability_gap_detected",
+                    {
+                        "intent":              intent,
+                        "reason":              root_cause,
+                        "consecutive_failures": data.get("consecutive_failures", 1),
+                        "window_failures":      0,
+                        "failure_summary":      {},
+                        "source":              "reflector_via_evolver",
+                    },
+                    source="plugin_evolver",
+                )
+                return
+
+            # Case 2: find the installed plugin that handles this intent (R2)
+            plugin_name: str | None = None
+            try:
+                for entry_name, entry in plugin_registry.entries.items():
+                    caps = getattr(entry.manifest, "capabilities", []) or []
+                    caps_norm   = [str(c).lower().replace("_", " ") for c in caps]
+                    intent_norm = intent.lower().replace("_", " ")
+                    mf_intent   = (entry.manifest.intent or "").lower()
+                    if intent_norm in caps_norm or mf_intent == intent.lower():
+                        plugin_name = entry_name
+                        break
+            except Exception as lookup_exc:
+                self.logger.debug(
+                    "Plugin registry lookup for intent='%s' failed: %s",
+                    intent, lookup_exc,
+                )
+
+            if not plugin_name:
+                self.logger.debug(
+                    "evolution_needed: no installed plugin for intent='%s' — skipping.",
+                    intent,
+                )
+                return
+
+            if plugin_name in self._evolving:
+                self.logger.debug(
+                    "Evolution already in progress for '%s'. Skipping Reflector trigger.",
+                    plugin_name,
+                )
+                return
+
+            # Build a rich reason string for the LLM evolution prompt
+            reason_parts = [f"Reflector: {root_cause}"]
+            if suggested_fix:
+                reason_parts.append(f"Suggested: {suggested_fix}")
+            reason = " | ".join(reason_parts)
+
+            self.logger.info(
+                "⚡ Reflector triggered evolution for plugin='%s' intent='%s'",
+                plugin_name, intent,
+            )
+
+            self._evolving.add(plugin_name)
+            try:
+                await self.evolve(plugin_name=plugin_name, intent=intent, reason=reason)
+            finally:
+                self._evolving.discard(plugin_name)
+
+        except Exception as exc:
+            self.logger.warning(
+                "_on_evolution_needed_reflector failed (non-fatal): %s", exc
+            )  # R1
 
     # ── Core Evolution Pipeline ────────────────────────────────────────────────
 
