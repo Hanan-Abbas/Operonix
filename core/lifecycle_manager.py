@@ -31,6 +31,34 @@ Dependency Sentry (CAVEAT 2)
   • Missing OPTIONAL binary → publishes "dependency_missing" (level=warn).
   • All present → publishes "dependencies_ok".
   • The matching bash-layer check lives in setup.sh (Section 6).
+
+REFLECTOR INTEGRATION
+─────────────────────
+Startup order changes (all guarded with try/except for degraded-mode safety):
+
+  Step 9a  — episodic_memory.start() inserted BEFORE orchestrator.start().
+              Required because orchestrator.start() boots the Reflector, which
+              calls episodic_memory.store() immediately on first task. Starting
+              episodic_memory after orchestrator would cause _conn=None errors.
+
+  Step 12a — capability_gap_detector.start() + plugin_evolver.start() inserted
+              AFTER start_plugin_system() so plugin_registry is fully populated
+              before either subscriber fires. Both now subscribe to
+              "evolution_needed" (from Reflector) in addition to their existing
+              subscriptions.
+
+  Bug fix  — `from typing import Any` added to imports. `Any` was used in
+              setup_global_exception_hooks() type hints but was never imported,
+              causing a NameError if the function signature was ever introspected
+              (e.g. by the error_handler or test runner).
+
+Shutdown changes:
+  • Reflector final stats (reflections_total, evolution_triggers) are written
+    to core.metrics.SystemMetrics before process exit so the dashboard API
+    serves accurate lifetime counts even after a clean shutdown.
+  • LongTermMemory._kv_conn (SQLite) is explicitly closed so WAL-mode journals
+    are checkpointed before the process exits — prevents DB corruption on
+    hard-restart.
 """
 from __future__ import annotations
 
@@ -41,6 +69,7 @@ import shutil
 import signal
 import sys
 from datetime import datetime
+from typing import Any                         # ← fixes NameError in setup_global_exception_hooks
 
 from api.server import start_server
 from brain.capability_mapper import capability_mapper
@@ -55,10 +84,11 @@ from core.config import settings
 from core.error_handler import ErrorHandler
 from core.event_bus import bus
 from core.logger import sys_logger
-from core.mode_manager import mode_manager          # ← NEW
+from core.mode_manager import mode_manager
 from core.orchestrator import orchestrator
 from debugging.error_listener import error_listener
 from executor.executor import executor
+from memory.episodic import episodic_memory          # ← Reflector dependency
 from memory.long_term_memory import long_term_memory
 from memory.session_memory import session_memory
 from memory.vector_store import vector_store
@@ -275,7 +305,24 @@ class LifecycleManager:
         await vector_store.start()
         await confirmation_manager.start()
 
+        # 9a. Episodic memory — MUST start before orchestrator so it is
+        #     subscribed to task_completed / task_failed before the first
+        #     task can fire. Also required by the Reflector (episodic.store())
+        #     and CapabilityGapDetector (get_failures_in_window).
+        #
+        #     RISK: starting after long_term_memory ensures the stores/
+        #     directory already exists (long_term_memory.start() calls
+        #     os.makedirs on it), avoiding a race on the directory creation.
+        try:
+            await episodic_memory.start()
+            logger.info("📖 Episodic Memory: started.")
+        except Exception as exc:
+            logger.error("Failed to start episodic memory: %s", exc)
+
         # 10. Orchestrator — boots the panel Qt thread internally when PANEL_ENABLED=true
+        #     The Orchestrator's start() also boots the Reflector (brain.reflector)
+        #     which subscribes to "execution_complete". Episodic memory must be
+        #     running before this point (step 9a above).
         await orchestrator.start()
         system_state.orchestrator_running = True
 
@@ -288,6 +335,32 @@ class LifecycleManager:
 
         # 12. Plugin system
         await start_plugin_system()
+
+        # 12a. Self-evolution subsystems — started AFTER the plugin system so
+        #      plugin_registry is fully populated before these subscribers fire.
+        #
+        #      capability_gap_detector: subscribes to task_failed, mapping_failed,
+        #        plugin_validation_failed, AND evolution_needed (from Reflector).
+        #        Must be running before the first task so no gap events are missed.
+        #
+        #      plugin_evolver: subscribes to plugin_evolution_requested AND
+        #        evolution_needed (from Reflector). Requires plugin_registry to be
+        #        populated so _on_evolution_needed_reflector can look up installed
+        #        plugins by intent.
+        #
+        #      RISK: both are started inside try/except so a failure here does not
+        #        crash the system — Operonix continues without self-evolution
+        #        capability and logs an error (degraded mode, same pattern as Reflector).
+        try:
+            from plugins.capability_gap_detector import capability_gap_detector
+            from plugins.plugin_evolver import plugin_evolver
+            await capability_gap_detector.start()
+            await plugin_evolver.start()
+            logger.info("🔎 CapabilityGapDetector + PluginEvolver: started.")
+        except Exception as exc:
+            logger.error(
+                "Failed to start self-evolution subsystems (degraded mode): %s", exc
+            )
 
         # 13. STT health reference
         stt_instance = SpeechToText()
@@ -379,6 +452,43 @@ class LifecycleManager:
             logger.info("💾 Flushed learned patterns to disk")
         except Exception as exc:
             logger.error("Failed to save patterns on shutdown: %s", exc)
+
+        # Flush Reflector stats to metrics and close KV store connection.
+        # RISK: Reflector may not have been initialised (degraded mode boot).
+        #   All access guarded with hasattr / try-except.
+        try:
+            from core.metrics import metrics
+            reflector = getattr(orchestrator, "_reflector", None)
+            if reflector is not None:
+                stats = reflector.get_stats()
+                metrics.reflections_total  = stats.get("total_reflections", 0)
+                metrics.reflections_failed = (
+                    stats.get("total_reflections", 0)
+                    - stats.get("successes", 0)
+                    - stats.get("partial", 0)
+                    - stats.get("failures", 0)
+                )
+                metrics.evolution_triggers = stats.get("evolution_triggers", 0)
+                logger.info(
+                    "📊 Reflector final stats: reflections=%d successes=%d "
+                    "failures=%d evolution_triggers=%d",
+                    stats.get("total_reflections", 0),
+                    stats.get("successes", 0),
+                    stats.get("failures", 0),
+                    stats.get("evolution_triggers", 0),
+                )
+        except Exception as exc:
+            logger.debug("Reflector stats flush skipped (non-fatal): %s", exc)
+
+        # Close LongTermMemory KV SQLite connection cleanly.
+        # RISK: _kv_conn may be None if KV store was never initialised.
+        try:
+            kv_conn = getattr(long_term_memory, "_kv_conn", None)
+            if kv_conn is not None:
+                kv_conn.close()
+                logger.debug("LongTermMemory KV store connection closed.")
+        except Exception as exc:
+            logger.debug("LongTermMemory KV close skipped (non-fatal): %s", exc)
 
         # Prune memory
         try:
