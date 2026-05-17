@@ -88,6 +88,25 @@ class CapabilityGapDetector:
         bus.subscribe("mapping_failed",           self._on_mapping_failed)
         bus.subscribe("plugin_validation_failed", self._on_plugin_generation_failed)
 
+        # ── REFLECTOR INTEGRATION ──────────────────────────────────────────
+        # The Reflector publishes "evolution_needed" when it detects a
+        # recurring failure pattern that exceeds its internal threshold
+        # (_EVOLUTION_FAILURE_THRESHOLD consecutive failures of the same
+        # capability tier). This is a stronger, more contextual signal than
+        # raw task_failed events because the Reflector has already classified
+        # the failure category (capability_missing, context_mismatch, etc.)
+        # and confirmed it is not a transient error.
+        #
+        # We subscribe here so the gap detector can act on Reflector-sourced
+        # signals without duplicating the threshold logic that already lives
+        # in Reflector._should_trigger_evolution().
+        #
+        # RISK: evolution_needed may fire for failure categories that are NOT
+        # capability_missing (e.g. permission_denied). _on_evolution_needed()
+        # checks failure_category and only proceeds for capability gaps,
+        # avoiding spurious plugin generation for permission/context failures.
+        bus.subscribe("evolution_needed", self._on_evolution_needed)
+
         self.logger.info(
             "🔎 Capability Gap Detector: Active. "
             f"Thresholds: {CONSECUTIVE_FAIL_THRESHOLD} consecutive / "
@@ -169,6 +188,63 @@ class CapabilityGapDetector:
             consecutive=1,
             window_count=1,
         )
+
+    async def _on_evolution_needed(self, event):
+        """
+        Handles the "evolution_needed" event published by brain.Reflector.
+
+        The Reflector publishes this after N consecutive failures of the same
+        capability tier with a structured failure_category field. We only act
+        on capability_missing gaps here — other categories (permission_denied,
+        context_mismatch, transient_error) are handled by their own subsystems
+        (safety, context_validator, retry_manager) and do not require new
+        plugin generation.
+
+        RISK MITIGATIONS:
+          R1 — Non-capability_missing categories are silently skipped to
+               prevent spurious plugin generation for e.g. permission errors.
+          R2 — Intent field may be empty if Reflector fires on a tier-level
+               gap (e.g. "api" tier failed) rather than an intent-level gap.
+               We fall back to capability as the intent key in that case.
+          R3 — Wraps the full handler in try/except so a bad payload from
+               the Reflector never crashes the gap detector's event loop.
+          R4 — Deduplication is handled by _process_failure() →
+               _trigger_gap() → cooldown check, so duplicate signals from
+               both Reflector and task_failed for the same intent are safe.
+        """
+        try:
+            data             = event.data or {}
+            failure_category = data.get("failure_category", "")
+            intent           = data.get("intent") or data.get("capability", "")  # R2
+            reason           = data.get("root_cause") or data.get("reason", "Reflector-detected gap")
+
+            # R1 — only handle capability gaps, not permission/context failures
+            if failure_category not in ("capability_missing", "unknown", ""):
+                self.logger.debug(
+                    "evolution_needed skipped for category='%s' intent='%s' "
+                    "(not a capability gap — handled by other subsystems)",
+                    failure_category, intent,
+                )
+                return
+
+            if not intent:
+                self.logger.debug("evolution_needed received with no intent — skipping.")
+                return
+
+            self.logger.info(
+                "⚡ Reflector triggered gap detection: intent='%s' category='%s'",
+                intent, failure_category,
+            )
+
+            # Route through the standard failure pipeline so all existing
+            # cooldown / dedup / block logic applies (R4).
+            await self._process_failure(intent, reason)
+
+        except Exception as exc:
+            # R3 — never crash the event loop
+            self.logger.warning(
+                "_on_evolution_needed handler failed (non-fatal): %s", exc
+            )
 
     async def _on_plugin_generation_failed(self, event):
         """
