@@ -37,6 +37,38 @@ class LLMClient:
             return await self.ask(prompt, provider="openrouter", use_json=use_json)
         return await self.ask(prompt, provider="local", use_json=use_json)
 
+    async def complete(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        use_json: bool = False,
+    ) -> str | None:
+        """
+        Lightweight completion helper called by brain.Reflector for LLM-
+        assisted root-cause analysis.
+
+        Returns a plain string (not parsed dict) so callers can apply their
+        own json.loads() after receiving the response.
+
+        RISK MITIGATIONS:
+          R1 — Returns None (never raises) on total provider failure so the
+               Reflector's try/except catches a None instead of an exception
+               and degrades gracefully.
+          R2 — temperature arg is accepted for API compatibility but provider
+               calls currently use their default temperature (0.1–0.2).
+               Full per-call temperature control is a future provider refactor;
+               the parameter is kept here to avoid a breaking signature change.
+          R3 — Result is always coerced to str | None; never returns a raw
+               dict so callers' json.loads() receives a consistent type.
+        """
+        result = await self.ask(prompt, provider="groq", use_json=use_json)
+        if result is None:
+            return None
+        # Coerce dict responses (JSON mode or _safe_json output) to str  (R3)
+        if isinstance(result, dict):
+            return json.dumps(result)
+        return str(result)
+
     async def critique(self, prompt: str, use_json: bool = True):
         """Strict code reviewer.
 
