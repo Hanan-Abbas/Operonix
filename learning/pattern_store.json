@@ -66,7 +66,7 @@
                         }
                     }
                 ],
-                "usage_count": 1,
+                "usage_count": 2,
                 "step_count": 1
             }
         ],
@@ -136,7 +136,7 @@
                         }
                     }
                 ],
-                "usage_count": 2,
+                "usage_count": 5,
                 "step_count": 1
             }
         ],
@@ -177,7 +177,48 @@
                         }
                     }
                 ],
-                "usage_count": 18,
+                "usage_count": 19,
+                "step_count": 1
+            }
+        ],
+        "app opening plugin": [
+            {
+                "steps": [
+                    {
+                        "action": "app opening plugin",
+                        "args": {
+                            "app_name": "<APP_NAME>"
+                        }
+                    }
+                ],
+                "usage_count": 2,
+                "step_count": 1
+            }
+        ],
+        "list_dir": [
+            {
+                "steps": [
+                    {
+                        "action": "list_dir",
+                        "args": {
+                            "path": "<PATH>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
+                "step_count": 1
+            },
+            {
+                "steps": [
+                    {
+                        "action": "list_dir",
+                        "args": {
+                            "path": "<PATH>",
+                            "recursive": "<RECURSIVE>"
+                        }
+                    }
+                ],
+                "usage_count": 1,
                 "step_count": 1
             }
         ]
