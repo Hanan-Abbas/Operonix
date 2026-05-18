@@ -33,6 +33,51 @@ DEFAULT_TIMEOUT_SECONDS: int = int(getattr(settings, "SANDBOX_TIMEOUT", 30))
 DEFAULT_MEMORY_LIMIT_MB: int = int(getattr(settings, "SANDBOX_MEMORY_MB", 256))
 DEFAULT_CPU_LIMIT_SECONDS: int = int(getattr(settings, "SANDBOX_CPU_SECONDS", 20))
 
+
+def _extract_last_json(stdout: str) -> str:
+    """
+    Extract the last complete JSON object or array from a stdout string that
+    may contain debug text before the actual JSON payload.
+
+    Example input:  "Emitting summary event\\n{\"status\": \"success\", ...}"
+    Example output: "{\"status\": \"success\", ...}"
+
+    If no balanced JSON block is found, returns the original string unchanged
+    so the caller still gets a meaningful parse error for debugging.
+    """
+    text = (stdout or "").strip()
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        pos = text.rfind(start_char)
+        while pos >= 0:
+            candidate = text[pos:]
+            depth = 0
+            in_string = False
+            escape_next = False
+            end_pos = -1
+            for i, ch in enumerate(candidate):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if ch == '\\' and in_string:
+                    escape_next = True
+                    continue
+                if ch == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == start_char:
+                    depth += 1
+                elif ch == end_char:
+                    depth -= 1
+                    if depth == 0:
+                        end_pos = i
+                        break
+            if end_pos >= 0:
+                return candidate[:end_pos + 1]
+            pos = text.rfind(start_char, 0, pos)
+    return stdout  # unchanged — caller sees original text for debugging
+
 _RUNNER_TEMPLATE = '''
 import sys
 import json
@@ -287,7 +332,7 @@ class Sandbox:
                 # + any exit code is acceptable for background plugins
                 if stdout_text:
                     try:
-                        output = json.loads(stdout_text)
+                        output = json.loads(_extract_last_json(stdout_text))
                         return SandboxResult(
                             status=output.get("status", "success"),
                             result=output.get("result"),
@@ -312,8 +357,14 @@ class Sandbox:
                     elapsed_ms=elapsed,
                 )
 
+            # ── stdout JSON extraction ─────────────────────────────────────────
+            # Plugins sometimes print debug text (e.g. "Emitting summary event")
+            # before their JSON return value. json.loads() on the whole buffer
+            # fails in that case. We extract the last complete JSON object so
+            # one stray print() never fails the entire pipeline.
+            json_candidate = _extract_last_json(stdout_text)
             try:
-                output = json.loads(stdout_text)
+                output = json.loads(json_candidate)
             except json.JSONDecodeError:
                 return SandboxResult(
                     status="error",
