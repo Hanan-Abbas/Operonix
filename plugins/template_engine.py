@@ -450,10 +450,13 @@ class {class_name}(BasePlugin):
     {description}
     Category: automation (one-shot UI interaction)
 
-    Pattern: performs a UI action and returns the result.
-    Uses pyautogui for all UI actions (mouse, keyboard, screenshot).
-    Do NOT use the `keyboard` module — it requires root on Linux.
-    Do NOT use capability_registry for UI actions.
+    Locked-contract pattern:
+      run()      — pre-written, non-negotiable. Handles failsafe, stuck-key
+                   recovery, and result formatting. DO NOT modify this method.
+      _execute() — the ONLY zone the LLM writes. Returns a list of step strings.
+
+    Uses pyautogui for all UI actions. Do NOT use the `keyboard` module
+    (requires root on Linux). Do NOT import from automation/, context/, core/.
     """
     name             = "{plugin_name}"
     description      = "{description}"
@@ -463,36 +466,86 @@ class {class_name}(BasePlugin):
     allowed_services = []
 
     def validate(self, args: dict) -> str | None:
-        # TODO: Add validation for any args your action requires.
+        # TODO: Add validation for args your action requires.
         # Example: if not args.get("target"): return "Missing 'target'"
         return None
 
+    async def _execute(self, args: dict) -> list:
+        """
+        TODO: Implement the UI macro sequence for intent "{intent}".
+
+        RULES:
+        - Return a LIST OF STRINGS describing each step performed.
+          The locked run() uses this list to build the success message.
+        - Use pyautogui for ALL UI actions (already imported in header).
+        - Add time.sleep(0.1-0.5) between actions so the OS can process them.
+        - For async waits: await asyncio.sleep(seconds)
+        - NEVER call sys.exit(), os._exit(), or raise SystemExit here.
+
+        Examples — compose the steps you need:
+
+        CLICK:
+            pyautogui.click(x=500, y=300)
+            time.sleep(0.2)
+            return ["Clicked at (500, 300)"]
+
+        TYPE text:
+            pyautogui.typewrite("hello world", interval=0.05)
+            return ["Typed: hello world"]
+
+        HOTKEY:
+            pyautogui.hotkey("ctrl", "c")
+            time.sleep(0.1)
+            return ["Pressed Ctrl+C (copy)"]
+
+        MULTI-STEP:
+            pyautogui.hotkey("ctrl", "l")
+            time.sleep(0.2)
+            pyautogui.typewrite("https://example.com", interval=0.04)
+            pyautogui.press("enter")
+            time.sleep(0.5)
+            return [
+                "Focused address bar (Ctrl+L)",
+                "Typed URL",
+                "Pressed Enter to navigate",
+            ]
+        """
+        raise NotImplementedError("_execute() must be implemented for intent: {intent}")
+
     async def run(self, context: dict, args: dict) -> dict:
+        # ── LOCKED CONTRACT — do NOT modify this method ───────────────────────
+        # Handles: validate guard, pyautogui failsafe, stuck-key recovery,
+        # and result formatting. LLM only writes _execute() above.
+        error = self.validate(args)
+        if error:
+            return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
             import pyautogui
-            pyautogui.FAILSAFE = True  # move mouse to corner to abort
-
-            # ── Read args (with safe defaults) ────────────────────────────────
-            # TODO: Read the args your intent needs, e.g.:
-            #   x       = int(args.get("x", 0))
-            #   y       = int(args.get("y", 0))
-            #   text    = str(args.get("text", ""))
-            #   app     = str(args.get("app", context.get("app_name", "")))
-
-            # ── Perform the action ────────────────────────────────────────────
-            # TODO: Replace with the actual UI action for intent "{intent}"
-            # Examples — pick ONE or compose several:
-            #   pyautogui.click(x=x, y=y)
-            #   pyautogui.typewrite(text, interval=0.05)
-            #   pyautogui.hotkey("ctrl", "c")
-            #   pyautogui.press("enter")
-            #   pyautogui.screenshot().save("/tmp/shot.png")
-            time.sleep(0.1)  # small delay so the action settles
-            result = None    # TODO: set to meaningful result if action returns one
-
-            return {{"status": "success", "result": result, "intent": "{intent}"}}
-
+            pyautogui.FAILSAFE = True
+            steps = await self._execute(args)
+            if not isinstance(steps, list):
+                steps = [str(steps)]
+            return {{
+                "status":  "success",
+                "result":  steps,
+                "display": {{
+                    "type":    "markdown",
+                    "content": "### 🤖 UI Automation Log\\n"
+                               + "\\n".join(f"* {{s}}" for s in steps),
+                }},
+                "intent": "{intent}",
+            }}
         except Exception as e:
+            # Best-effort stuck-key recovery — release common modifier keys
+            try:
+                import pyautogui as _pag
+                for _key in ("ctrl", "alt", "shift", "win", "cmd"):
+                    try:
+                        _pag.keyUp(_key)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
 '''
 
