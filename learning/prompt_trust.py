@@ -314,7 +314,17 @@ class PromptTrustLayer:
         try:
             raw = json.loads(STORE_PATH.read_text(encoding="utf-8"))
             for key, val in raw.items():
-                self._records[key] = _TrustRecord(**val)
+                # Skip namespace keys that are not _TrustRecord dicts.
+                # 'categories' is written by sandbox_runner for permanent
+                # plugin-generation rules — it is a dict-of-dicts, not a
+                # _TrustRecord, and must not be passed to _TrustRecord(**val).
+                if not isinstance(val, dict) or "pattern" not in val:
+                    continue
+                try:
+                    self._records[key] = _TrustRecord(**val)
+                except TypeError:
+                    # Unknown fields in future schema versions — skip gracefully
+                    pass
             log.info("PromptTrustLayer: loaded %d trust record(s)", len(self._records))
         except Exception as exc:
             log.warning("PromptTrustLayer: could not load store — %s", exc)
