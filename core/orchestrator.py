@@ -108,23 +108,27 @@ class Orchestrator:
         # Initialised HERE — before any bus.subscribe() calls — so it is
         # already subscribed to "execution_complete" when the first task runs.
         #
-        # RISK: deferred imports guard against DB / model initialisation
-        #   failures blocking the entire Orchestrator startup. If the
-        #   Reflector fails to init, Operonix continues without reflection
-        #   (degraded mode) and logs a warning.
-        # RISK: LongTermMemory and EpisodicMemory constructors may open
-        #   file handles / SQLite connections. We import lazily here (not at
-        #   module top) so those I/O operations only happen after the event
-        #   loop is running, avoiding "no current event loop" errors.
+        # CRITICAL FIX: use the global episodic_memory and long_term_memory
+        # singletons (imported below), NOT new instances. The lifecycle_manager
+        # calls episodic_memory.start() and long_term_memory.start() before
+        # orchestrator.start(), which initialises their DB connections (_conn).
+        # Creating new EpisodicMemory() / LongTermMemory() here produces
+        # uninitialised instances (_conn=None) that silently swallow every
+        # store() / get_float() / set_float() call — causing the Reflector to
+        # appear "not available" on the dashboard even after a successful boot.
+        #
+        # RISK: deferred imports guard against circular import at module load
+        # time. memory.episodic and memory.long_term_memory import core.event_bus
+        # which is safe here because the event loop is already running.
         try:
             from brain.reflector import Reflector
-            from memory.episodic import EpisodicMemory
-            from memory.long_term_memory import LongTermMemory
+            from memory.episodic import episodic_memory as _episodic
+            from memory.long_term_memory import long_term_memory as _ltm
             from brain.llm_client import llm_client as _llm_client
             self._reflector = Reflector(
                 event_bus  = bus,
-                episodic   = EpisodicMemory(),
-                long_term  = LongTermMemory(),
+                episodic   = _episodic,    # global singleton — _conn already open
+                long_term  = _ltm,         # global singleton — KV DB already open
                 llm_client = _llm_client,
                 settings   = settings,
             )
