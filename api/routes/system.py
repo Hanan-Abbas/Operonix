@@ -15,9 +15,11 @@ This is the "nervous system" of the API layer:
 All values are resolved dynamically — nothing is hardcoded.
 """
 
+import asyncio
 import logging
 import platform
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -64,9 +66,20 @@ def _capability_mapper():
 
 
 def _reflector():
+    """
+    Returns the live Reflector instance attached to the Orchestrator.
+
+    CRITICAL FIX: the original code imported `from brain.reflector import reflector`
+    but brain/reflector.py exports only the Reflector CLASS — there is no module-
+    level singleton named `reflector`. The live instance is created in
+    orchestrator.start() and stored on orchestrator._reflector.
+
+    RISK: getattr with None default so this never raises AttributeError even
+    if the orchestrator module was loaded before our changes were applied.
+    """
     try:
-        from brain.reflector import reflector
-        return reflector
+        from core.orchestrator import orchestrator
+        return getattr(orchestrator, "_reflector", None)
     except Exception:
         return None
 
@@ -160,14 +173,24 @@ async def system_metrics() -> Dict[str, Any]:
     """
     📈 Runtime metrics snapshot.
 
-    Falls back gracefully if the metrics module is not yet initialised.
+    FIXED: original called m.snapshot() but SystemMetrics has no snapshot()
+    method. We added to_dict() in the Reflector integration. Falls back to
+    vars(m) for backward compatibility with any older metrics instance.
     """
     m = _metrics()
     if m is None:
         return {"available": False, "message": "Metrics not initialised."}
 
     try:
-        snapshot = m.snapshot() if hasattr(m, "snapshot") else vars(m)
+        # to_dict() added in Reflector integration — includes all new fields
+        if hasattr(m, "to_dict"):
+            snapshot = m.to_dict()
+        else:
+            # Fallback: exclude callables so vars() doesn't include methods
+            snapshot = {
+                k: v for k, v in vars(m).items()
+                if not callable(v) and not k.startswith("_")
+            }
         return {"available": True, "metrics": snapshot}
     except Exception as exc:
         logger.error("Metrics snapshot failed: %s", exc)
@@ -264,21 +287,157 @@ async def request_shutdown() -> Dict[str, Any]:
 # Endpoints — Self-Evolution
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/evolve/reflect")
+async def get_reflect_stats() -> Dict[str, Any]:
+    """
+    📊 Return current Reflector statistics and per-capability confidence scores.
+
+    Used by the dashboard Overview panel to read Reflector state without
+    triggering a new reflection cycle. This GET endpoint is what the dashboard
+    "Reflect" widget polls for live data.
+    """
+    r = _reflector()
+    if r is None:
+        return {
+            "available": False,
+            "error": (
+                "Reflector not initialised. "
+                "Check orchestrator logs for 'Reflector init failed'."
+            ),
+        }
+
+    try:
+        stats = r.get_stats() if hasattr(r, "get_stats") else {}
+
+        # Pull live confidence scores from LongTermMemory KV store
+        confidence: Dict[str, float] = {}
+        try:
+            from memory.long_term_memory import long_term_memory
+            for tier in ("plugin", "api", "command", "ui"):
+                confidence[tier] = long_term_memory.get_float(
+                    f"confidence:{tier}", default=0.75
+                )
+        except Exception as exc:
+            logger.debug("Could not read confidence from LTM: %s", exc)
+
+        return {
+            "available":          True,
+            "total_reflections":  stats.get("total_reflections", 0),
+            "successes":          stats.get("successes", 0),
+            "partial":            stats.get("partial", 0),
+            "failures":           stats.get("failures", 0),
+            "evolution_triggers": stats.get("evolution_triggers", 0),
+            "capability_confidence": confidence,
+            "capability_hit_rates": {
+                cap: (hits[0] / hits[1] if hits[1] > 0 else 0.0)
+                for cap, hits in stats.get("capability_hits", {}).items()
+            },
+        }
+    except Exception as exc:
+        logger.error("GET /evolve/reflect stats failed: %s", exc)
+        return {"available": True, "error": str(exc)}
+
+
 @router.post("/evolve/reflect")
 async def trigger_reflection(
     context: Optional[Dict[str, Any]] = Body(default=None)
 ) -> Dict[str, Any]:
     """
     🧠 Trigger the Reflector to analyse recent behaviour and suggest improvements.
+
+    FIXED: original called r.reflect(context or {}) — but Reflector.reflect()
+    expects a structured execution_result dict with keys:
+      intent, capability, app_context, success, partial, error, error_type,
+      steps, duration_ms.
+
+    Passing {} caused KeyError / AttributeError inside _analyse(). Now we
+    build a valid execution_result from the optional request body, falling
+    back to safe defaults for all missing fields.
+
+    Also fixed: result serialisation. Reflector.reflect() returns a Lesson
+    dataclass, not a plain dict. We call lesson.to_dict() before returning.
+
+    RISK: wrapped in asyncio.wait_for() capped at 15 s so a slow LLM
+    root-cause call never hangs the endpoint indefinitely.
     """
+    import asyncio
+    import time
+
     r = _reflector()
     if r is None:
-        raise HTTPException(status_code=503, detail="Reflector not available.")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Reflector not available. "
+                "Ensure brain/reflector.py is present and orchestrator has started."
+            ),
+        )
+
+    body = context or {}
+
+    # Resolve active app context for the synthetic execution_result
+    active_window = "unknown"
+    try:
+        orch = _orchestrator()
+        ctx = getattr(orch, "_last_context", {}) or {}
+        active_window = ctx.get("app_name") or ctx.get("window_title") or "unknown"
+    except Exception:
+        pass
+
+    # Build a fully valid execution_result dict so _analyse() never KeyErrors
+    execution_result: Dict[str, Any] = {
+        "task_id":     body.get("task_id",     f"manual-reflect-{int(time.time())}"),
+        "intent":      body.get("intent",      "manual_reflect"),
+        "capability":  body.get("capability",  "unknown"),
+        "app_context": body.get("app_context", active_window),
+        "success":     body.get("success",     True),
+        "partial":     body.get("partial",     False),
+        "error":       body.get("error",       None),
+        "error_type":  body.get("error_type",  None),
+        "steps":       body.get("steps",       []),
+        "duration_ms": body.get("duration_ms", 0.0),
+    }
 
     try:
-        result = await r.reflect(context or {})
-        await _bus().emit("reflection_triggered", {"context": context}, source="api_system")
-        return {"status": "reflected", "result": result}
+        # Hard timeout so slow LLM root-cause never hangs the endpoint
+        lesson = await asyncio.wait_for(
+            r.reflect(execution_result),
+            timeout=15.0,
+        )
+
+        # Reflector.reflect() returns a Lesson dataclass — serialise it
+        lesson_dict = lesson.to_dict() if hasattr(lesson, "to_dict") else {}
+
+        # Snapshot confidence into metrics so /api/metrics is current
+        try:
+            from core.metrics import metrics
+            from memory.long_term_memory import long_term_memory
+            for tier in ("plugin", "api", "command", "ui"):
+                score = long_term_memory.get_float(f"confidence:{tier}", default=0.75)
+                if hasattr(metrics, "snapshot_confidence"):
+                    metrics.snapshot_confidence(tier, score)
+            metrics.reflections_total = getattr(metrics, "reflections_total", 0) + 1
+        except Exception as exc:
+            logger.debug("Metrics snapshot after reflect failed (non-fatal): %s", exc)
+
+        await _bus().emit(
+            "reflection_triggered",
+            {"context": body, "outcome": lesson_dict.get("outcome")},
+            source="api_system",
+        )
+
+        return {
+            "status": "reflected",
+            "result": lesson_dict,
+            "stats":  await get_reflect_stats(),
+        }
+
+    except asyncio.TimeoutError:
+        logger.warning("POST /evolve/reflect timed out after 15s")
+        raise HTTPException(
+            status_code=504,
+            detail="Reflection timed out after 15s — LLM may be slow.",
+        )
     except Exception as exc:
         logger.error("Reflection failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -356,15 +515,66 @@ async def inject_goal(
 @router.get("/evolve/history")
 async def evolution_history(limit: int = 20) -> Dict[str, Any]:
     """
-    📜 Return a history of self-evolution events.
+    📜 Return a history of self-evolution events from episodic memory.
+
+    FIXED: original called episodic_memory.query(filter_types=[...]) which
+    does not exist on EpisodicMemory. The real API is get_recent_episodes()
+    which queries by intent. We retrieve reflector-sourced episodes (stored
+    with synthetic task_id prefix "reflector:") and recent failure episodes
+    and merge them into a unified history list.
     """
     try:
         from memory.episodic import episodic_memory
-        events = await episodic_memory.query(
-            filter_types=["reflection_complete", "capabilities_remapped", "learning_triggered"],
-            limit=limit,
-        )
+
+        # Reflector lessons are stored with intent="manual_reflect" or the
+        # actual intent. Fetch recent episodes across common evolution intents.
+        events: List[Dict[str, Any]] = []
+
+        # Pull general recent episodes from SQLite — get_recent_episodes()
+        # only filters by intent so we fetch a broad set and filter client-side.
+        # EpisodicMemory doesn't have a "get all" method, so we use the
+        # failures table which covers all intents.
+        try:
+            recent_failures = episodic_memory.get_all_recent_failures(hours=168)  # 7 days
+            for row in recent_failures[:limit]:
+                events.append({
+                    "type":      "failure",
+                    "intent":    row.get("intent", "unknown"),
+                    "reason":    row.get("failure_reason", ""),
+                    "timestamp": row.get("timestamp", 0),
+                })
+        except Exception as exc:
+            logger.debug("Could not fetch recent failures: %s", exc)
+
+        # Also pull Reflector lesson episodes (stored with synthetic task_id)
+        try:
+            reflector_eps = episodic_memory.get_recent_episodes(
+                intent="manual_reflect", limit=limit
+            )
+            for ep in reflector_eps:
+                import json as _json
+                meta = {}
+                try:
+                    meta = _json.loads(ep.get("metadata") or "{}")
+                except Exception:
+                    pass
+                lesson = meta.get("lesson", {})
+                events.append({
+                    "type":      "reflection",
+                    "intent":    ep.get("intent", "unknown"),
+                    "outcome":   lesson.get("outcome", ep.get("outcome", "unknown")),
+                    "root_cause": lesson.get("root_cause", ""),
+                    "timestamp": ep.get("created_at", 0),
+                })
+        except Exception as exc:
+            logger.debug("Could not fetch reflector episodes: %s", exc)
+
+        # Sort merged list newest-first and cap at limit
+        events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
+        events = events[:limit]
+
         return {"history": events, "count": len(events)}
+
     except Exception as exc:
         logger.warning("Could not fetch evolution history: %s", exc)
         return {"history": [], "count": 0, "message": str(exc)}
