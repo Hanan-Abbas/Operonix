@@ -245,6 +245,9 @@ Return STRICTLY valid JSON:
 
         Logic:
         - Normalize whitespace first (collapse triple+ newlines)
+        - Run AST semantic checks (forbidden imports, _execute isolation,
+          blocking calls, stdout cleanliness) — these are hard failures that
+          return immediately with precise error messages, no LLM needed.
         - Check all required structural tokens are present
         - If ALL present → pass immediately (valid=True)
         - If NONE present → the code is genuinely empty → fail immediately
@@ -255,8 +258,18 @@ Return STRICTLY valid JSON:
             None  → ambiguous, let LLM audit proceed
         """
         import re
+        import ast as _ast
 
         normalized = self._normalize_plugin_code(plugin_code)
+
+        # ── AST Semantic Checks (hard failures, precise messages) ─────────────
+        # These run before the structural token checks because they give
+        # the generator exact, actionable feedback for the retry prompt.
+        # Failures here skip the LLM auditor entirely — no token cost.
+
+        semantic_fail = self._ast_semantic_check(normalized, plugin_name, category)
+        if semantic_fail is not None:
+            return semantic_fail
 
         # Background plugins run their logic in daemon threads — the run()
         # method itself just starts threads and returns. The try/except lives
@@ -332,6 +345,224 @@ Return STRICTLY valid JSON:
             f"Structural pre-check partial ({passed}/{total}) for "
             f"'{plugin_name}' — deferring to LLM audit."
         )
+        return None
+
+    # ── AST Semantic Checker ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _ast_semantic_check(
+        plugin_code: str, plugin_name: str, category: str
+    ) -> dict | None:
+        """
+        Parse the plugin with the AST module and enforce hard structural rules
+        that regex can't reliably detect.
+
+        Checks (each returns a precise error dict on failure, None if OK):
+
+        1. FORBIDDEN IMPORTS — direct imports from automation/, context/,
+           core/, safety/. Plugins must use capability_registry.get() instead.
+
+        2. BLOCKING SUBPROCESS CALLS — subprocess.run / subprocess.call /
+           subprocess.Popen / os.system. These block the async event loop.
+           Plugins must use asyncio.create_subprocess_shell.
+
+        3. _execute ISOLATION — run() must call self._execute() (or self.run
+           must contain the contract guard). If the plugin has an _execute()
+           method, validate() must be called before it inside run(). This
+           ensures the locked contract from template_engine is preserved.
+
+        4. STDOUT CLEANLINESS — bare print() calls whose output would appear
+           before the JSON return value corrupt the sandbox JSON validation.
+           Allowed: print() inside non-run methods (e.g. __init__, helpers).
+           Flagged: print() at top level of run() or _execute() bodies.
+
+        Returns a "valid=False" dict on the first violation found, else None.
+        """
+        import ast as _ast
+        import re as _re
+
+        # ── Parse ─────────────────────────────────────────────────────────────
+        try:
+            tree = _ast.parse(plugin_code)
+        except SyntaxError as e:
+            return {
+                "valid": False,
+                "reason": f"SyntaxError in generated code: {e}",
+                "suggested_tweaks": "Fix the syntax error reported above.",
+                "safety_concerns": "",
+            }
+
+        # ── Check 1: Forbidden imports ────────────────────────────────────────
+        _FORBIDDEN_PREFIXES = ("automation.", "context.", "core.", "safety.")
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+                module = ""
+                if isinstance(node, _ast.ImportFrom):
+                    module = node.module or ""
+                elif isinstance(node, _ast.Import):
+                    for alias in node.names:
+                        module = alias.name or ""
+                        if any(module == p.rstrip(".") or module.startswith(p)
+                               for p in _FORBIDDEN_PREFIXES):
+                            return {
+                                "valid": False,
+                                "reason": (
+                                    f"Forbidden import: 'import {module}'. "
+                                    f"Plugins must not import directly from "
+                                    f"automation/, context/, core/, or safety/. "
+                                    f"Use capability_registry.get('service_name') instead."
+                                ),
+                                "suggested_tweaks": (
+                                    f"Remove 'import {module}' and replace with:\n"
+                                    f"    svc = capability_registry.get('service_name')\n"
+                                    f"    if svc is None:\n"
+                                    f"        return {{\"status\": \"error\", \"message\": \"service unavailable\"}}"
+                                ),
+                                "safety_concerns": f"Direct internal import: {module}",
+                            }
+                if any(module == p.rstrip(".") or module.startswith(p)
+                       for p in _FORBIDDEN_PREFIXES):
+                    return {
+                        "valid": False,
+                        "reason": (
+                            f"Forbidden import: 'from {module} import ...'. "
+                            f"Plugins must not import from automation/, context/, "
+                            f"core/, or safety/. Use capability_registry.get() instead."
+                        ),
+                        "suggested_tweaks": (
+                            f"Remove 'from {module} import ...' and use the registry:\n"
+                            f"    svc = capability_registry.get('service_name')\n"
+                            f"    if svc is None:\n"
+                            f"        return {{\"status\": \"error\", \"message\": \"service unavailable\"}}"
+                        ),
+                        "safety_concerns": f"Direct internal import: {module}",
+                    }
+
+        # ── Check 2: Blocking subprocess calls ───────────────────────────────
+        # We already scan for these in generator.py's static scanner, but
+        # plugin_validator is the last gate before sandbox — double-check here
+        # for plugins that arrive via plugin_evolver or manual edits.
+        _BLOCKING = {
+            ("subprocess", "run"), ("subprocess", "call"),
+            ("subprocess", "check_output"), ("subprocess", "Popen"),
+        }
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                # subprocess.run(...) → Attribute(value=Name('subprocess'), attr='run')
+                if (
+                    isinstance(node.func, _ast.Attribute)
+                    and isinstance(node.func.value, _ast.Name)
+                    and (node.func.value.id, node.func.attr) in _BLOCKING
+                ):
+                    call_str = f"{node.func.value.id}.{node.func.attr}"
+                    return {
+                        "valid": False,
+                        "reason": (
+                            f"Blocking subprocess call detected: {call_str}(). "
+                            f"This blocks the entire async agent event loop. "
+                            f"Use asyncio.create_subprocess_shell with asyncio.wait_for instead."
+                        ),
+                        "suggested_tweaks": (
+                            f"Replace {call_str}() with:\n"
+                            "    proc = await asyncio.create_subprocess_shell(\n"
+                            "        cmd, stdout=asyncio.subprocess.PIPE,\n"
+                            "        stderr=asyncio.subprocess.PIPE)\n"
+                            "    stdout_b, stderr_b = await asyncio.wait_for(\n"
+                            "        proc.communicate(), timeout=30)"
+                        ),
+                        "safety_concerns": f"Blocking call: {call_str}()",
+                    }
+                # os.system(...) → Attribute(value=Name('os'), attr='system')
+                if (
+                    isinstance(node.func, _ast.Attribute)
+                    and isinstance(node.func.value, _ast.Name)
+                    and node.func.value.id == "os"
+                    and node.func.attr == "system"
+                ):
+                    return {
+                        "valid": False,
+                        "reason": (
+                            "Blocking call detected: os.system(). "
+                            "This blocks the entire async event loop. "
+                            "Use asyncio.create_subprocess_shell with asyncio.wait_for instead."
+                        ),
+                        "suggested_tweaks": (
+                            "Replace os.system() with asyncio.create_subprocess_shell."
+                        ),
+                        "safety_concerns": "Blocking call: os.system()",
+                    }
+
+        # ── Check 3: _execute isolation — validate() called in run() ─────────
+        # Only enforced if the plugin defines _execute() — if it doesn't, it's
+        # using the old inline pattern and the structural token checks handle it.
+        has_execute_method = any(
+            isinstance(node, _ast.AsyncFunctionDef) and node.name == "_execute"
+            for node in _ast.walk(tree)
+        )
+        if has_execute_method:
+            # Find the run() method and check it calls self.validate()
+            run_calls_validate = False
+            for node in _ast.walk(tree):
+                if (
+                    isinstance(node, _ast.AsyncFunctionDef)
+                    and node.name == "run"
+                ):
+                    for child in _ast.walk(node):
+                        if (
+                            isinstance(child, _ast.Call)
+                            and isinstance(child.func, _ast.Attribute)
+                            and child.func.attr == "validate"
+                        ):
+                            run_calls_validate = True
+                            break
+            if not run_calls_validate:
+                return {
+                    "valid": False,
+                    "reason": (
+                        "run() defines _execute() but does not call self.validate() "
+                        "before invoking it. The validate guard in run() is mandatory — "
+                        "it prevents unsafe args from reaching _execute()."
+                    ),
+                    "suggested_tweaks": (
+                        "Add at the start of run():\n"
+                        "    error = self.validate(args)\n"
+                        "    if error:\n"
+                        "        return {\"status\": \"error\", \"message\": error}"
+                    ),
+                    "safety_concerns": "validate() bypassed — unsafe args reach _execute()",
+                }
+
+        # ── Check 4: Stdout cleanliness (bare print in run/_execute) ─────────
+        # A print() in run() or _execute() outputs text before the JSON dict,
+        # breaking sandbox JSON extraction. Allowed in helper methods.
+        _CHECKED_METHODS = {"run", "_execute"}
+        for node in _ast.walk(tree):
+            if (
+                isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                and node.name in _CHECKED_METHODS
+            ):
+                for child in _ast.walk(node):
+                    if (
+                        isinstance(child, _ast.Call)
+                        and isinstance(child.func, _ast.Name)
+                        and child.func.id == "print"
+                    ):
+                        return {
+                            "valid": False,
+                            "reason": (
+                                f"print() call detected inside {node.name}(). "
+                                "The sandbox captures stdout as the plugin's JSON output — "
+                                "any text printed before the return dict breaks JSON parsing. "
+                                "Use self.logger.debug() which writes to the log file, not stdout."
+                            ),
+                            "suggested_tweaks": (
+                                f"Remove all print() calls from {node.name}(). "
+                                "Replace with self.logger.debug('...') if you need debug output."
+                            ),
+                            "safety_concerns": "",
+                        }
+
+        # All AST checks passed
         return None
 
 
