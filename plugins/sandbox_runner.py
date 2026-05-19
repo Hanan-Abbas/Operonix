@@ -26,6 +26,12 @@ class SandboxRunner:
     """
     Full pre-deployment validation pipeline for generated plugins.
 
+    Pipeline stages:
+      Stage 0 — AST semantic check (zero LLM cost, ~1ms)
+      Stage 1 — LLM code audit (plugin_validator)
+      Stage 2 — Sandbox execution test
+      Stage 3 — Pytest test suite
+
     Used by:
         generator.py — before writing the plugin to installed/
         plugin_evolver.py — before deploying an evolved version
@@ -47,16 +53,11 @@ class SandboxRunner:
         """
         Runs the complete validation pipeline.
 
-        Args:
-            category: Plugin category from template_engine (background, automation,
-                      web, file, command, system, data, generic). Passed to the
-                      sandbox so it can apply the right execution strategy, and to
-                      the validator so it applies category-aware audit rules.
-
         Returns:
         {
             "passed": bool,
-            "stage_failed": "llm_audit" | "sandbox_run" | "pytest" | None,
+            "stage_failed": "ast_check" | "llm_audit" | "sandbox_run" | "pytest" | None,
+            "ast_check": {...},
             "llm_audit": {...},
             "sandbox_run": {...},
             "pytest": {...},
@@ -64,13 +65,72 @@ class SandboxRunner:
         }
         """
         report = {
-            "passed": False,
-            "stage_failed": None,
-            "llm_audit": {},
-            "sandbox_run": {},
-            "pytest": {},
+            "passed":             False,
+            "stage_failed":       None,
+            "ast_check":          {},
+            "llm_audit":          {},
+            "sandbox_run":        {},
+            "pytest":             {},
             "ready_for_approval": False,
         }
+
+        # ── Stage 0: AST Semantic Check ───────────────────────────────────────
+        # Zero LLM cost. Runs in ~1ms. Catches:
+        #   - Forbidden imports (automation/, core/, context/, safety/)
+        #   - Blocking subprocess calls (subprocess.run, os.system, etc.)
+        #   - _execute isolation contract (validate() called before _execute)
+        #   - Bare print() in run()/_execute() that corrupts sandbox stdout
+        # On failure: gives the generator precise, actionable feedback so
+        # the retry prompt doesn't waste tokens describing a vague error.
+        self.logger.info(f"🔬 [Stage 0] AST semantic check for '{plugin_name}'...")
+        ast_result = plugin_validator._ast_semantic_check(
+            plugin_code, plugin_name, category
+        )
+        if ast_result is not None:
+            # _ast_semantic_check returns a failure dict (not None) on violation
+            report["ast_check"]    = ast_result
+            report["stage_failed"] = "ast_check"
+            self.logger.warning(
+                f"❌ [Stage 0] AST check rejected '{plugin_name}': "
+                f"{ast_result.get('reason')}"
+            )
+            self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "ast_check")
+
+            # ── Permanent cross-session rule for blocking calls ────────────────
+            # If the AST rejection was for a blocking subprocess call, write a
+            # permanent rule to prompt_trust.json so future generation attempts
+            # for this category see the constraint BEFORE the LLM is called —
+            # even after a system restart. Session-bound episodic memory alone
+            # is not enough for this class of structural error.
+            _reason = ast_result.get("reason", "")
+            _blocking_tokens = ("subprocess.run", "subprocess.call",
+                                 "subprocess.Popen", "os.system", "blocking")
+            if any(tok in _reason for tok in _blocking_tokens):
+                self._record_blocking_trust_rule(category)
+
+            # Record to episodic memory so future generation calls see the pattern
+            await self._record_generation_failure(
+                intent=intent,
+                plugin_name=plugin_name,
+                stage="ast_check",
+                reason=ast_result.get("reason", ""),
+                tweaks=ast_result.get("suggested_tweaks", ""),
+                category=category,
+            )
+            bus.publish(
+                "plugin_validation_failed",
+                {
+                    "name":   plugin_name,
+                    "stage":  "ast_check",
+                    "reason": ast_result.get("reason"),
+                    "tweaks": ast_result.get("suggested_tweaks"),
+                },
+                source="sandbox_runner",
+            )
+            return report
+
+        report["ast_check"] = {"valid": True, "reason": "All AST checks passed."}
+        self.logger.info(f"✅ [Stage 0] AST check passed for '{plugin_name}'.")
 
         # ── Stage 1: LLM Code Audit ───────────────────────────────────────────
         self.logger.info(f"🔍 [Stage 1] LLM audit for '{plugin_name}'...")
@@ -88,16 +148,20 @@ class SandboxRunner:
                 f"❌ [Stage 1] LLM audit rejected '{plugin_name}': {audit.get('reason')}"
             )
             report["stage_failed"] = "llm_audit"
-            # Clean up the empty plugin dir created by generator.py before
-            # the pipeline started — at Stage 1 no files have been written yet
-            # so plugin_dir contains only the bare directory. Without cleanup
-            # it persists across retries and triggers loader warnings on restart.
             self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "llm_audit")
+            await self._record_generation_failure(
+                intent=intent,
+                plugin_name=plugin_name,
+                stage="llm_audit",
+                reason=audit.get("reason", ""),
+                tweaks=audit.get("suggested_tweaks", ""),
+                category=category,
+            )
             bus.publish(
                 "plugin_validation_failed",
                 {
-                    "name": plugin_name,
-                    "stage": "llm_audit",
+                    "name":   plugin_name,
+                    "stage":  "llm_audit",
                     "reason": audit.get("reason"),
                     "tweaks": audit.get("suggested_tweaks"),
                 },
@@ -199,12 +263,20 @@ class SandboxRunner:
                 )
             report["stage_failed"] = "sandbox_run"
             self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "sandbox_run")
+            await self._record_generation_failure(
+                intent=intent,
+                plugin_name=plugin_name,
+                stage="sandbox_run",
+                reason=sandbox_result.error or "sandbox execution failed",
+                tweaks="",
+                category=category,
+            )
             bus.publish(
                 "plugin_validation_failed",
                 {
-                    "name": plugin_name,
-                    "stage": "sandbox_run",
-                    "reason": sandbox_result.error,
+                    "name":      plugin_name,
+                    "stage":     "sandbox_run",
+                    "reason":    sandbox_result.error,
                     "timed_out": sandbox_result.timed_out,
                 },
                 source="sandbox_runner",
@@ -232,11 +304,19 @@ class SandboxRunner:
             )
             report["stage_failed"] = "pytest"
             self._cleanup_failed_plugin_dir(plugin_dir, plugin_name, "pytest")
+            await self._record_generation_failure(
+                intent=intent,
+                plugin_name=plugin_name,
+                stage="pytest",
+                reason=test_result.get("output", "")[:400],
+                tweaks="",
+                category=category,
+            )
             bus.publish(
                 "plugin_validation_failed",
                 {
-                    "name": plugin_name,
-                    "stage": "pytest",
+                    "name":   plugin_name,
+                    "stage":  "pytest",
                     "reason": test_result.get("output", "")[:300],
                 },
                 source="sandbox_runner",
@@ -283,6 +363,132 @@ class SandboxRunner:
         )
         return result.to_dict()
 
+
+    async def _record_generation_failure(
+        self,
+        intent: str,
+        plugin_name: str,
+        stage: str,
+        reason: str,
+        tweaks: str,
+        category: str,
+    ) -> None:
+        """
+        Persist a generation failure to episodic memory so future generation
+        calls get informed retry prompts — not blank-slate retries.
+
+        Writes two records:
+          1. episodic_memory._record_failure() — feeds get_failure_summary()
+             which generator.py already reads via failure_context.
+          2. episodic_memory.store() — stores a structured lesson with the
+             stage, tweaks, and category so the generator can inject specific
+             fix instructions into the next attempt's prompt.
+
+        This is the bridge between sandbox failures and the persistent
+        feedback loop. Without it, every retry starts fresh.
+        """
+        try:
+            from memory.episodic import episodic_memory
+
+            # Feed into the existing failure tracking used by capability_gap_detector
+            # and generator._build_failure_context()
+            await episodic_memory._record_failure(
+                intent=intent,
+                reason=f"[{stage}] {reason[:300]}",
+                attempts=1,
+            )
+
+            # Store a structured lesson keyed by (plugin_name, stage, timestamp)
+            # so generator.py can retrieve category-specific failure patterns
+            # via get_failure_summary() and inject them into the retry prompt.
+            import time as _time
+            lesson_key = f"plugin_generation:{plugin_name}:{stage}:{int(_time.time())}"
+            await episodic_memory.store(
+                key=lesson_key,
+                content={
+                    "intent":          intent,
+                    "plugin_name":     plugin_name,
+                    "stage":           stage,
+                    "reason":          reason[:400],
+                    "suggested_tweaks": tweaks[:400],
+                    "category":        category,
+                    "outcome":         "failure",
+                    "capability_used": f"plugin_generation:{category}",
+                },
+                tags=["plugin_generation", stage, category, intent],
+            )
+            self.logger.debug(
+                "_record_generation_failure: stored lesson '%s'", lesson_key
+            )
+        except Exception as exc:
+            # Non-fatal — never block the pipeline for a memory write failure
+            self.logger.debug(
+                "_record_generation_failure failed (non-fatal): %s", exc
+            )
+
+    def _record_blocking_trust_rule(self, category: str) -> None:
+        """
+        Write a permanent, cross-session structural guardrail to
+        prompt_trust.json under a 'categories' namespace.
+
+        This is separate from PromptTrustLayer's interactive command records
+        (which live at the top-level of the file keyed by command pattern).
+        We use a 'categories' sub-key so the two namespaces never collide and
+        PromptTrustLayer._load() — which does _TrustRecord(**val) on top-level
+        keys — never sees or crashes on our category rules.
+
+        Safe to call multiple times — uses setdefault so existing rules are
+        never overwritten or reset.
+        """
+        import json as _json
+
+        _candidates = [
+            os.path.join("learning", "prompt_trust.json"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "learning", "prompt_trust.json"),
+        ]
+        trust_file = next((p for p in _candidates if os.path.exists(p)), _candidates[0])
+
+        data: dict = {}
+        if os.path.exists(trust_file):
+            try:
+                with open(trust_file, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+            except (_json.JSONDecodeError, OSError):
+                data = {}
+
+        # 'categories' namespace — never conflicts with PromptTrustLayer records
+        data.setdefault("categories", {})
+        data["categories"].setdefault(category, {})
+        cat = data["categories"][category]
+
+        # Only write if not already set — preserve first-write timestamp
+        newly_set = False
+        if not cat.get("always_flag_blocking_calls"):
+            cat["always_flag_blocking_calls"] = True
+            newly_set = True
+        if not cat.get("enforce_asyncio_subprocess"):
+            cat["enforce_asyncio_subprocess"] = True
+            newly_set = True
+
+        if newly_set:
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(trust_file)), exist_ok=True)
+                with open(trust_file, "w", encoding="utf-8") as f:
+                    _json.dump(data, f, indent=2)
+                self.logger.info(
+                    "📌 Permanent blocking-call rule written for category='%s' "
+                    "→ %s", category, trust_file
+                )
+            except OSError as e:
+                self.logger.warning(
+                    "_record_blocking_trust_rule: could not write trust file: %s", e
+                )
+        else:
+            self.logger.debug(
+                "_record_blocking_trust_rule: rule already exists for category='%s'",
+                category,
+            )
 
     def _cleanup_failed_plugin_dir(
         self, plugin_dir: str, plugin_name: str, stage: str
