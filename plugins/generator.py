@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import platform
 import re
 from datetime import datetime
 
@@ -50,27 +49,6 @@ AUTO_APPROVE_PLUGINS: bool = bool(getattr(settings, "AUTO_APPROVE_PLUGINS", True
 AUTO_APPROVE_RISK_LEVELS: set[str] = {"low"}  # Only auto-approve low-risk
 
 logger = logging.getLogger("PluginGenerator")
-
-# ── OS Detection ───────────────────────────────────────────────────────────────
-# Detected once at startup; passed into every prompt so the LLM writes
-# OS-correct shell commands, paths, and subprocess calls.
-_RAW_OS   = platform.system()          # "Linux", "Darwin", "Windows"
-TARGET_OS: str = {
-    "Linux":   "linux",
-    "Darwin":  "macos",
-    "Windows": "windows",
-}.get(_RAW_OS, "linux")
-
-# Shell path conventions per OS — injected into prompts
-_OS_SHELL_NOTES: dict[str, str] = {
-    "linux":   "Use bash shell. Paths use forward slashes. Home dir via os.path.expanduser('~').",
-    "macos":   "Use zsh/bash shell. Paths use forward slashes. Home dir via os.path.expanduser('~'). "
-               "macOS-specific tools: open, pbcopy, osascript.",
-    "windows": "Use PowerShell or cmd. Paths use backslashes or raw strings. "
-               "Home dir via os.path.expanduser('~') or %USERPROFILE%. "
-               "Never use Unix commands like rm, ls, cat — use PowerShell equivalents.",
-}
-OS_SHELL_NOTE: str = _OS_SHELL_NOTES.get(TARGET_OS, _OS_SHELL_NOTES["linux"])
 
 MAX_GENERATION_ATTEMPTS: int = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
 # Maximum LLM critique calls per generation attempt (guards against TPM exhaustion
@@ -127,10 +105,15 @@ class PluginGenerator:
             self._generating.discard(intent)
 
     async def _on_plugin_approved(self, event):
-        """User has approved a pending plugin. Hot-reload it."""
+        """
+        User has approved a pending plugin — hot-reload it and record
+        a persistent success rule so future generation of this category
+        starts with the winning pattern.
+        """
         data        = event.data or {}
         plugin_name = data.get("name", "")
         plugin_dir  = data.get("plugin_dir", "")
+        intent      = data.get("intent", "")
 
         if not plugin_name:
             return
@@ -152,13 +135,44 @@ class PluginGenerator:
 
             bus.publish(
                 "plugin_deployed",
-                {"name": plugin_name, "intent": data.get("intent", "")},
+                {"name": plugin_name, "intent": intent},
                 source="plugin_generator",
             )
             self.logger.info(f"🚀 Plugin '{plugin_name}' is now live.")
 
         except Exception as e:
             self.logger.error(f"Failed to deploy approved plugin '{plugin_name}': {e}")
+            return
+
+        # ── Persistent approval learning ──────────────────────────────────────
+        # Write a success episode to episodic memory so get_failure_summary()
+        # resets the consecutive_failures counter for this intent.
+        # Also write a generation rule to learner's override_counts so the
+        # category gets an implicit "approved" signal for future ranking.
+        try:
+            await episodic_memory.record_episode(
+                task_id=f"plugin_approved:{plugin_name}",
+                intent=intent,
+                steps=[{"action": f"plugin_generation:{plugin_name}"}],
+                outcome="success",
+                metadata={"plugin_name": plugin_name, "approved_by": "user"},
+            )
+        except Exception as exc:
+            self.logger.debug("Could not record approval episode: %s", exc)
+
+        try:
+            category = template_engine.get_category(intent) if intent else "generic"
+            # _learn_from_override expects an event — build a minimal surrogate
+            class _FakeEvent:
+                def __init__(self, d): self.data = d
+            await learner._learn_from_override(_FakeEvent({
+                "app":            "*",          # cross-app signal
+                "intent":         intent,
+                "chosen_method":  f"plugin:{category}",
+                "default_method": "",
+            }))
+        except Exception as exc:
+            self.logger.debug("Could not write approval rule to learner: %s", exc)
 
     # ── Core Generation Pipeline ───────────────────────────────────────────────
 
@@ -222,29 +236,6 @@ class PluginGenerator:
 
             if not plugin_code:
                 self.logger.warning(f"Generation attempt {attempt + 1} produced no code.")
-                continue
-
-            # ── Static safety scan: reject blocking subprocess calls ──────────
-            # The prompt mandates asyncio.create_subprocess_shell, but LLMs still
-            # default to subprocess.run/call/os.system out of habit. Catch them
-            # here before the sandbox so we get a clean error message, not a
-            # hung process. Also catches bare print() before JSON return.
-            blocking_violation = self._scan_for_blocking_calls(plugin_code)
-            if blocking_violation:
-                self.logger.warning(
-                    f"Attempt {attempt + 1}: static scan caught blocking call — {blocking_violation}. "
-                    f"Feeding back as failure and retrying."
-                )
-                failure_context = self._build_feedback_context(
-                    failure_context,
-                    stage="static_scan",
-                    tweaks=f"BLOCKING CALL DETECTED: {blocking_violation}. "
-                           f"You MUST use asyncio.create_subprocess_shell with asyncio.wait_for.",
-                    test_output="",
-                )
-                if attempt < MAX_GENERATION_ATTEMPTS - 1:
-                    backoff_s = min(12 * (2 ** attempt), 60)
-                    await asyncio.sleep(backoff_s)
                 continue
 
             # Sanitize test patch targets before running the pipeline.
@@ -342,19 +333,25 @@ class PluginGenerator:
         """
         common_reasons = failure_context.get("common_reasons", [])
         prev_attempts  = failure_context.get("previous_attempts", [])
-        category       = failure_context.get("category", "generic")
+
+        # Load permanent cross-session trust rules for this category.
+        # Written by sandbox_runner when AST catches a blocking call.
+        # Injected into the prompt so the LLM sees them on EVERY attempt,
+        # including first attempts after a system restart.
+        trust_rules = self._load_trust_rules_for_category(category)
 
         # ── Call 1: Generate code as plain text (no JSON mode) ────────────────
         # Embedding code in JSON causes Groq to escape newlines and truncate
         # method bodies, making the validator think no methods are implemented.
         #
-        # Token budget guidance: ~1500 tokens for code generation call.
-        # Do NOT add verbosity — the LLM must output ONLY the two code blocks.
+        # NOTE: The skeleton already contains a LOCKED run() and validate()
+        # contract. The LLM writes ONLY the body of _execute(). This is
+        # enforced structurally by the skeleton and by Rule 2 below.
         code_prompt = (
             "You are an expert Python developer for a self-evolving AI OS agent.\n"
-            "Generate a complete, production-quality plugin to handle the failing intent.\n"
+            "Generate a production-quality plugin implementation.\n"
             "\n"
-            f"TARGET OS: {TARGET_OS}  ← Write ALL shell commands and file paths for THIS OS ONLY.\n"
+            f"TARGET OS: {TARGET_OS}  ← Write ALL shell commands and paths for THIS OS ONLY.\n"
             f"OS NOTES:  {OS_SHELL_NOTE}\n"
             "\n"
             f'FAILING INTENT: "{intent}"\n'
@@ -362,138 +359,110 @@ class PluginGenerator:
             f"CONSECUTIVE FAILURES: {failure_context.get('consecutive_failures', 0)}\n"
             f"COMMON FAILURE REASONS: {common_reasons}\n"
             f"PREVIOUS ATTEMPT FAILURES: {prev_attempts}\n"
+            f"{trust_rules}\n"
             "\n"
             "PATTERN LIBRARY — working code patterns for common tasks, copy what you need:\n"
             f"{template_engine.get_pattern_library()}\n"
             "\n"
-            "PLUGIN SKELETON (fill in the TODO sections with real, working logic):\n"
+            "PLUGIN SKELETON — implement the body of _execute() ONLY:\n"
             "```python\n"
             f"{skeleton}\n"
             "```\n"
             "\n"
-            "TEST SKELETON (fill in with real test cases that match your implementation):\n"
-            "```python\n"
-            f"{test_skeleton}\n"
-            "```\n"
-            "\n"
             "CRITICAL RULES:\n"
             "1.  The plugin class MUST subclass BasePlugin.\n"
-            "2.  Do NOT add sys.path manipulation or from __future__ imports — injected automatically.\n"
-            "3.  ALWAYS import asyncio at the top if you use await anywhere.\n"
-            "4.  run() MUST return a dict with a 'status' key ('success' or 'error').\n"
-            "5.  Access ALL services via: capability_registry.get('service_name').\n"
-            "6.  NEVER import from automation/, context/, core/, or safety/ directly.\n"
-            "7.  ALL exceptions must be caught; return {'status': 'error', 'message': str(e)}.\n"
-            "    If a shell command fails, ALWAYS include stderr in the error message, e.g.:\n"
-            "    return {'status': 'error', 'message': f'Command failed: {stderr_text}'}\n"
-            "8.  NO BLOCKING OS CALLS. If executing shell commands you MUST use:\n"
-            "        proc = await asyncio.create_subprocess_shell(\n"
-            "            cmd,\n"
-            "            stdout=asyncio.subprocess.PIPE,\n"
-            "            stderr=asyncio.subprocess.PIPE,\n"
-            "        )\n"
-            "        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)\n"
-            "    Never use subprocess.run(), subprocess.call(), or os.system() — they block\n"
-            "    the entire agent event loop.\n"
-            "9.  SAFE TESTS — ALL OS-level side effects MUST be mocked with unittest.mock.patch.\n"
-            "    This includes: file I/O, shell commands, network requests, process signals.\n"
-            "    Mock the attribute as it is IMPORTED in plugin.py, not where it is defined.\n"
-            "    Example — if plugin.py does 'import asyncio' and calls asyncio.create_subprocess_shell:\n"
-            "        with patch('plugin.asyncio.create_subprocess_shell') as mock_proc:\n"
-            "            mock_proc.return_value.communicate = AsyncMock(return_value=(b'out', b''))\n"
-            "            mock_proc.return_value.returncode = 0\n"
-            "    NEVER patch 'plugin.MagicMock', 'plugin.AsyncMock', or 'plugin.patch' —\n"
-            "    those are mock utilities, not plugin attributes.\n"
-            "10. In TEST CODE: use single braces for dicts — double braces create sets, not dicts.\n"
-            "    Write: {'key': 'value'}  NOT: {{'key': 'value'}}\n"
-            "11. stdout of run() must be ONLY the returned dict serialised as JSON.\n"
-            "    Do NOT print() anything before returning — the sandbox expects clean JSON stdout.\n"
+            "2.  STRICT SCOPE ISOLATION: You are ONLY allowed to write code inside\n"
+            "    the body of the _execute() method. Do NOT rewrite, modify, rename,\n"
+            "    or add arguments to run(), validate(), or any other pre-written method.\n"
+            "    The run() contract is locked by the framework — modifying it causes\n"
+            "    immediate validation rejection.\n"
+            "3.  Do NOT add sys.path manipulation or from __future__ imports.\n"
+            "4.  ALWAYS import asyncio at the top if you use await anywhere.\n"
+            "5.  _execute() must return the type the skeleton specifies:\n"
+            "    - automation category: return a list of strings (step log)\n"
+            "    - all other categories: return a dict (the result payload)\n"
+            "6.  Access ALL services via: capability_registry.get('service_name').\n"
+            "7.  NEVER import from automation/, context/, core/, or safety/ directly.\n"
+            "8.  ALL exceptions must be caught inside _execute(); return the error\n"
+            "    payload as specified in the skeleton. If a shell command fails,\n"
+            "    ALWAYS include stderr in the error message.\n"
+            "9.  NO BLOCKING OS CALLS. Use asyncio.create_subprocess_shell with\n"
+            "    asyncio.wait_for(timeout=30). NEVER use subprocess.run(),\n"
+            "    subprocess.call(), subprocess.Popen(), or os.system().\n"
+            "10. stdout of run() must be clean JSON only. Do NOT print() anything\n"
+            "    inside _execute() or run() — use self.logger.debug() instead.\n"
             "\n"
-            "Output EXACTLY this format — no other text before or after:\n"
+            "Output ONLY the complete plugin.py source. No other text.\n"
             "\n"
             "===PLUGIN_CODE===\n"
             "<complete plugin.py source code here>\n"
-            "===TEST_CODE===\n"
-            "<complete test_plugin.py source code here>\n"
             "===END===\n"
         )
+        # ── Call 2: Metadata only (small JSON, no code) ───────────────────────
+        meta_prompt = f"""Return ONLY valid JSON metadata for a plugin named '{plugin_name}'.
+No markdown, no explanation, just the JSON object.
 
-        # ── Call 2: Metadata only (small JSON, ~300 tokens) ───────────────────
-        # Keep this call SHORT — only the JSON object, no code.
-        meta_prompt = (
-            f"Return ONLY valid JSON metadata for a plugin named '{plugin_name}'.\n"
-            "No markdown, no explanation, just the JSON object.\n"
-            "\n"
-            f'The plugin handles intent: "{intent}"\n'
-            f"Target OS: {TARGET_OS}\n"
-            "\n"
-            "Rules:\n"
-            "- risk_level: 'low' for read/open/display, 'medium' for write/create, 'high' for delete/kill/shell.\n"
-            f"- requires_admin: true if the action needs root/sudo/Administrator on {TARGET_OS}.\n"
-            f"- os_compatibility: list of OS platforms this plugin supports, e.g. ['linux'], ['windows','linux'], or ['all'].\n"
-            "- capabilities: all intent strings this plugin should match (include synonyms).\n"
-            "- parameter_schema: list every arg the plugin's validate() method requires or accepts.\n"
-            '  Each entry: {"name": "<arg>", "required": true|false, "aliases": ["<other_names>"]}\n'
-            "- intent_patterns: how to detect when a misclassified LLM intent should be rerouted here.\n"
-            '  Each entry: {"raw_intents": ["run_command","open","launch"], "command_is_verb": true, "args_is_target": true}\n'
-            "  Leave intent_patterns as [] if no rerouting is needed.\n"
-            "\n"
-            "{\n"
-            f'    "name": "{plugin_name}",\n'
-            '    "description": "<one sentence: what this plugin does>",\n'
-            '    "permissions": ["ui_interaction"],\n'
-            '    "risk_level": "low",\n'
-            '    "requires_admin": false,\n'
-            f'    "os_compatibility": ["{TARGET_OS}"],\n'
-            f'    "capabilities": ["{intent}"],\n'
-            '    "parameter_schema": [\n'
-            '        {"name": "<primary_arg_name>", "required": true, "aliases": ["<alias1>", "<alias2>"]}\n'
-            "    ],\n"
-            '    "intent_patterns": []\n'
-            "}\n"
-        )
+The plugin handles intent: "{intent}"
+
+Rules:
+- risk_level: "low" for read/open/display actions, "medium" for write/create, "high" for delete/shell
+- capabilities: all intent strings this plugin should match (include synonyms)
+- parameter_schema: list every arg the plugin's validate() method requires or accepts
+  Each entry: {{"name": "<arg>", "required": true|false, "aliases": ["<other_names>"]}}
+  aliases = other names the LLM or planner might use for the same value
+- intent_patterns: how to detect when a misclassified LLM intent should be rerouted here
+  Each entry: {{"raw_intents": ["run_command","open","launch"], "command_is_verb": true, "args_is_target": true}}
+  command_is_verb=true means: the LLM put a verb like "open"/"launch" in the command field
+  args_is_target=true means: the real target value is in args[0] positional list
+  Leave intent_patterns as [] if no rerouting is needed.
+
+{{
+    "name": "{plugin_name}",
+    "description": "<one sentence: what this plugin does>",
+    "permissions": ["ui_interaction"],
+    "risk_level": "low",
+    "capabilities": ["{intent}"],
+    "parameter_schema": [
+        {{"name": "<primary_arg_name>", "required": true, "aliases": ["<alias1>", "<alias2>"]}}
+    ],
+    "intent_patterns": []
+}}
+"""
         try:
-            # Call 1: plain text code generation
+            # ── Call 1: Plugin code only (no tests) ───────────────────────────
+            # Tests are generated in Call 3 AFTER we have the real plugin code.
+            # Generating them together causes the LLM to write tests for what
+            # it *intended* to write, not what it *actually* wrote — leading to
+            # wrong mock paths and missing edge cases.
             raw_text = await llm_client.generate(code_prompt, use_json=False)
 
             plugin_code = ""
             tests = ""
 
             if raw_text and isinstance(raw_text, str):
-                plugin_code, tests = self._parse_separator_response(raw_text)
+                plugin_code, _bundled_tests = self._parse_separator_response(raw_text)
+                # Discard _bundled_tests — we regenerate from the real code below
             elif isinstance(raw_text, dict):
-                # Fallback: LLM still returned JSON despite use_json=False
+                # Fallback: LLM returned JSON despite use_json=False
                 plugin_code = self._strip_code_fences(raw_text.get("plugin_code", ""))
-                tests       = self._strip_code_fences(raw_text.get("tests", ""))
 
-            # Call 2: metadata JSON
+            # ── Call 2: Metadata JSON ─────────────────────────────────────────
+            # Small call (~300 tokens). Runs while we still have the plugin code
+            # in context so Call 3 doesn't need to re-read it.
             metadata = {}
             try:
                 meta_result = await llm_client.generate(meta_prompt, use_json=True)
                 if isinstance(meta_result, dict) and "name" in meta_result:
                     metadata = meta_result
-                    # Cross-check: high-risk shell plugins should require admin by default
+                    # Cross-check: high-risk shell plugins should require admin
                     if (
                         metadata.get("risk_level") == "high"
                         and not metadata.get("requires_admin")
-                        and TARGET_OS != "windows"  # Windows elevation handled separately
+                        and TARGET_OS != "windows"
                     ):
-                        self.logger.debug(
-                            "Auto-setting requires_admin=True for high-risk plugin '%s'",
-                            plugin_name,
-                        )
                         metadata["requires_admin"] = True
             except Exception as me:
                 self.logger.debug(f"Metadata generation failed (non-fatal): {me}")
-                metadata = {
-                    "name":             plugin_name,
-                    "description":      f"Auto-generated plugin for: {intent}",
-                    "permissions":      [],
-                    "risk_level":       "low",
-                    "requires_admin":   False,
-                    "os_compatibility": [TARGET_OS],
-                    "capabilities":     [intent],
-                }
 
             if not metadata:
                 metadata = {
@@ -506,6 +475,22 @@ class PluginGenerator:
                     "capabilities":     [intent],
                 }
 
+            # ── Call 3: Test generation from actual plugin code ───────────────
+            # This call sees the *real* plugin_code that was generated, not a
+            # skeleton. The LLM cannot get mock paths wrong because the real
+            # import and attribute names are right there in the code it reads.
+            # Token budget: ~800 tokens (test file is smaller than plugin).
+            if plugin_code:
+                tests = await self._generate_tests_from_code(
+                    plugin_code=plugin_code,
+                    plugin_name=plugin_name,
+                    intent=intent,
+                    category=category,
+                    test_skeleton=test_skeleton,
+                )
+            else:
+                tests = ""
+
             snippet = (plugin_code or "")[:200].replace("\n", "↵")
             self.logger.debug(f"Generated code snippet: {snippet}")
 
@@ -517,6 +502,96 @@ class PluginGenerator:
         return "", "", {}
 
     # ── Post-Generation ────────────────────────────────────────────────────────
+
+    async def _generate_tests_from_code(
+        self,
+        plugin_code: str,
+        plugin_name: str,
+        intent: str,
+        category: str,
+        test_skeleton: str,
+    ) -> str:
+        """
+        Call 3 — Generate tests by reading the ACTUAL plugin code.
+
+        Why separate from _generate_code:
+          - The LLM sees real method names, real imports, real attribute paths
+          - Cannot hallucinate mock patch targets that don't exist
+          - Cannot write assertions for methods that weren't implemented
+          - Produces tests that match what the sandbox will actually execute
+
+        Token budget: ~800 tokens (test files are ~40% of plugin size).
+        """
+        # Retrieve category-specific failure patterns from episodic memory
+        # so the test prompt warns about previously seen test failures.
+        test_failure_context = ""
+        try:
+            from memory.episodic import episodic_memory
+            summary = episodic_memory.get_failure_summary(intent)
+            pytest_failures = [
+                r for r in summary.get("common_reasons", [])
+                if "pytest" in r.lower() or "test" in r.lower() or "mock" in r.lower()
+            ]
+            if pytest_failures:
+                test_failure_context = (
+                    f"\nPREVIOUS TEST FAILURES FOR THIS INTENT (avoid repeating these):\n"
+                    + "\n".join(f"  - {r}" for r in pytest_failures[:3])
+                )
+        except Exception:
+            pass
+
+        test_prompt = (
+            "You are an expert Python test engineer for an AI OS agent.\n"
+            "Write a complete pytest test file for the plugin below.\n"
+            "\n"
+            f"TARGET OS: {TARGET_OS}\n"
+            f"PLUGIN NAME: {plugin_name}\n"
+            f"INTENT: {intent}\n"
+            f"CATEGORY: {category}\n"
+            f"{test_failure_context}\n"
+            "\n"
+            "ACTUAL PLUGIN CODE (read this carefully — write tests FOR THIS CODE):\n"
+            "```python\n"
+            f"{plugin_code}\n"
+            "```\n"
+            "\n"
+            "TEST SKELETON (use as structure guide, fill with real tests):\n"
+            "```python\n"
+            f"{test_skeleton}\n"
+            "```\n"
+            "\n"
+            "CRITICAL TEST RULES:\n"
+            "1.  Import the plugin using: from plugin import <ClassName>\n"
+            "    The class name is visible in the ACTUAL PLUGIN CODE above.\n"
+            "2.  ALL OS-level side effects MUST be mocked. This includes:\n"
+            "    file I/O, shell commands, network, process signals, clipboard.\n"
+            "3.  When mocking asyncio.create_subprocess_shell, patch it exactly\n"
+            "    as it is USED in the plugin — check the actual import path:\n"
+            "    - If plugin does 'import asyncio': patch('plugin.asyncio.create_subprocess_shell')\n"
+            "    - If plugin does 'from asyncio import create_subprocess_shell': patch('plugin.create_subprocess_shell')\n"
+            "    NEVER patch 'plugin.MagicMock', 'plugin.AsyncMock', or 'plugin.patch'.\n"
+            "4.  For async mocks use AsyncMock for coroutine returns:\n"
+            "        mock_proc.communicate = AsyncMock(return_value=(b'out', b''))\n"
+            "5.  Use @pytest.mark.asyncio + async def for tests that call async methods.\n"
+            "    Use asyncio.run() for sync test functions calling async plugin methods.\n"
+            "6.  Use single braces for dicts: {'key': 'value'} NOT {{'key': 'value'}}\n"
+            "7.  Every test must assert on 'status' key in the result.\n"
+            "8.  Include: one structural test, one success path, one error/bad-args path.\n"
+            "9.  Tests must run standalone with pytest — no external services needed.\n"
+            "10. Do NOT test private methods (_execute, _run_cmd) directly — test run().\n"
+            "\n"
+            "Output ONLY the complete test_plugin.py source. No other text.\n"
+        )
+
+        try:
+            raw = await llm_client.generate(test_prompt, use_json=False)
+            if raw and isinstance(raw, str):
+                return self._strip_code_fences(raw.strip())
+        except Exception as e:
+            self.logger.warning(f"Test generation (Call 3) failed: {e} — using skeleton")
+
+        # Fallback: return the skeleton so sandbox still has something to run
+        return test_skeleton
 
     async def _write_and_register(
         self,
@@ -554,22 +629,7 @@ class PluginGenerator:
         )
         manifest.save(plugin_dir)
 
-        # Inject extra fields (requires_admin, os_compatibility) directly into
-        # the saved manifest.json — PluginManifest may not expose these as
-        # constructor kwargs yet, so we patch the JSON file after writing.
-        import json as _json
-        _manifest_path = os.path.join(plugin_dir, "manifest.json")
-        try:
-            with open(_manifest_path, "r", encoding="utf-8") as _f:
-                _mdata = _json.load(_f)
-            _mdata.setdefault("requires_admin",   metadata.get("requires_admin", False))
-            _mdata.setdefault("os_compatibility", metadata.get("os_compatibility", [TARGET_OS]))
-            # Ensure status is written as "active" after approval (guard for boot reload)
-            # — left as "pending" here; _on_plugin_approved flips it via update_status.
-            with open(_manifest_path, "w", encoding="utf-8") as _f:
-                _json.dump(_mdata, _f, indent=2)
-        except Exception as _e:
-            self.logger.debug("Could not patch manifest with extra fields: %s", _e)
+        # Save to plugin_memory for future similarity lookups
         try:
             from plugins.plugin_memory import plugin_memory
             await plugin_memory.save_to_vector_store(
@@ -785,40 +845,49 @@ class PluginGenerator:
         return test_code
 
     @staticmethod
-    def _scan_for_blocking_calls(plugin_code: str) -> str | None:
+    def _load_trust_rules_for_category(category: str) -> str:
         """
-        Statically scan generated plugin code for blocking OS calls that would
-        stall the async agent event loop.
+        Read permanent structural rules for this plugin category from
+        prompt_trust.json['categories'] and return an injected prompt string.
 
-        Returns a human-readable violation string if found, else None.
+        Written by sandbox_runner._record_blocking_trust_rule() when the AST
+        scanner catches a blocking subprocess call. Persists across restarts —
+        the LLM sees the constraint on every future attempt for this category,
+        including the first attempt after a system restart.
 
-        Patterns caught:
-        - subprocess.run(...)       — blocks until process exits
-        - subprocess.call(...)      — same
-        - subprocess.check_output() — same
-        - subprocess.Popen(...)     — not async-safe without run_in_executor
-        - os.system(...)            — blocking shell call
-        - Bare print() before JSON  — contaminates stdout and breaks sandbox
-          JSON validation (Rule 11). Only flagged when it appears OUTSIDE a
-          comment and is not inside a test file section.
+        Returns empty string if no rules exist (safe, non-fatal).
         """
-        import re
-        blocking_patterns = [
-            (r'\bsubprocess\.run\s*\(',         "subprocess.run() is blocking — use asyncio.create_subprocess_shell"),
-            (r'\bsubprocess\.call\s*\(',        "subprocess.call() is blocking — use asyncio.create_subprocess_shell"),
-            (r'\bsubprocess\.check_output\s*\(', "subprocess.check_output() is blocking — use asyncio.create_subprocess_shell"),
-            (r'\bsubprocess\.Popen\s*\(',       "subprocess.Popen() is not async-safe — use asyncio.create_subprocess_shell"),
-            (r'\bos\.system\s*\(',              "os.system() is blocking — use asyncio.create_subprocess_shell"),
+        import json as _json
+        # Try learning/ directory relative to the project root
+        _candidates = [
+            os.path.join("learning", "prompt_trust.json"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "learning", "prompt_trust.json"),
         ]
-        for pattern, message in blocking_patterns:
-            # Skip lines that are pure comments
-            for line in plugin_code.splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    continue
-                if re.search(pattern, line):
-                    return message
-        return None
+        trust_file = next((p for p in _candidates if os.path.exists(p)), None)
+        if not trust_file:
+            return ""
+        try:
+            with open(trust_file, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            rules = data.get("categories", {}).get(category, {})
+            lines = []
+            if rules.get("always_flag_blocking_calls"):
+                lines.append(
+                    f"⚠️ PERMANENT CATEGORY CONSTRAINT for '{category}': "
+                    "Synchronous blocking calls (subprocess.run, subprocess.call, "
+                    "subprocess.Popen, os.system) are PERMANENTLY BANNED. "
+                    "You MUST use asyncio.create_subprocess_shell with "
+                    "asyncio.wait_for(timeout=30). This rule persists across sessions."
+                )
+            if rules.get("enforce_asyncio_subprocess"):
+                lines.append(
+                    f"⚠️ PERMANENT CATEGORY CONSTRAINT for '{category}': "
+                    "All subprocess operations MUST use asyncio.create_subprocess_shell."
+                )
+            return ("\n".join(lines)) if lines else ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _intent_to_plugin_name(intent: str) -> str:
@@ -842,37 +911,29 @@ class PluginGenerator:
             <test_plugin.py content>
             ===END===
 
-        Robust to LLM variations:
-        - Extra whitespace or newlines around delimiters
-        - Partial/truncated ===END=== (LLM cut off mid-response)
-        - Markdown fences inside sections
-        - Missing ===END=== entirely (takes everything after ===TEST_CODE===)
-        Falls back gracefully to code-block extraction if delimiters absent.
+        Falls back gracefully if the LLM didn't follow the format exactly.
         """
         import re
 
-        # Normalize: strip trailing whitespace per line, collapse CRLF
-        raw = raw.replace("\r\n", "\n").strip()
-
-        # Fuzzy delimiter patterns — tolerates spaces, mixed case, missing chars
-        _SEP = lambda name: rf"=={{2,}}\s*{name}\s*=={{2,}}"  # noqa: E731
-
+        # Try exact separator format first
         plugin_match = re.search(
-            _SEP("PLUGIN_CODE") + r"\s*(.*?)\s*" + _SEP("TEST_CODE"),
-            raw, re.DOTALL | re.IGNORECASE,
+            r"===PLUGIN_CODE===\s*(.*?)\s*===TEST_CODE===",
+            raw, re.DOTALL
         )
-        # ===END=== optional — if absent, take to end of string
         test_match = re.search(
-            _SEP("TEST_CODE") + r"\s*(.*?)(?:\s*" + _SEP("END") + r"|$)",
-            raw, re.DOTALL | re.IGNORECASE,
+            r"===TEST_CODE===\s*(.*?)\s*===END===",
+            raw, re.DOTALL
         )
 
         if plugin_match and test_match:
-            plugin_code = PluginGenerator._strip_code_fences(plugin_match.group(1).strip())
-            tests       = PluginGenerator._strip_code_fences(test_match.group(1).strip())
+            plugin_code = plugin_match.group(1).strip()
+            tests       = test_match.group(1).strip()
+            # Strip any markdown fences the LLM added inside the sections
+            plugin_code = PluginGenerator._strip_code_fences(plugin_code)
+            tests       = PluginGenerator._strip_code_fences(tests)
             return plugin_code, tests
 
-        # Fallback: extract two python code blocks from markdown
+        # Fallback: try to extract two code blocks from the raw text
         blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw, re.DOTALL)
         if len(blocks) >= 2:
             return blocks[0].strip(), blocks[1].strip()
@@ -973,10 +1034,18 @@ class PluginGenerator:
 
 
     async def _on_plugin_rejected(self, event):
-        """User rejected a generated plugin. Block further generation for this intent."""
+        """
+        User rejected a generated plugin.
+        1. Blocks further auto-generation for this intent.
+        2. Writes a persistent rejection rule to episodic memory — so the
+           next generation attempt's failure_context includes the user's reason.
+        3. Writes a negative signal to learner's override_counts — so the
+           category's ranking is demoted for this intent.
+        """
         data        = event.data or {}
         plugin_name = data.get("name", "")
         reason      = data.get("reason", "Rejected by user")
+        intent      = data.get("intent", plugin_name.replace("_plugin", "").replace("_", " "))
 
         if not plugin_name:
             return
@@ -1000,6 +1069,37 @@ class PluginGenerator:
             capability_gap_detector._blocked.add(plugin_name)
         except Exception as exc:
             self.logger.debug("Could not block intent '%s': %s", plugin_name, exc)
+
+        # ── Persistent rejection learning ─────────────────────────────────────
+        # Write a failure episode tagged with the user's reason so the next
+        # generation attempt (if manually triggered) sees it in failure_context.
+        try:
+            await episodic_memory._record_failure(
+                intent=intent,
+                reason=f"[user_rejected] {reason[:300]}",
+                attempts=1,
+            )
+            category = template_engine.get_category(intent) if intent else "generic"
+            import time as _t
+            await episodic_memory.store(
+                key=f"plugin_rejected:{plugin_name}:{int(_t.time())}",
+                content={
+                    "intent":           intent,
+                    "plugin_name":      plugin_name,
+                    "stage":            "user_rejected",
+                    "reason":           reason[:400],
+                    "suggested_tweaks": (
+                        f"The user rejected this plugin with reason: '{reason}'. "
+                        f"Address this specific issue in the next attempt."
+                    ),
+                    "category":         category,
+                    "outcome":          "failure",
+                    "capability_used":  f"plugin_generation:{category}",
+                },
+                tags=["plugin_generation", "user_rejected", category, intent],
+            )
+        except Exception as exc:
+            self.logger.debug("Could not record rejection episode: %s", exc)
 
         bus.publish(
             "plugin_blocked",
