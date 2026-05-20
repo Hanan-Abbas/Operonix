@@ -16,6 +16,7 @@ import logging
 import os
 
 from core.event_bus import bus
+from plugins.context_builder import plugin_context_builder
 from plugins.plugin_validator import plugin_validator
 from safety.sandbox import sandbox
 
@@ -134,12 +135,25 @@ class SandboxRunner:
 
         # ── Stage 1: LLM Code Audit ───────────────────────────────────────────
         self.logger.info(f"🔍 [Stage 1] LLM audit for '{plugin_name}'...")
+        # Derive allowed_services from the manifest file if it exists on disk,
+        # otherwise fall back to empty list (manifest not yet written at Stage 1).
+        _manifest_path = os.path.join(plugin_dir, "manifest.json")
+        _declared_services: list[str] = []
+        if os.path.exists(_manifest_path):
+            try:
+                import json as _json
+                with open(_manifest_path) as _mf:
+                    _declared_services = _json.load(_mf).get("allowed_services", [])
+            except Exception:
+                pass
+
         audit = await plugin_validator.validate_plugin(
             plugin_name=plugin_name,
             plugin_code=plugin_code,
             intent=intent,
             failure_summary=failure_summary,
             category=category,
+            allowed_services=_declared_services,
         )
         report["llm_audit"] = audit
 
@@ -198,12 +212,30 @@ class SandboxRunner:
 
         # ── Stage 2: Sandbox Execution Test ───────────────────────────────────
         self.logger.info(f"🏗️ [Stage 2] Sandbox execution test for '{plugin_name}'...")
+
+        # Build a scoped service context from the manifest's allowed_services.
+        # The sandbox receives only what the plugin declared — nothing more.
+        # During the validation pipeline the manifest hasn't been written yet,
+        # so we derive allowed_services from the LLM audit result if present,
+        # falling back to an empty list (safe default: no live services in test).
+        _allowed = (
+            (audit.get("allowed_services") or [])
+            if audit
+            else []
+        )
+        _service_ctx = plugin_context_builder.build_for(
+            plugin_name=plugin_name,
+            allowed_services=_allowed,
+            task_id=None,   # no task_id during validation pipeline
+        )
+
         sandbox_result = await sandbox.run_plugin(
             plugin_path=plugin_file,
             context={"active_window": "test", "app_type": "sandbox_test"},
             args={},
             timeout=30,
             category=category,
+            service_ctx=_service_ctx,
         )
         report["sandbox_run"] = sandbox_result.to_dict()
 
@@ -350,16 +382,23 @@ class SandboxRunner:
         plugin_path: str,
         context: dict | None = None,
         args: dict | None = None,
+        allowed_services: list[str] | None = None,
     ) -> dict:
         """
         Lightweight sandbox test without LLM audit or pytest.
         Used by plugin_evolver for quick iteration checks.
+
+        `allowed_services` should be passed from the plugin's manifest
+        so the evolver's test runs with the same scoped context the
+        deployed plugin will receive.
         """
+        _service_ctx = plugin_context_builder.build(allowed_services or [])
         result = await sandbox.run_plugin(
             plugin_path=plugin_path,
             context=context or {},
             args=args or {},
             timeout=20,
+            service_ctx=_service_ctx,
         )
         return result.to_dict()
 
