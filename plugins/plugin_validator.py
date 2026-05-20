@@ -28,6 +28,52 @@ class PluginValidator:
     def __init__(self):
         self.logger = logging.getLogger("PluginValidator")
 
+    def check_declared_services(
+        self,
+        plugin_name: str,
+        allowed_services: list[str],
+    ) -> dict | None:
+        """
+        Stage 0 pre-check: validates the `allowed_services` list in the
+        manifest against VALID_SERVICES before any code execution or LLM
+        audit is attempted.
+
+        Returns a failure dict (same shape as validate_plugin) if any
+        unknown service token is declared, else None (all clear).
+
+        Called by sandbox_runner BEFORE _ast_semantic_check so a manifest
+        typo is caught with zero LLM cost and a precise error message.
+        """
+        try:
+            from plugins.context_builder import VALID_SERVICES
+        except ImportError:
+            self.logger.warning(
+                "check_declared_services: could not import VALID_SERVICES — skipping."
+            )
+            return None
+
+        unknown = [s for s in allowed_services if s not in VALID_SERVICES]
+        if not unknown:
+            return None  # all clear
+
+        self.logger.warning(
+            "Plugin '%s' declared unknown services: %s", plugin_name, unknown
+        )
+        return {
+            "valid": False,
+            "reason": (
+                f"Plugin declares unknown service(s) in allowed_services: {unknown}. "
+                f"Every service must be a registered token in VALID_SERVICES. "
+                f"Valid tokens: {sorted(VALID_SERVICES)}"
+            ),
+            "suggested_tweaks": (
+                f"Remove or correct these entries in allowed_services: {unknown}. "
+                f"Only use tokens from the VALID_SERVICES registry in "
+                f"plugins/context_builder.py."
+            ),
+            "safety_concerns": f"Undeclared service access attempted: {unknown}",
+        }
+
     async def validate_plugin(
         self,
         plugin_name: str,
@@ -35,6 +81,7 @@ class PluginValidator:
         intent: str,
         failure_summary: dict | None = None,
         category: str = "generic",
+        allowed_services: list[str] | None = None,
     ) -> dict:
         """
         Sends generated plugin code to Gemini for critique.
@@ -54,6 +101,14 @@ class PluginValidator:
             }
         """
         self.logger.info(f"🔍 Validating plugin '{plugin_name}' for intent '{intent}'...")
+
+        # ── Service declaration check (zero LLM cost, ~0ms) ───────────────────
+        # Runs before structural precheck. Catches manifest typos in
+        # allowed_services before any AST parsing or LLM call is made.
+        if allowed_services:
+            svc_fail = self.check_declared_services(plugin_name, allowed_services)
+            if svc_fail is not None:
+                return svc_fail
 
         # ── Structural pre-check ───────────────────────────────────────────────
         # Groq's JSON mode sometimes truncates method bodies to keep JSON valid,
