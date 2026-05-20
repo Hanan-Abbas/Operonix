@@ -55,6 +55,45 @@ from safety.risk_rules import (
     get_web_op_risk,
 )
 
+# ── Service-level risk classification ────────────────────────────────────────
+# Maps every VALID_SERVICES token to a RiskLevel.
+# This table is the single source of truth for "is this service dangerous?"
+# context_builder.build() calls check_services() before provisioning anything.
+
+_SERVICE_RISK: dict[str, RiskLevel] = {
+    # read-only / passive — cleared immediately
+    "window_context":    RiskLevel.SAFE,
+    "app_classifier":    RiskLevel.SAFE,
+    "app_profiler":      RiskLevel.SAFE,
+    "screen_reader":     RiskLevel.SAFE,
+    "session_memory":    RiskLevel.SAFE,
+    "episodic_memory":   RiskLevel.SAFE,
+    "text_ops":          RiskLevel.SAFE,
+
+    # UI interaction — low, not destructive
+    "selector_engine":   RiskLevel.LOW,
+    "ui_fallback":       RiskLevel.LOW,
+    "ui_tool":           RiskLevel.LOW,
+    "ui_ops":            RiskLevel.LOW,
+
+    # file system — LOW for reads, HIGH for writes/deletes handled downstream
+    "file_tool":         RiskLevel.LOW,
+    "file_ops":          RiskLevel.LOW,
+    "smart_file_patcher": RiskLevel.LOW,
+
+    # web / api — LOW, no local side-effects
+    "web_ops":           RiskLevel.LOW,
+    "api_tool":          RiskLevel.LOW,
+
+    # persistent plugin state — LOW
+    "plugin_memory":     RiskLevel.LOW,
+
+    # shell / terminal — HIGH, can execute arbitrary system commands
+    "terminal_resolver": RiskLevel.HIGH,
+    "shell_tool":        RiskLevel.HIGH,
+    "process_bridge":    RiskLevel.HIGH,
+}
+
 logger = logging.getLogger("PermissionGuard")
 
 # ---------------------------------------------------------------------------
@@ -207,6 +246,89 @@ class PermissionGuard:
                 data,
                 source="permission_guard",
             )
+
+    # ── Service permission gate ────────────────────────────────────────────
+    # Called by context_builder.build() BEFORE any service is instantiated.
+    # Returns (allowed: bool, blocked_services: list[str], reason: str)
+
+    def check_services(
+        self,
+        plugin_name: str,
+        allowed_services: list[str],
+        task_id: str | None = None,
+    ) -> tuple[bool, list[str], str]:
+        """
+        Gate called by context_builder.build() before provisioning services.
+
+        For each declared service:
+          - SAFE / LOW  → provisioned silently
+          - HIGH        → publish confirmation_required; block until resolved
+          - FORBIDDEN   → hard block, publish task_failed
+
+        Returns:
+            (all_clear: bool, blocked: list[str], reason: str)
+
+        `blocked` contains the service tokens that were denied.
+        If all_clear is False, context_builder must NOT provision any
+        blocked service — it passes only the cleared subset to the plugin.
+        """
+        blocked: list[str] = []
+        high_services: list[str] = []
+
+        for svc in allowed_services:
+            risk = _SERVICE_RISK.get(svc, RiskLevel.LOW)
+
+            if risk == RiskLevel.FORBIDDEN:
+                reason = (
+                    f"Plugin '{plugin_name}' requested forbidden service '{svc}'. "
+                    f"This service is permanently blocked."
+                )
+                logger.warning("🚫 FORBIDDEN service '%s' requested by '%s'.", svc, plugin_name)
+                bus.publish(
+                    "task_failed",
+                    {
+                        "task_id": task_id,
+                        "error":   reason,
+                        "stage":   "permission_guard.check_services",
+                    },
+                    source="permission_guard",
+                )
+                blocked.append(svc)
+
+            elif risk == RiskLevel.HIGH:
+                high_services.append(svc)
+
+        if high_services:
+            reason = (
+                f"Plugin '{plugin_name}' requires high-risk services: "
+                f"{high_services}. User approval needed."
+            )
+            logger.warning(
+                "⚠️ High-risk services %s requested by plugin '%s' — escalating.",
+                high_services, plugin_name,
+            )
+            bus.publish(
+                "confirmation_required",
+                {
+                    "task_id":          task_id,
+                    "reason":           reason,
+                    "plugin_name":      plugin_name,
+                    "high_services":    high_services,
+                    "risk_level":       "high",
+                    "source":           "plugin_service_gate",
+                },
+                source="permission_guard",
+            )
+            blocked.extend(high_services)
+
+        if blocked:
+            return False, blocked, f"Blocked services: {blocked}"
+
+        return True, [], "All services cleared."
+
+    def _evaluate_service_risk(self, svc: str) -> RiskLevel:
+        """Return the RiskLevel for a single service token."""
+        return _SERVICE_RISK.get(svc, RiskLevel.LOW)
 
     # ── Risk evaluator ─────────────────────────────────────────────────────
 
