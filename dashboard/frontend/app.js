@@ -252,10 +252,6 @@ const App = (() => {
       _wsReady = true;
       _wsReconnectMs = CONFIG.WS_RECONNECT_INITIAL_MS;
       _setWsState("connected");
-      // Fetch a fresh health snapshot now that WS is up — after this the
-      // interval poll is suppressed while WS is alive (see health poll guard).
-      health.poll();
-      health.pollDetailed();
       // Subscribe to all channels
       ws.send({ action: "SUBSCRIBE", channels: [] });
       // Start heartbeat
@@ -294,13 +290,28 @@ const App = (() => {
     if (msg.type === "event") {
       const etype = msg.event_type;
 
-      // Safety confirmation intercept — store task_id before showing modal
+      // Safety confirmation intercept
       if (etype === "confirmation_required") {
-        // Store the task_id so safety.respond() can send it back to
-        // websocket.py, which needs it to emit user_response_received.
+        // Plugin approval requests have type:"plugin_approval" — they need
+        // APPROVE_PLUGIN / REJECT_PLUGIN WS actions which publish
+        // plugin_approved / plugin_rejected on the EventBus for the generator
+        // to handle.  Routing them through confirm_approved/confirm_denied
+        // would send the response to ConfirmationManager (wrong handler) and
+        // the plugin would never be deployed to its target directory.
+        if (msg.data?.type === "plugin_approval") {
+          pluginApproval.show(msg.data);
+          return;
+        }
+        // All other confirmation_required → standard safety modal
         _pendingConfirmTaskId = msg.data?.task_id || null;
         safety.show(msg.data);
         return;
+      }
+
+      // Plugin lifecycle events — keep approval panel in sync
+      if (["plugin_approved","plugin_rejected","plugin_installed",
+           "plugin_generation_failed","plugin_validation_failed"].includes(etype)) {
+        pluginApproval.onLifecycleEvent(etype, msg.data);
       }
 
       // Dispatch to all registered listeners
@@ -615,6 +626,364 @@ const App = (() => {
   };
 
 
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PLUGIN APPROVAL
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // Handles confirmation_required { type:"plugin_approval" } events emitted
+  // by generator.py for medium/high-risk plugins.
+  //
+  // Flow:
+  //   generator.py  → bus.publish("confirmation_required", {type:"plugin_approval",...})
+  //   websocket.py  → forwards to dashboard as WS event
+  //   _dispatch()   → routes to pluginApproval.show()   (NOT safety modal)
+  //   User clicks   → ws.send({action:"APPROVE_PLUGIN"|"REJECT_PLUGIN", name,...})
+  //   websocket.py  → bus.publish("plugin_approved"|"plugin_rejected",...)
+  //   generator.py  → _on_plugin_approved() → deploys plugin to plugins/installed/
+  //
+  // Plugins queue up — if multiple arrive while the user is away, none are
+  // lost. They can be reviewed one by one.
+
+  const pluginApproval = (() => {
+    const _queue = [];   // pending approval items
+    let _currentIdx = 0;
+    let _panelVisible = false;
+
+    // ── DOM helpers ─────────────────────────────────────────────────────
+
+    function _getPanel()   { return document.getElementById("pluginApprovalPanel"); }
+    function _getBackdrop(){ return document.getElementById("pluginApprovalBackdrop"); }
+    function _getBadge()   { return document.getElementById("pluginApprovalBadge"); }
+
+    function _updateBadge() {
+      const badge = _getBadge();
+      if (!badge) return;
+      badge.textContent = _queue.length;
+      badge.style.display = _queue.length > 0 ? "" : "none";
+    }
+
+    // ── CSS (injected once) ──────────────────────────────────────────────
+
+    function _injectCSS() {
+      if (document.getElementById("pluginApprovalCSS")) return;
+      const style = document.createElement("style");
+      style.id = "pluginApprovalCSS";
+      style.textContent = `
+        .pap-backdrop {
+          position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9998;
+        }
+        .pap-backdrop.pap-hidden { display:none; }
+        .plugin-approval-panel {
+          position:fixed; top:50%; left:50%;
+          transform:translate(-50%,-50%);
+          z-index:9999;
+          width:min(520px,92vw); max-height:82vh;
+          display:flex; flex-direction:column;
+          background:var(--color-background-primary,#1a1a2e);
+          border:1px solid var(--color-border-secondary,#334);
+          border-radius:12px;
+          box-shadow:0 24px 64px rgba(0,0,0,.65);
+          overflow:hidden; font-family:inherit;
+        }
+        .plugin-approval-panel.pap-hidden { display:none; }
+        .pap-header {
+          display:flex; align-items:center; justify-content:space-between;
+          padding:14px 16px;
+          background:var(--color-background-secondary,#16213e);
+          border-bottom:1px solid var(--color-border-tertiary,#223);
+        }
+        .pap-title {
+          display:flex; align-items:center; gap:8px;
+          font-size:14px; font-weight:600;
+          color:var(--color-text-primary,#e2e8f0);
+        }
+        .pap-count {
+          background:var(--color-background-warning,#78350f);
+          color:var(--color-text-warning,#fbbf24);
+          font-size:11px; font-weight:700;
+          padding:2px 7px; border-radius:99px;
+        }
+        .pap-close {
+          background:none; border:none;
+          color:var(--color-text-tertiary,#64748b);
+          font-size:20px; cursor:pointer; line-height:1; padding:0 4px;
+        }
+        .pap-close:hover { color:var(--color-text-primary,#e2e8f0); }
+        .pap-body { flex:1; overflow-y:auto; padding:16px; }
+        .pap-empty {
+          font-size:13px; color:var(--color-text-tertiary,#64748b);
+          text-align:center; padding:28px 0;
+        }
+        .pap-card {
+          background:var(--color-background-secondary,#16213e);
+          border:1px solid var(--color-border-tertiary,#223);
+          border-radius:8px; padding:14px; margin-bottom:10px;
+        }
+        .pap-card.pap-active { border-color:var(--color-border-accent,#6366f1); }
+        .pap-card-header {
+          display:flex; align-items:center; justify-content:space-between;
+          margin-bottom:10px;
+        }
+        .pap-plugin-name {
+          font-size:13px; font-weight:600;
+          color:var(--color-text-primary,#e2e8f0);
+          font-family:var(--font-mono,monospace);
+        }
+        .pap-risk { font-size:10px; font-weight:600; padding:2px 8px; border-radius:99px; text-transform:uppercase; }
+        .pap-risk.low    { background:#14532d; color:#86efac; }
+        .pap-risk.medium { background:#78350f; color:#fbbf24; }
+        .pap-risk.high   { background:#7f1d1d; color:#fca5a5; }
+        .pap-row {
+          display:grid; grid-template-columns:90px 1fr;
+          gap:4px 8px; font-size:12px; margin-bottom:5px;
+        }
+        .pap-row-label { color:var(--color-text-tertiary,#64748b); }
+        .pap-row-value { color:var(--color-text-secondary,#94a3b8); word-break:break-all; }
+        .pap-desc {
+          font-size:12px; color:var(--color-text-secondary,#94a3b8);
+          margin-top:8px; padding-top:8px;
+          border-top:1px solid var(--color-border-tertiary,#223);
+          line-height:1.5;
+        }
+        .pap-nav {
+          display:flex; align-items:center; justify-content:center;
+          gap:12px; padding:8px 0 0;
+          font-size:12px; color:var(--color-text-tertiary,#64748b);
+        }
+        .pap-nav button {
+          background:none;
+          border:1px solid var(--color-border-tertiary,#334);
+          border-radius:6px; color:var(--color-text-secondary,#94a3b8);
+          padding:3px 10px; cursor:pointer; font-size:12px;
+        }
+        .pap-nav button:disabled { opacity:.35; cursor:default; }
+        .pap-footer {
+          display:flex; gap:10px; padding:12px 16px;
+          border-top:1px solid var(--color-border-tertiary,#223);
+          background:var(--color-background-secondary,#16213e);
+        }
+        .pap-btn {
+          flex:1; padding:10px 0; border:none; border-radius:8px;
+          font-size:13px; font-weight:600; cursor:pointer; transition:opacity .15s;
+        }
+        .pap-btn:hover { opacity:.85; }
+        .pap-btn--approve { background:#166534; color:#bbf7d0; }
+        .pap-btn--deny    { background:#7f1d1d; color:#fecaca; }
+        .plugin-approval-badge {
+          display:inline-flex; align-items:center; justify-content:center;
+          min-width:18px; height:18px; padding:0 5px;
+          background:#fbbf24; color:#1a1a2e;
+          border-radius:99px; font-size:10px; font-weight:700;
+          margin-left:6px; vertical-align:middle;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // ── Panel DOM builder ────────────────────────────────────────────────
+
+    function _ensurePanel() {
+      if (_getPanel()) return;
+      _injectCSS();
+
+      // Backdrop
+      const bd = document.createElement("div");
+      bd.id = "pluginApprovalBackdrop";
+      bd.className = "pap-backdrop pap-hidden";
+      bd.addEventListener("click", hide);
+      document.body.appendChild(bd);
+
+      // Panel
+      const panel = document.createElement("div");
+      panel.id = "pluginApprovalPanel";
+      panel.className = "plugin-approval-panel pap-hidden";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", "Plugin Approval");
+      panel.innerHTML = `
+        <div class="pap-header">
+          <div class="pap-title">
+            <span>🔌</span>
+            <span>Plugin Approval</span>
+            <span class="pap-count" id="papCount">0</span>
+          </div>
+          <button class="pap-close" id="papCloseBtn" aria-label="Close">×</button>
+        </div>
+        <div class="pap-body" id="papBody">
+          <div class="pap-empty">No plugins awaiting approval.</div>
+        </div>
+        <div class="pap-footer pap-hidden" id="papFooter">
+          <button class="pap-btn pap-btn--deny"    id="papDenyBtn">✕ Reject</button>
+          <button class="pap-btn pap-btn--approve" id="papApproveBtn">✓ Approve &amp; Deploy</button>
+        </div>
+      `;
+      document.body.appendChild(panel);
+
+      // Wire footer buttons
+      document.getElementById("papApproveBtn").addEventListener("click", () => respond(true));
+      document.getElementById("papDenyBtn").addEventListener("click",    () => respond(false));
+      document.getElementById("papCloseBtn").addEventListener("click",   hide);
+
+      // Keyboard: Escape = close
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && _panelVisible) hide();
+      });
+    }
+
+    // ── Content renderer ─────────────────────────────────────────────────
+
+    function _refresh() {
+      _ensurePanel();
+      const body   = document.getElementById("papBody");
+      const footer = document.getElementById("papFooter");
+      const count  = document.getElementById("papCount");
+      if (!body) return;
+
+      if (count) count.textContent = _queue.length;
+
+      if (_queue.length === 0) {
+        body.innerHTML = '<div class="pap-empty">No plugins awaiting approval.</div>';
+        if (footer) footer.classList.add("pap-hidden");
+        return;
+      }
+
+      _currentIdx = Math.min(_currentIdx, _queue.length - 1);
+      const item = _queue[_currentIdx];
+      const risk = (item.risk_level || item.risk || "medium").toLowerCase();
+      const name = esc(item.name || item.plugin_name || "unknown");
+
+      body.innerHTML = `
+        <div class="pap-card pap-active">
+          <div class="pap-card-header">
+            <span class="pap-plugin-name">${name}</span>
+            <span class="pap-risk ${risk}">${esc(risk)} risk</span>
+          </div>
+          <div class="pap-row">
+            <span class="pap-row-label">Intent</span>
+            <span class="pap-row-value">${esc(item.intent || "—")}</span>
+          </div>
+          <div class="pap-row">
+            <span class="pap-row-label">Directory</span>
+            <span class="pap-row-value">${esc(item.plugin_dir || "—")}</span>
+          </div>
+          <div class="pap-row">
+            <span class="pap-row-label">Reason</span>
+            <span class="pap-row-value">${esc(item.reason || "—")}</span>
+          </div>
+          ${item.description
+            ? `<div class="pap-desc">${esc(item.description)}</div>`
+            : ""}
+        </div>
+        ${_queue.length > 1 ? `
+          <div class="pap-nav">
+            <button id="papPrev" ${_currentIdx === 0 ? "disabled" : ""}>← Prev</button>
+            <span>${_currentIdx + 1} / ${_queue.length}</span>
+            <button id="papNext" ${_currentIdx >= _queue.length - 1 ? "disabled" : ""}>Next →</button>
+          </div>` : ""}
+      `;
+
+      if (_queue.length > 1) {
+        const prev = document.getElementById("papPrev");
+        const next = document.getElementById("papNext");
+        if (prev) prev.addEventListener("click", () => { _currentIdx = Math.max(0, _currentIdx - 1); _refresh(); });
+        if (next) next.addEventListener("click", () => { _currentIdx = Math.min(_queue.length - 1, _currentIdx + 1); _refresh(); });
+      }
+
+      if (footer) footer.classList.remove("pap-hidden");
+    }
+
+    // ── Public API ───────────────────────────────────────────────────────
+
+    function show(data) {
+      _ensurePanel();
+      // Deduplicate by plugin name
+      const name = data.name || data.plugin_name;
+      if (name && _queue.some(q => (q.name || q.plugin_name) === name)) return;
+
+      _queue.push(data);
+      _currentIdx = _queue.length - 1;
+      _updateBadge();
+
+      toast.show(
+        "warn",
+        "Plugin Approval Required",
+        `"${esc(name || "new plugin")}" ready — ${_queue.length} pending`,
+        8000,
+      );
+
+      _panelVisible = true;
+      _getPanel().classList.remove("pap-hidden");
+      _getBackdrop().classList.remove("pap-hidden");
+      _refresh();
+    }
+
+    function hide() {
+      const panel = _getPanel();
+      const bd    = _getBackdrop();
+      if (panel) panel.classList.add("pap-hidden");
+      if (bd)    bd.classList.add("pap-hidden");
+      _panelVisible = false;
+    }
+
+    function respond(approved) {
+      if (_queue.length === 0) return;
+      const item = _queue[_currentIdx];
+      const name = item.name || item.plugin_name || "";
+
+      if (approved) {
+        ws.send({
+          action:     "APPROVE_PLUGIN",
+          name:       name,
+          intent:     item.intent     || name,
+          plugin_dir: item.plugin_dir || "",
+        });
+        toast.show("success", "Plugin Approved", `"${esc(name)}" sent for deployment.`);
+      } else {
+        const reason = window.prompt(`Reason for rejecting "${name}"?`) || "Rejected by user";
+        ws.send({ action: "REJECT_PLUGIN", name, reason });
+        toast.show("warn", "Plugin Rejected", `"${esc(name)}" rejected.`);
+      }
+
+      _queue.splice(_currentIdx, 1);
+      _currentIdx = Math.max(0, _currentIdx - 1);
+      _updateBadge();
+
+      if (_queue.length === 0) { hide(); }
+      else { _refresh(); }
+    }
+
+    function onLifecycleEvent(etype, data) {
+      // Remove from queue if approved/rejected via another path (auto-approve, other tab)
+      if (etype === "plugin_approved" || etype === "plugin_rejected") {
+        const name = data?.name || data?.plugin_name;
+        if (name) {
+          const idx = _queue.findIndex(q => (q.name || q.plugin_name) === name);
+          if (idx >= 0) {
+            _queue.splice(idx, 1);
+            _currentIdx = Math.max(0, _currentIdx - 1);
+            _updateBadge();
+            _refresh();
+          }
+        }
+      }
+      if (etype === "plugin_installed") {
+        const n = data?.name || data?.plugin_name || "plugin";
+        toast.show("success", "Plugin Installed", `"${esc(n)}" is now active.`);
+      }
+      if (etype === "plugin_generation_failed") {
+        toast.show("error", "Plugin Generation Failed", esc(data?.reason || data?.name || ""));
+      }
+      if (etype === "plugin_validation_failed") {
+        toast.show("warn", "Plugin Validation Failed",
+          `"${esc(data?.name || "")}" failed at stage "${esc(data?.stage || "?")}".`);
+      }
+    }
+
+    return { show, hide, respond, onLifecycleEvent };
+  })();
+
+
   // ═══════════════════════════════════════════════════════════════════════
   // SAFETY CONFIRMATION
   // ═══════════════════════════════════════════════════════════════════════
@@ -810,16 +1179,9 @@ const App = (() => {
     // 2. Connect WS
     _connect();
 
-    // 3. Health poll — HTTP polling is the fallback when WS is disconnected.
-    // When WS is alive the server pushes health events over the socket, so
-    // parallel HTTP polls are redundant and cause the connection-churn seen
-    // in the stress test logs (new WS connection opened per poll cycle).
-    // We do an immediate poll on startup (WS may not be open yet), then only
-    // continue polling on the interval while WS is disconnected.
+    // 3. Health poll
     health.poll();
     _healthInterval = setInterval(() => {
-      // Skip HTTP health poll when WebSocket is open — data arrives via WS.
-      if (_wsReady) return;
       health.poll();
       health.pollDetailed();
     }, CONFIG.HEALTH_POLL_MS);
@@ -926,6 +1288,26 @@ const App = (() => {
       toast.show("success", "Capabilities Remapped", "Capability graph rebuilt.");
     });
 
+    // 16. Plugin approval — also listen on plugin_ready_for_approval (secondary
+    //     event name the generator publishes directly).
+    ws.on("plugin_ready_for_approval", (data) => {
+      pluginApproval.show(data);
+    });
+
+    // 17. Inject plugin approval badge next to Plugins nav item if not in HTML
+    (function _ensureApprovalBadge() {
+      if (document.getElementById("pluginApprovalBadge")) return;
+      const pluginsNav = Array.from(document.querySelectorAll(".nav-item"))
+        .find(el => el.textContent.trim().toLowerCase().includes("plugin"));
+      if (pluginsNav) {
+        const badge = document.createElement("span");
+        badge.id = "pluginApprovalBadge";
+        badge.className = "plugin-approval-badge";
+        badge.style.display = "none";
+        pluginsNav.appendChild(badge);
+      }
+    })();
+
     // 15. Keyboard shortcut: Escape closes confirm modal
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
@@ -969,6 +1351,7 @@ const App = (() => {
     health,
     system,
     safety,
+    pluginApproval,
     toast,
 
     // Navigation
