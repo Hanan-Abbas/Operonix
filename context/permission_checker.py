@@ -15,6 +15,40 @@ class PermissionChecker:
         self.restricted_paths = ["/etc", "/bin", "/usr/bin"]  # UNIX system paths
         self.restricted_actions = {"format_disk", "run_shell"}
 
+        # Services that require elevated OS permissions or are outright blocked
+        # in the current environment.  Checked by context_builder before
+        # provisioning any service for a plugin.
+        self.restricted_services: set[str] = set()          # blocked entirely
+        self.admin_required_services: set[str] = {          # need root/admin
+            "process_bridge",
+        }
+
+    # -------------------------
+    # Service Permission Check  ← NEW
+    # -------------------------
+    def check_service_access(self, service: str) -> tuple[bool, str]:
+        """
+        Returns (True, "Allowed") if the service can be provisioned in the
+        current OS environment.
+        Returns (False, reason) if the service is restricted or requires
+        admin privileges the agent doesn't have.
+
+        Called by context_builder.build() for every service in
+        manifest.allowed_services after permission_guard.check_services().
+        """
+        if service in self.restricted_services:
+            return False, f"Service '{service}' is restricted in this environment."
+
+        if service in self.admin_required_services:
+            if not self._is_admin():
+                return (
+                    False,
+                    f"Service '{service}' requires admin/root privileges "
+                    f"which the agent does not currently have.",
+                )
+
+        return True, "Service access allowed."
+
     # -------------------------
     # Action Permission Check
     # -------------------------
