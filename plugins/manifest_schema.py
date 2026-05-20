@@ -16,6 +16,12 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+# Re-export so callers can do:  from plugins.manifest_schema import VALID_SERVICES
+# The canonical set lives in context_builder to avoid a circular import
+# (context_builder imports from tools/context/capabilities; manifest_schema
+#  must not import those directly).
+from plugins.context_builder import VALID_SERVICES as VALID_SERVICES  # noqa: F401
+
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -223,5 +229,13 @@ def validate_manifest_dict(data: dict) -> tuple[bool, str]:
     name = data.get("name", "")
     if not name.replace("_", "").replace("-", "").isalnum():
         return False, f"Plugin name must be alphanumeric (with _ or -): '{name}'"
+
+    # Validate that every declared service is a known token
+    for svc in data.get("allowed_services", []):
+        if svc not in VALID_SERVICES:
+            return False, (
+                f"Unknown service '{svc}' in allowed_services. "
+                f"Valid tokens: {sorted(VALID_SERVICES)}"
+            )
 
     return True, ""
