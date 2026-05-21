@@ -382,6 +382,27 @@ class PluginGenerator:
             f"PREVIOUS ATTEMPT FAILURES: {prev_attempts}\n"
             f"{trust_rules}\n"
             "\n"
+            "SERVICE INJECTION CONTRACT:\n"
+            "Every plugin's run() and _execute() receive service_ctx as a keyword arg.\n"
+            "service_ctx is a dict containing ONLY the services declared in allowed_services.\n"
+            "Access services defensively with .get() — a None value means it was blocked:\n"
+            "\n"
+            "  get_window  = (service_ctx or {}).get('window_context')  # callable → fresh snapshot\n"
+            "  win         = get_window() if get_window else {}\n"
+            "  focused_app = win.get('focused_app', 'unknown')\n"
+            "  window_rect = win.get('window_rect', {})\n"
+            "\n"
+            "  shell     = (service_ctx or {}).get('shell_tool')       # ShellTool instance\n"
+            "  term      = (service_ctx or {}).get('terminal_resolver') # TerminalResolver instance\n"
+            "  file_tool = (service_ctx or {}).get('file_tool')         # FileTool instance\n"
+            "  mem       = (service_ctx or {}).get('session_memory')    # SessionMemory instance\n"
+            "\n"
+            "RULE: Only access services your plugin declared in allowed_services.\n"
+            "RULE: Always fall back to stdlib if service_ctx.get(...) returns None.\n"
+            "RULE: run() signature MUST be: async def run(self, context, args, service_ctx=None, **kwargs)\n"
+            "RULE: _execute() signature MUST be: async def _execute(self, args, service_ctx=None)\n"
+            "RULE: Pass service_ctx down: result = await self._execute(args, service_ctx=service_ctx or {})\n"
+            "\n"
             "PATTERN LIBRARY — working code patterns for common tasks, copy what you need:\n"
             f"{template_engine.get_pattern_library()}\n"
             "\n"
@@ -402,7 +423,7 @@ class PluginGenerator:
             "5.  _execute() must return the type the skeleton specifies:\n"
             "    - automation category: return a list of strings (step log)\n"
             "    - all other categories: return a dict (the result payload)\n"
-            "6.  Access ALL services via: capability_registry.get('service_name').\n"
+            "6.  Access ALL services via: service_ctx.get('service_name') — NEVER import them directly.\n"
             "7.  NEVER import from automation/, context/, core/, or safety/ directly.\n"
             "8.  ALL exceptions must be caught inside _execute(); return the error\n"
             "    payload as specified in the skeleton. If a shell command fails,\n"
@@ -424,18 +445,34 @@ class PluginGenerator:
 No markdown, no explanation, just the JSON object.
 
 The plugin handles intent: "{intent}"
+Plugin category: {category}
 
 Rules:
-- risk_level: "low" for read/open/display actions, "medium" for write/create, "high" for delete/shell
+- risk_level: "low" for read/open/display, "medium" for write/create, "high" for delete/shell
 - capabilities: all intent strings this plugin should match (include synonyms)
-- parameter_schema: list every arg the plugin's validate() method requires or accepts
+- allowed_services: ONLY list services this plugin calls via service_ctx.get("..."):
+    window_context    → plugin checks focused_app or window_title
+    app_classifier    → plugin classifies the active application type
+    screen_reader     → plugin reads UI elements from the screen
+    terminal_resolver → plugin finds or resolves a terminal binary
+    shell_tool        → plugin runs shell commands via the service layer
+    process_bridge    → plugin spawns, kills, or lists OS processes
+    file_tool         → plugin reads/writes files via the service layer
+    file_ops          → plugin uses high-level file operations
+    smart_file_patcher→ plugin patches existing file content
+    web_ops           → plugin makes HTTP requests via the service layer
+    api_tool          → plugin calls external APIs via the service layer
+    ui_tool           → plugin performs UI automation via the service layer
+    ui_ops            → plugin uses high-level UI operations
+    session_memory    → plugin stores/retrieves data within a session
+    plugin_memory     → plugin needs persistent key-value storage
+    text_ops          → plugin processes text via the service layer
+  Leave as [] if the plugin only uses stdlib (os, asyncio, urllib, etc.) directly.
+- parameter_schema: every arg validate() requires or accepts
   Each entry: {{"name": "<arg>", "required": true|false, "aliases": ["<other_names>"]}}
-  aliases = other names the LLM or planner might use for the same value
-- intent_patterns: how to detect when a misclassified LLM intent should be rerouted here
+- intent_patterns: how to detect misclassified LLM intents to reroute here
   Each entry: {{"raw_intents": ["run_command","open","launch"], "command_is_verb": true, "args_is_target": true}}
-  command_is_verb=true means: the LLM put a verb like "open"/"launch" in the command field
-  args_is_target=true means: the real target value is in args[0] positional list
-  Leave intent_patterns as [] if no rerouting is needed.
+  Leave as [] if no rerouting needed.
 
 {{
     "name": "{plugin_name}",
@@ -443,6 +480,7 @@ Rules:
     "permissions": ["ui_interaction"],
     "risk_level": "low",
     "capabilities": ["{intent}"],
+    "allowed_services": [],
     "parameter_schema": [
         {{"name": "<primary_arg_name>", "required": true, "aliases": ["<alias1>", "<alias2>"]}}
     ],
@@ -643,8 +681,7 @@ Rules:
             trusted=False,
             requires_confirmation=_requires_confirm,
             tags=[intent, "auto-generated"],
-            # Self-describing contract — consumed by intent_parser and planner
-            # so they never need hardcoded rules for this plugin.
+            allowed_services=metadata.get("allowed_services", []),
             parameter_schema=metadata.get("parameter_schema", []),
             intent_patterns=metadata.get("intent_patterns", []),
         )
