@@ -87,25 +87,16 @@ class CapabilityGapDetector:
         bus.subscribe("task_failed",              self._on_task_failed)
         bus.subscribe("mapping_failed",           self._on_mapping_failed)
         bus.subscribe("plugin_validation_failed", self._on_plugin_generation_failed)
+        bus.subscribe("evolution_needed",         self._on_evolution_needed)
 
-        # ── REFLECTOR INTEGRATION ──────────────────────────────────────────
-        # The Reflector publishes "evolution_needed" when it detects a
-        # recurring failure pattern that exceeds its internal threshold
-        # (_EVOLUTION_FAILURE_THRESHOLD consecutive failures of the same
-        # capability tier). This is a stronger, more contextual signal than
-        # raw task_failed events because the Reflector has already classified
-        # the failure category (capability_missing, context_mismatch, etc.)
-        # and confirmed it is not a transient error.
-        #
-        # We subscribe here so the gap detector can act on Reflector-sourced
-        # signals without duplicating the threshold logic that already lives
-        # in Reflector._should_trigger_evolution().
-        #
-        # RISK: evolution_needed may fire for failure categories that are NOT
-        # capability_missing (e.g. permission_denied). _on_evolution_needed()
-        # checks failure_category and only proceeds for capability gaps,
-        # avoiding spurious plugin generation for permission/context failures.
-        bus.subscribe("evolution_needed", self._on_evolution_needed)
+        # ── GAP CLOSURE SUBSCRIPTIONS ──────────────────────────────────────
+        # When a plugin is deployed, immediately clear all in-memory state
+        # for its intent so consecutive/window counters can't fire again.
+        # Both events are subscribed for defence-in-depth:
+        #   capability_registered — fires after mapper indexes the capability
+        #   plugin_deployed       — fires from generator after hot_reload
+        bus.subscribe("capability_registered", self._on_gap_filled)
+        bus.subscribe("plugin_deployed",       self._on_gap_filled)
 
         self.logger.info(
             "🔎 Capability Gap Detector: Active. "
@@ -244,6 +235,52 @@ class CapabilityGapDetector:
             # R3 — never crash the event loop
             self.logger.warning(
                 "_on_evolution_needed handler failed (non-fatal): %s", exc
+            )
+
+    async def _on_gap_filled(self, event):
+        """
+        Fired when a plugin is deployed (capability_registered or plugin_deployed).
+
+        Clears ALL in-memory state for the intent so the detector can never
+        re-trigger generation for a capability that is now handled:
+
+          - _consecutive[intent] reset to 0   → consecutive threshold won't fire
+          - _triggered[intent]   set to now   → cooldown window starts fresh
+          - _blocked keeps any explicit blocks (user rejected) — not cleared here
+
+        Also notifies capability_mapper.mark_gap_filled() so the mapper drops
+        any stale mapping_failed state for this intent.
+        """
+        data   = event.data if hasattr(event, "data") else {}
+        intent = data.get("intent", "") or data.get("name", "")
+        if not intent:
+            return
+
+        # Resolve to canonical so grouped aliases are also cleared
+        canonical = await self._resolve_canonical(intent)
+
+        # Clear consecutive counter and reset cooldown timestamp
+        self._consecutive.pop(canonical, None)
+        self._triggered[canonical] = time.time()   # start fresh cooldown
+
+        # Clear any aliases that were grouped under this canonical
+        for alias_list in self._groups.values():
+            for alias in alias_list:
+                self._consecutive.pop(alias, None)
+
+        self.logger.info(
+            "✅ Gap closed for intent '%s' (canonical='%s') — "
+            "consecutive counter reset, cooldown started.",
+            intent, canonical,
+        )
+
+        # Notify capability_mapper to ensure it has vectors for this intent
+        try:
+            from brain.capability_mapper import capability_mapper
+            capability_mapper.mark_gap_filled(canonical)
+        except Exception as exc:
+            self.logger.debug(
+                "_on_gap_filled: could not notify capability_mapper: %s", exc
             )
 
     async def _on_plugin_generation_failed(self, event):
