@@ -140,6 +140,27 @@ class PluginGenerator:
             )
             self.logger.info(f"🚀 Plugin '{plugin_name}' is now live.")
 
+            # ── Notify capability_mapper so it indexes the new vectors ────────
+            # Without this the mapper's capability_vectors dict has no entry
+            # for the new plugin's capabilities, so the next matching intent
+            # scores below threshold, fires mapping_failed, and gap_detector
+            # re-triggers generation for an intent that is already handled.
+            _entry = plugin_registry.get(plugin_name)
+            _caps  = (
+                list(getattr(_entry.manifest, "capabilities", []))
+                if _entry else [intent]
+            )
+            bus.publish(
+                "capability_registered",
+                {
+                    "name":         plugin_name,
+                    "intent":       intent,
+                    "capabilities": _caps,
+                    "source":       "plugin",
+                },
+                source="plugin_generator",
+            )
+
         except Exception as e:
             self.logger.error(f"Failed to deploy approved plugin '{plugin_name}': {e}")
             return
