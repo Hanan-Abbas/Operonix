@@ -303,6 +303,45 @@ shutil.move(src, dst)
 os.remove(path)
 files = os.listdir(directory)
 
+# ── PATTERN: service_ctx — accessing injected system services ─────────────────
+# service_ctx is passed into run() by the framework. Access ONLY services your
+# plugin declared in allowed_services. Always guard with .get() — a missing
+# service means it was blocked by permission_guard; handle gracefully.
+
+# WINDOW CONTEXT (declare "window_context" in allowed_services):
+#   get_window = service_ctx.get("window_context")
+#   if get_window:
+#       win = get_window()          # always fresh snapshot
+#       focused_app  = win.get("focused_app")   # e.g. "Google Chrome"
+#       window_title = win.get("window_title")  # e.g. "GitHub - main.py"
+#       window_rect  = win.get("window_rect")   # {"x":0,"y":0,"w":1920,"h":1080}
+
+# SHELL TOOL (declare "shell_tool" in allowed_services):
+#   shell = service_ctx.get("shell_tool")
+#   if shell is None:
+#       return {"status": "error", "message": "shell_tool not available"}
+#   result = await shell.run_command("ls -la")
+
+# TERMINAL RESOLVER (declare "terminal_resolver" in allowed_services):
+#   term = service_ctx.get("terminal_resolver")
+#   terminal_path = term.find_terminal() if term else None
+
+# FILE TOOL (declare "file_tool" in allowed_services):
+#   file_tool = service_ctx.get("file_tool")
+#   content   = await file_tool.read(path) if file_tool else None
+
+# APP CLASSIFIER (declare "app_classifier" in allowed_services):
+#   classifier = service_ctx.get("app_classifier")
+#   app_type   = classifier.classify(focused_app) if classifier else None
+
+# ── PATTERN: run() signature when using service_ctx ──────────────────────────
+# The framework always passes service_ctx as a keyword argument.
+# Accept it with **kwargs so the plugin works even when called without it:
+#
+#   async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
+#       service_ctx = service_ctx or {}
+#       ...
+
 # ══════════════════════════════════════════════════════════════════════════════
 '''
 
@@ -353,7 +392,7 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["ui_interaction"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["window_context", "app_classifier"]
 
     # Class-level stop event — shared across calls
     _stop_event: threading.Event | None = None
@@ -362,7 +401,8 @@ class {class_name}(BasePlugin):
         # No required args for background tasks — all config has sensible defaults
         return None
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
+        service_ctx = service_ctx or {}
         try:
             import pyautogui
             import threading
@@ -463,14 +503,14 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["ui_interaction", "screen_read"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["window_context", "screen_reader", "app_classifier"]
 
     def validate(self, args: dict) -> str | None:
         # TODO: Add validation for args your action requires.
         # Example: if not args.get("target"): return "Missing 'target'"
         return None
 
-    async def _execute(self, args: dict) -> list:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> list:
         """
         TODO: Implement the UI macro sequence for intent "{intent}".
 
@@ -481,6 +521,12 @@ class {class_name}(BasePlugin):
         - Add time.sleep(0.1-0.5) between actions so the OS can process them.
         - For async waits: await asyncio.sleep(seconds)
         - NEVER call sys.exit(), os._exit(), or raise SystemExit here.
+
+        ACCESSING WINDOW CONTEXT (service_ctx is always available):
+            get_window  = (service_ctx or {{}}).get("window_context")
+            win         = get_window() if get_window else {{}}
+            focused_app = win.get("focused_app", "unknown")
+            # Use focused_app to decide where to click or what to type
 
         Examples — compose the steps you need:
 
@@ -512,7 +558,7 @@ class {class_name}(BasePlugin):
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         # ── LOCKED CONTRACT — do NOT modify this method ───────────────────────
         # Handles: validate guard, pyautogui failsafe, stuck-key recovery,
         # and result formatting. LLM only writes _execute() above.
@@ -522,7 +568,7 @@ class {class_name}(BasePlugin):
         try:
             import pyautogui
             pyautogui.FAILSAFE = True
-            steps = await self._execute(args)
+            steps = await self._execute(args, service_ctx=service_ctx or {{}})
             if not isinstance(steps, list):
                 steps = [str(steps)]
             return {{
@@ -564,16 +610,20 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["web_access"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["web_ops", "api_tool", "session_memory"]
 
     def validate(self, args: dict) -> str | None:
         # TODO: Add validation. Example:
         # if not args.get("query"): return "Missing required arg: 'query'"
         return None
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Implement the HTTP logic for intent "{intent}".
+
+        ACCESSING WEB SERVICES (service_ctx is always available):
+            api_tool = (service_ctx or {{}}).get("api_tool")
+            # use api_tool.get(url) if available, else fall back to urllib
 
         GET example:
             import urllib.request, json as _json
@@ -594,12 +644,12 @@ class {class_name}(BasePlugin):
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             return {{"status": "success", "result": result, "intent": "{intent}"}}
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
@@ -621,7 +671,7 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["file_read", "file_write"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["window_context", "file_tool", "file_ops", "smart_file_patcher"]
 
     # Restrict operations to safe paths (never touch system files)
     _SAFE_ROOT = os.path.expanduser("~")
@@ -635,11 +685,21 @@ class {class_name}(BasePlugin):
             return f"Path outside safe root ({{self._SAFE_ROOT}}): {{path}}"
         return None
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Implement the file operation for intent "{intent}".
         This method is called ONLY after validate() has passed.
         Return a dict — do NOT return status/error here; run() wraps it.
+
+        ACCESSING FILE SERVICES (service_ctx is always available):
+            file_tool = (service_ctx or {{}}).get("file_tool")
+            # use file_tool.read(path) / file_tool.write(path, content) if available,
+            # else fall back to stdlib os / shutil below.
+
+            get_window  = (service_ctx or {{}}).get("window_context")
+            win         = get_window() if get_window else {{}}
+            focused_app = win.get("focused_app", "unknown")
+            # Use focused_app to operate on the currently active app's file
 
         Examples — pick ONE:
 
@@ -665,37 +725,16 @@ class {class_name}(BasePlugin):
             path  = os.path.realpath(os.path.expanduser(str(args["path"])))
             files = os.listdir(path)
             return {{"files": files, "count": len(files)}}
-
-        ORGANIZE (sort files by extension):
-            path = os.path.realpath(os.path.expanduser(str(args["path"])))
-            moved = []
-            ext_map = {{
-                ".jpg": "images", ".png": "images", ".gif": "images",
-                ".pdf": "docs",   ".txt": "docs",   ".docx": "docs",
-                ".mp4": "videos", ".avi": "videos",
-                ".zip": "archives", ".tar": "archives", ".gz": "archives",
-            }}
-            for fname in os.listdir(path):
-                fpath = os.path.join(path, fname)
-                if not os.path.isfile(fpath):
-                    continue
-                ext   = os.path.splitext(fname)[1].lower()
-                subdir = ext_map.get(ext, "other")
-                dest_dir = os.path.join(path, subdir)
-                os.makedirs(dest_dir, exist_ok=True)
-                shutil.move(fpath, os.path.join(dest_dir, fname))
-                moved.append(f"{{fname}} → {{subdir}}")
-            return {{"moved": moved, "count": len(moved)}}
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         # Validate FIRST — never skip this
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             return {{"status": "success", "result": result, "intent": "{intent}"}}
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
@@ -717,7 +756,7 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["command_execution"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["terminal_resolver", "shell_tool", "process_bridge"]
 
     # Allowlist of safe command prefixes (extend as needed)
     _SAFE_PREFIXES: tuple[str, ...] = ("ls", "pwd", "echo", "cat", "grep", "find", "df", "du")
@@ -734,11 +773,16 @@ class {class_name}(BasePlugin):
             )
         return None
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Build the shell command string for intent "{intent}" and run it.
 
-        Template — copy and adapt:
+        PREFERRED: Use injected shell_tool if available (already permission-gated):
+            shell = (service_ctx or {{}}).get("shell_tool")
+            if shell:
+                return await shell.run_command(shell_cmd)
+
+        FALLBACK: Use asyncio directly (copy this exactly):
             cmd     = args.get("command", [])
             timeout = int(args.get("timeout", 30))
             if isinstance(cmd, list):
@@ -758,15 +802,19 @@ class {class_name}(BasePlugin):
             if proc.returncode != 0:
                 return {{"stdout": stdout, "stderr": stderr, "returncode": proc.returncode}}
             return {{"stdout": stdout[:2000], "returncode": 0}}
+
+        TERMINAL RESOLVER (find the right terminal binary):
+            term     = (service_ctx or {{}}).get("terminal_resolver")
+            terminal = term.find_terminal() if term else "bash"
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             rc = result.get("returncode", 0)
             status = "success" if rc == 0 else "error"
             if status == "error":
@@ -794,7 +842,7 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = ["system_access"]
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["window_context", "app_classifier", "shell_tool"]
 
     def validate(self, args: dict) -> str | None:
         # TODO: Add validation for args your system action needs.
@@ -818,12 +866,20 @@ class {class_name}(BasePlugin):
             return "", "timed out", -1
         return stdout_b.decode(errors="replace"), stderr_b.decode(errors="replace"), proc.returncode
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Implement the system action for intent "{intent}".
         Use self._run_cmd(...) for ALL shell calls.
 
-        Examples — pick ONE:
+        ACCESSING WINDOW / APP CONTEXT:
+            get_window  = (service_ctx or {{}}).get("window_context")
+            win         = get_window() if get_window else {{}}
+            focused_app = win.get("focused_app", "unknown")
+
+        PREFERRED SHELL: use injected shell_tool if available:
+            shell = (service_ctx or {{}}).get("shell_tool")
+            if shell:
+                result = await shell.run_command("pactl set-sink-volume @DEFAULT_SINK@ +5%")
 
         CLIPBOARD READ (Linux):
             stdout, stderr, rc = await self._run_cmd("xclip -selection clipboard -o")
@@ -831,26 +887,10 @@ class {class_name}(BasePlugin):
                 return {{"error": f"xclip failed: {{stderr}}"}}
             return {{"clipboard": stdout}}
 
-        CLIPBOARD WRITE (Linux):
-            text = str(args.get("text", ""))
-            _, stderr, rc = await self._run_cmd("xclip -selection clipboard", input_bytes=text.encode())
-            return {{"copied": len(text)}}
-
-        CLIPBOARD READ (macOS):
-            stdout, stderr, rc = await self._run_cmd("pbpaste")
-            return {{"clipboard": stdout}}
-
         NOTIFICATION (Linux):
             title = str(args.get("title", "Operonix"))
             body  = str(args.get("body", ""))
             await self._run_cmd(f'notify-send "{{title}}" "{{body}}"')
-            return {{"notified": True}}
-
-        NOTIFICATION (macOS):
-            title = str(args.get("title", "Operonix"))
-            body  = str(args.get("body", ""))
-            script = f'display notification "{{body}}" with title "{{title}}"'
-            await self._run_cmd(f"osascript -e '{{script}}'")
             return {{"notified": True}}
 
         VOLUME (Linux):
@@ -862,12 +902,12 @@ class {class_name}(BasePlugin):
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             if "error" in result:
                 return {{"status": "error", "message": result["error"], "intent": "{intent}"}}
             return {{"status": "success", "result": result, "intent": "{intent}"}}
@@ -890,14 +930,14 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = []
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["session_memory", "text_ops"]
 
     def validate(self, args: dict) -> str | None:
         # TODO: Add validation. Example:
         # if not args.get("data"): return "Missing required arg: 'data'"
         return None
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Implement the data operation for intent "{intent}".
 
@@ -907,31 +947,18 @@ class {class_name}(BasePlugin):
             parsed = _json.loads(data)
             return {{"parsed": parsed}}
 
-        CSV parse:
-            import csv, io
-            data   = args.get("data", "")
-            reader = csv.DictReader(io.StringIO(data))
-            return {{"rows": list(reader)}}
-
         Text transform:
             data = str(args.get("data", ""))
             return {{"result": data.strip().upper()}}
-
-        Regex extract:
-            import re
-            data    = str(args.get("data", ""))
-            pattern = str(args.get("pattern", r"\\d+"))
-            matches = re.findall(pattern, data)
-            return {{"matches": matches}}
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             return {{"status": "success", "result": result, "intent": "{intent}"}}
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
@@ -953,15 +980,22 @@ class {class_name}(BasePlugin):
     version          = "{version}"
     permissions      = []
     safe_mode        = True
-    allowed_services = []
+    allowed_services = ["window_context", "session_memory"]
 
     def validate(self, args: dict) -> str | None:
         # TODO: Add validation for any required args here
         return None
 
-    async def _execute(self, args: dict) -> dict:
+    async def _execute(self, args: dict, service_ctx: dict = None) -> dict:
         """
         TODO: Implement the logic for intent "{intent}".
+
+        ACCESSING INJECTED SERVICES:
+            service_ctx = service_ctx or {{}}
+            get_window  = service_ctx.get("window_context")
+            win         = get_window() if get_window else {{}}
+            focused_app = win.get("focused_app", "unknown")
+
         Refer to the PATTERN LIBRARY for copy-paste patterns:
           - Async shell command → use asyncio.create_subprocess_shell + asyncio.wait_for
           - Background loop     → use threading.Event + daemon Thread
@@ -971,12 +1005,12 @@ class {class_name}(BasePlugin):
         """
         raise NotImplementedError("_execute() must be implemented for intent: {intent}")
 
-    async def run(self, context: dict, args: dict) -> dict:
+    async def run(self, context: dict, args: dict, service_ctx: dict = None, **kwargs) -> dict:
         error = self.validate(args)
         if error:
             return {{"status": "error", "message": error, "intent": "{intent}"}}
         try:
-            result = await self._execute(args)
+            result = await self._execute(args, service_ctx=service_ctx or {{}})
             return {{"status": "success", "result": result, "intent": "{intent}"}}
         except Exception as e:
             return {{"status": "error", "message": str(e), "intent": "{intent}"}}
@@ -1011,6 +1045,13 @@ def plugin():
 @pytest.fixture
 def ctx():
     return {{"active_window": "test_window", "app_type": "test", "app_name": "TestApp"}}
+
+@pytest.fixture
+def service_ctx():
+    """Minimal service_ctx mock so tests can call run(..., service_ctx=service_ctx)."""
+    mock_win = {{"active_window": "test_window", "focused_app": "TestApp",
+                "window_title": "Test", "window_rect": {{"x":0,"y":0,"w":1920,"h":1080}}}}
+    return {{"window_context": lambda: mock_win}}
 
 # ── Structural tests (always run, no mocking needed) ─────────────────────────
 
