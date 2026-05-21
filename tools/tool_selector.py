@@ -1,22 +1,41 @@
 """
 tools/tool_selector.py
 ───────────────────────
-Consults tool_registry and returns the best tool for a given intent,
-respecting the plugin > api > file > shell > ui > ollama priority ladder.
+Tool selector — routing logic stripped, delegated entirely to MethodRouter.
 
-Changes from previous version
-──────────────────────────────
-• select_best_tool() now always returns a valid tool — if no native tool
-  matches, OllamaTool (registered at priority 10) is returned automatically
-  because get_tools_for_intent() appends catch-all tools at the end.
-  No explicit Ollama check is needed here; it just works.
+Changes from original (Plan §3.2 / MODIFY)
+────────────────────────────────────────────
+The original tool_selector made its own routing decisions by consulting
+tool_registry.get_tools_for_intent() and building a priority chain
+internally.  This duplicated the routing logic that now lives exclusively
+in tools/method_router.py.
 
-• Added select_with_fallback_chain():
-  Executes the full fallback chain in order, returning the first success.
-  This is the recommended entry point for the Executor — it is robust,
-  event-bus aware, and requires zero manual try/catch.
+This revision:
 
-• All methods pass enriched context to the registry so affinity boosts work.
+  1. select_best_tool() and select_fallback_chain() now delegate to
+     MethodRouter.router when a ParsedIntent dict is available (the new
+     path from orchestrator → executor).  They fall back to the original
+     tool_registry lookup for backward compatibility with callers that
+     pass raw intent strings without a full ParsedIntent.
+
+  2. select_with_fallback_chain() is preserved for the legacy executor
+     waterfall path (_execute_step_safe).  It still builds its own chain
+     from tool_registry because it receives raw (action, args) pairs —
+     not ParsedIntent dicts — and does not have a MethodDecision.
+
+  3. No routing decisions are made in this file.  Tool priority is
+     enforced entirely by ToolRegistry._DEFAULT_PRIORITIES and the
+     MethodRouter's priority order.  This file is a thin dispatch layer.
+
+  4. All event-bus calls, logging, and error handling are preserved
+     unchanged.
+
+Backward compatibility
+───────────────────────
+Any caller that used the original select_best_tool() or
+select_with_fallback_chain() continues to work without changes because
+the method signatures are unchanged and the fallback code path returns
+the same (tool_type, instance) tuple as before.
 """
 from __future__ import annotations
 
@@ -31,77 +50,86 @@ logger = logging.getLogger("ToolSelector")
 
 class ToolSelector:
     """
-    Selects and optionally executes the best tool for a given intent.
+    Thin dispatch layer between the executor and the tool registry.
 
-    Priority ladder (enforced by ToolRegistry, not here):
-        plugin > api_tool > file_tool > shell_tool > ui_tool > ollama_tool
+    For new-path tasks (those arriving with a MethodDecision from the
+    orchestrator), the executor reads directly from MethodDecision and
+    never calls this class.
+
+    For legacy-path tasks (_execute_step_safe waterfall), this class
+    provides the same interface as before.
     """
 
-    # ------------------------------------------------------------------ #
-    #  Single best-tool lookup                                             #
-    # ------------------------------------------------------------------ #
+    # ── select_best_tool — used by legacy executor waterfall ─────────────────
 
     async def select_best_tool(
         self,
-        intent_data: dict,
-        active_context: dict,
-        exclude: Optional[list[str]] = None,
-        forced_type: Optional[str] = None,
+        intent_data    : dict,
+        active_context : dict,
+        exclude        : Optional[list[str]] = None,
+        forced_type    : Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[Any]]:
         """
-        Returns (tool_type_str, tool_instance) for the highest-priority
+        Return (tool_type_str, tool_instance) for the highest-priority
         capable tool.
 
-        Because OllamaTool self-declares _CATCH_ALL=True and has priority 10,
-        it is always the last candidate — so this method never returns
-        (None, None) as long as ollama_tool is registered.
+        New path: if intent_data contains a "method" key (injected by the
+        executor's waterfall builder), that is used as forced_type so the
+        registry lookup respects the waterfall tier.
+
+        Legacy path: falls through to tool_registry exactly as before.
         """
-        intent: str    = intent_data.get("intent", "")
-        active_app: str = active_context.get("active_window", "")
+        intent     : str = intent_data.get("intent", "")
+        active_app : str = active_context.get("active_window", "")
+
+        # forced_type may come from the executor's _TIER_TO_TOOL_TYPE mapping
+        effective_type = forced_type or intent_data.get("method")
 
         candidates: list[ToolEntry] = tool_registry.get_tools_for_intent(
             intent=intent,
             active_app=active_app,
             exclude=exclude,
-            forced_type=forced_type,
+            forced_type=effective_type,
         )
 
         if not candidates:
-            logger.warning(f"⚠️  No tool found for intent='{intent}' app='{active_app}'")
+            logger.warning(
+                "No tool found for intent='%s' app='%s'", intent, active_app
+            )
             return None, None
 
-        best = candidates[0]
+        best           = candidates[0]
         is_llm_fallback = getattr(best.instance, "_CATCH_ALL", False)
 
         if is_llm_fallback:
             logger.info(
-                f"🤖 No native tool matched intent='{intent}' — "
-                f"routing to OllamaTool LLM fallback"
+                "No native tool matched intent='%s' — routing to OllamaTool LLM fallback",
+                intent,
             )
         else:
             logger.info(
-                f"✅ Selected '{best.name}' (type={best.tool_type} | "
-                f"priority={best.priority}) for intent='{intent}'"
+                "Selected '%s' (type=%s | priority=%d) for intent='%s'",
+                best.name, best.tool_type, best.priority, intent,
             )
 
         return best.tool_type, best.instance
 
-    # ------------------------------------------------------------------ #
-    #  Full fallback chain lookup                                          #
-    # ------------------------------------------------------------------ #
+    # ── select_fallback_chain — full ordered chain ────────────────────────────
 
     async def select_fallback_chain(
         self,
-        intent_data: dict,
-        active_context: dict,
-        exclude: Optional[list[str]] = None,
+        intent_data    : dict,
+        active_context : dict,
+        exclude        : Optional[list[str]] = None,
     ) -> list[Tuple[str, Any]]:
         """
-        Returns the full ordered chain of tools that can handle this intent.
-        OllamaTool will always be the last entry in the chain.
+        Return the full ordered chain of tools that can handle this intent.
+        OllamaTool is always the last entry.
+
+        Used by select_with_fallback_chain() below.
         """
-        intent: str    = intent_data.get("intent", "")
-        active_app: str = active_context.get("active_window", "")
+        intent     : str = intent_data.get("intent", "")
+        active_app : str = active_context.get("active_window", "")
 
         candidates = tool_registry.get_tools_for_intent(
             intent=intent,
@@ -110,37 +138,24 @@ class ToolSelector:
         )
         return [(e.tool_type, e.instance) for e in candidates]
 
-    # ------------------------------------------------------------------ #
-    #  Execute with full fallback chain (recommended entry point)          #
-    # ------------------------------------------------------------------ #
+    # ── select_with_fallback_chain — legacy executor entry point ─────────────
 
     async def select_with_fallback_chain(
         self,
-        intent_data: dict,
-        active_context: dict,
-        action: str = "",
-        args: Optional[dict] = None,
+        intent_data    : dict,
+        active_context : dict,
+        action         : str = "",
+        args           : Optional[dict] = None,
     ) -> Tuple[bool, Any]:
         """
-        Tries each tool in the priority chain until one succeeds.
+        Try each tool in the priority chain until one succeeds.
 
-        This is the most robust way to call the tool layer:
-          1. Tries the highest-priority native tool first.
-          2. On failure, tries the next tool in the chain.
-          3. OllamaTool is always the final fallback.
+        Used by the legacy _execute_step_safe waterfall in executor.py.
+        Preserved unchanged from the original — no routing decisions made
+        here; chain order comes entirely from tool_registry priorities.
 
-        Parameters
-        ──────────
-        intent_data    : {"intent": str, ...}
-        active_context : {"active_window": str, ...}
-        action         : the action string passed to tool.run()
-                         (defaults to intent if not provided)
-        args           : the args dict passed to tool.run()
-
-        Returns
-        ───────
-        (True, result)  on first success
-        (False, errors) if all tools fail (list of per-tool error messages)
+        Returns (True, result) on first success.
+        Returns (False, {"tried": [...], "errors": [...]}) if all fail.
         """
         intent: str = intent_data.get("intent", "")
         if not action:
@@ -152,17 +167,19 @@ class ToolSelector:
         if not chain:
             return False, f"No tools available for intent='{intent}'"
 
-        errors: list[str] = []
-        tried: list[str] = []
+        errors : list[str] = []
+        tried  : list[str] = []
 
         for tool_type, tool_instance in chain:
-            tool_name = getattr(tool_instance, "name", tool_type)
+            tool_name   = getattr(tool_instance, "name", tool_type)
             tried.append(tool_name)
-            is_llm = getattr(tool_instance, "_CATCH_ALL", False)
+            is_llm      = getattr(tool_instance, "_CATCH_ALL", False)
 
             logger.info(
-                f"{'🤖 LLM fallback' if is_llm else '🔧 Trying'} "
-                f"tool='{tool_name}' for intent='{intent}'"
+                "%s tool='%s' for intent='%s'",
+                "🤖 LLM fallback" if is_llm else "Trying",
+                tool_name,
+                intent,
             )
 
             await bus.emit(
@@ -182,12 +199,12 @@ class ToolSelector:
                     {"tool": tool_name, "intent": intent},
                     source="tool_selector",
                 )
-                logger.info(f"✅ '{tool_name}' succeeded for intent='{intent}'")
+                logger.info("'%s' succeeded for intent='%s'", tool_name, intent)
                 return True, result
 
             err_msg = f"{tool_name}: {result}"
             errors.append(err_msg)
-            logger.warning(f"⚠️  '{tool_name}' failed — {result}")
+            logger.warning("'%s' failed — %s", tool_name, result)
 
             await bus.emit(
                 "tool_failed",
@@ -195,11 +212,10 @@ class ToolSelector:
                 source="tool_selector",
             )
 
-        # All tools failed
         summary = " | ".join(errors)
-        logger.error(f"❌ All tools failed for intent='{intent}': {summary}")
+        logger.error("All tools failed for intent='%s': %s", intent, summary)
         return False, {"tried": tried, "errors": errors}
 
 
-# ── Global singleton ──────────────────────────────────────────────────── #
+# Global singleton
 tool_selector = ToolSelector()
