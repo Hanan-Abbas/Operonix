@@ -1,54 +1,51 @@
 """
 executor/executor.py
 ─────────────────────
-Central task executor.
+Central task executor — updated to consume MethodDecision from MethodRouter.
 
-CAVEAT 1 FIX — Dual event subscription:
-    Executor now subscribes to BOTH:
-      • "task_safety_cleared"  — fired by ConfirmationManager after user approves
-      • "task_dispatched_safe" — fired by Orchestrator direct flow
-    Both channels call execute_plan().  A _seen_task_ids dedup set ensures a
-    task arriving on both channels is only executed once.
+Changes from original (plan sections referenced inline)
+─────────────────────────────────────────────────────────
+PLAN §3.1 — Routing removed from executor
+    The executor no longer makes routing decisions.  It consumes the
+    MethodDecision produced by MethodRouter.select() and dispatched by
+    core/orchestrator.py.  The old _build_waterfall() / _WATERFALL_ORDER
+    ad-hoc order is replaced by MethodDecision.fallback_chain (a frozen
+    tuple, never mutated — Optimization A).
 
-    profile_hint is extracted by _extract_profile_hint() from wherever it
-    lives: top-level key OR steps[0].args["profile_hint"].  It is then
-    normalised into every step's args before the waterfall runs.
+PLAN §4.1 / Gap 1 — FailureClass tagging at the executor boundary
+    Every exception caught inside _execute_with_decision() is passed to
+    error_classifier.from_exception() which returns a FailureClass.
+    The FailureClass is stamped into the MethodDecision via
+    decision.with_failure() before the event is published so the learner
+    and event bus receive a typed, structured failure — never a raw
+    exception string.
 
-CAVEAT 3 FIX — Bridge PermissionError self-heal:
-    _check_bridge_permission() runs a pre-flight O_WRONLY open on the pts
-    device before shell_tool even tries.  On PermissionError or missing pts
-    it automatically downgrades to GhostTarget and publishes
-    "bridge_permission_denied" to the dashboard with the exact fix command.
+    Decision table enforced here:
+      ENV_TRANSIENT    → retry same method (backoff ×MAX_RETRY_ATTEMPTS),
+                         never descend fallback, never feed learner
+      ROUTING_MISMATCH → no retry, descend fallback_chain, feed learner
+      ENV_PERMANENT    → no retry, mark method unavailable, descend fallback
+      EXECUTION_LOGIC  → no retry, no fallback, surface to debugger
 
-HYBRID EXECUTION — unchanged from previous version.
-BUG FIX 1, 2, 3  — unchanged from previous version.
+PLAN §4.2 / Gap 2 — LayeredPayload slot consumption
+    On each fallback step the executor calls
+    decision.payload.for_method(next_method) to read the pre-serialized
+    slot.  No translation logic exists in this file.
 
-CAVEAT 4 FIX — Output truncation:
-    Large command stdout (e.g. ls -la on a home directory with hundreds of
-    bash_history tmp files) flooded the panel event bus with thousands of
-    characters.  truncate_output() from safety.risk_rules is now called on
-    every string result before it is published to execution_step_success,
-    capping output at 2000 chars / 50 lines with a notice appended.
+PLAN §4.3 / Gap 3 — UIReadinessGuard (JIT focus validation)
+    UIReadinessGuard.validate() is called immediately before any UI tool
+    invocation — not at routing time.  FocusDriftError and
+    UIStateMismatchError are tagged ENV_TRANSIENT so the learner never
+    penalizes the UI method for a user's cursor movement.
 
-REFLECTOR INTEGRATION:
-    After every task — success OR failure — executor publishes
-    "execution_complete" with a fully structured payload that the Reflector
-    consumes to grade outcomes, calibrate capability confidence scores, and
-    trigger self-evolution when needed.
-
-    RISK MITIGATIONS applied:
-      R1 — execution_complete is published inside a try/finally so a crash
-           in the publish call never silently swallows the task result.
-      R2 — elapsed time is captured from the local `start` variable, not
-           re-computed, so the duration in execution_complete always matches
-           the actual task wall-clock time.
-      R3 — On failure, steps[:step_index+1] is used (not the full list) so
-           the Reflector only sees steps that actually ran — no phantom steps
-           that never executed distort its analysis.
-      R4 — app_context falls back through three sources (app_name →
-           window_title → "unknown") to guarantee a non-None value.
-      R5 — error and error_type are safely extracted from both str and dict
-           result shapes so no AttributeError can occur.
+All existing fixes are preserved unchanged:
+    CAVEAT 1 — dual subscription dedup
+    CAVEAT 3 — Bridge pre-flight permission check
+    CAVEAT 4 — output truncation
+    BUG 1, 2, 3 — steps unwrapping, task_id stamping, context enrichment
+    REFLECTOR integration (execution_complete on success + failure)
+    CONCURRENCY — background asyncio.Task per plan
+    RISK R1-R5 — Reflector payload safety mitigations
 """
 from __future__ import annotations
 
@@ -80,6 +77,7 @@ from brain.llm_client import llm_client
 from tools.tool_registry import tool_registry
 from tools.tool_selector import tool_selector
 from safety.risk_rules import truncate_output
+from tools.routing_decision import FailureClass, MethodDecision, MethodType
 
 logger = logging.getLogger("Executor")
 
@@ -88,6 +86,7 @@ retry_manager    = RetryManager()
 fallback_manager = FallbackManager()
 focus_manager    = FocusManager()
 
+# ── Legacy waterfall constants (kept for backward compat with capability_registry path) ──
 _WATERFALL_ORDER: list[str] = ["plugin", "api", "command", "ui"]
 
 _TIER_TO_TOOL_TYPE: dict[str, str] = {
@@ -103,6 +102,162 @@ _SHELL_ACTIONS: frozenset[str] = frozenset({
 })
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# JIT UI readiness guard (Gap 3 + Optimization B)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FocusDriftError(RuntimeError):
+    """Raised when the focused app has changed since routing time."""
+    def __init__(self, expected: str, actual: str):
+        super().__init__(
+            f"Focus drift: expected app '{expected}', actual '{actual}'"
+        )
+        self.expected = expected
+        self.actual   = actual
+
+
+class UIStateMismatchError(RuntimeError):
+    """Raised when the live AX tree does not match the routing-time snapshot."""
+    def __init__(self, detail: str = ""):
+        super().__init__(f"UI state mismatch: {detail}")
+
+
+class UIReadinessGuard:
+    """
+    Two-checkpoint JIT validator for the UI execution layer (Gap 3).
+
+    Called by the executor immediately before any UI tool invocation —
+    never at routing time.
+
+    Checkpoint 1 (static, in MethodRouter._evaluate_ui) — already done:
+        Is this intent class ever compatible with UI?
+
+    Checkpoint 2 (JIT, here) — done at execution time T+N:
+        Right now, is the correct app focused and is the expected UI
+        state present in the live accessibility tree?
+
+    On failure:
+        FocusDriftError       → tagged ENV_TRANSIENT; one re-focus attempt
+                                 via focus_manager before aborting.
+        UIStateMismatchError  → tagged ENV_TRANSIENT; abort without retry.
+
+    Optimization B: context_validator.snapshot() is called with
+        force_refresh=True and invalidate_handles=True so no cached
+        accessibility tree can defeat the live check.
+    """
+
+    # AX query hard timeout (Optimization B requirement 4)
+    _AX_TIMEOUT_S: float = float(
+        getattr(settings, "UI_AX_TIMEOUT_SECONDS", 0.15)
+    )
+
+    def validate(
+        self,
+        decision: MethodDecision,
+    ) -> None:
+        """
+        Synchronous validate — called from the executor's async context via
+        asyncio.get_running_loop().run_in_executor() so the AX syscall
+        does not block the event loop.
+
+        Raises FocusDriftError or UIStateMismatchError on failure.
+        Does nothing (returns None) on success.
+        """
+        expected_app = decision.expected_app
+        if not expected_app:
+            # No app constraint recorded at routing time — skip focus check.
+            # This happens for intent-only UI actions where no window was open.
+            return
+
+        # ── 1. Live focus check (no cache) ────────────────────────────────
+        try:
+            from context.focus_tracker import focus_tracker
+            # focus_tracker.last_known_title is updated by the async monitor loop.
+            # For the JIT check we trigger a fresh OS query via the internal
+            # method rather than reading the cached attribute.
+            current_title: str = ""
+            if hasattr(focus_tracker, "_get_current_foreground_title"):
+                # Run the coroutine synchronously inside this thread executor
+                import asyncio as _asyncio
+                try:
+                    loop = _asyncio.get_event_loop()
+                    current_title = loop.run_until_complete(
+                        asyncio.wait_for(
+                            focus_tracker._get_current_foreground_title(),
+                            timeout=self._AX_TIMEOUT_S,
+                        )
+                    )
+                except Exception:
+                    current_title = getattr(focus_tracker, "last_known_title", "") or ""
+            else:
+                current_title = getattr(focus_tracker, "last_known_title", "") or ""
+
+            # Fuzzy match (same logic as focus_tracker.check_focus_alignment)
+            expected_lower = expected_app.lower()
+            actual_lower   = current_title.lower()
+            focused = (
+                expected_lower in actual_lower
+                or actual_lower in expected_lower
+            )
+            if not focused:
+                raise FocusDriftError(
+                    expected=expected_app,
+                    actual=current_title or "unknown",
+                )
+        except FocusDriftError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "UIReadinessGuard: focus check failed with unexpected error: %s "
+                "— treating as drift.", exc,
+            )
+            raise FocusDriftError(expected=expected_app, actual="error")
+
+        # ── 2. Live accessibility tree check (Optimization B) ────────────
+        expected_ui_state = decision.expected_ui_state
+        if expected_ui_state is None:
+            return   # no snapshot was taken at routing time — skip AX check
+
+        try:
+            from context.context_validator import context_validator
+            if hasattr(context_validator, "snapshot"):
+                try:
+                    tree = asyncio.get_event_loop().run_until_complete(
+                        asyncio.wait_for(
+                            context_validator.snapshot(
+                                force_refresh=True,
+                                invalidate_handles=True,
+                            ),
+                            timeout=self._AX_TIMEOUT_S,
+                        )
+                    )
+                except asyncio.TimeoutError:
+                    # AX query timed out — treat as ENV_TRANSIENT (Opt B req 4)
+                    raise UIStateMismatchError(
+                        f"AX tree query timed out after {self._AX_TIMEOUT_S:.0f}s "
+                        f"— system under load"
+                    )
+                if hasattr(tree, "matches") and not tree.matches(expected_ui_state):
+                    raise UIStateMismatchError(
+                        "live AX tree does not match routing-time snapshot"
+                    )
+        except (FocusDriftError, UIStateMismatchError):
+            raise
+        except Exception as exc:
+            logger.warning(
+                "UIReadinessGuard: AX snapshot failed: %s — skipping state check.",
+                exc,
+            )
+            # AX query unavailable — do not abort; focus check already passed.
+
+
+_ui_readiness_guard = UIReadinessGuard()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Executor
+# ─────────────────────────────────────────────────────────────────────────────
+
 class Executor:
 
     def __init__(self) -> None:
@@ -114,44 +269,10 @@ class Executor:
         # CAVEAT 1 — dedup guard
         self._seen_task_ids: set[str] = set()
 
-        # ── Concurrent execution registry ──────────────────────────────────
-        # Maps task_id → asyncio.Task so running tasks can be inspected,
-        # cancelled, or awaited.  Tasks are removed on completion/failure.
-        # The event loop is never blocked — each task runs concurrently so
-        # new panel inputs and bus events are processed even during downloads.
+        # Concurrent execution registry: task_id → asyncio.Task
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
-        # SUBSCRIPTION ARCHITECTURE FIX:
-        #
-        # The execution trigger chain is:
-        #
-        #   safety_validator   → task_safety_cleared (low-risk, no confirmation needed)
-        #                      → confirmation_required (high-risk, needs user approval)
-        #   confirmation_manager → task_safety_cleared (after user clicks Allow)
-        #   orchestrator.handle_safety_cleared → task_dispatched_safe (enriches + re-emits)
-        #
-        # PROBLEM: subscribing executor to "task_safety_cleared" caused it to run
-        # on the safety_validator's event BEFORE the user confirmed anything.
-        # The safety_validator publishes task_safety_cleared for low-risk tasks,
-        # but for HIGH-RISK tasks it publishes confirmation_required — then
-        # confirmation_manager pauses and waits.  However the orchestrator ALSO
-        # subscribes to task_safety_cleared and re-emits task_dispatched_safe
-        # immediately.  The executor on task_safety_cleared fired on that first
-        # safety_validator event before the user saw any confirmation dialog.
-        #
-        # FIX: executor subscribes ONLY to "task_dispatched_safe".
-        #   • Low-risk path:  safety_validator → task_safety_cleared
-        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
-        #                     → executor (correct, no confirmation needed)
-        #   • High-risk path: safety_validator → confirmation_required
-        #                     → [user approves] → confirmation_manager → task_safety_cleared
-        #                     → orchestrator.handle_safety_cleared → task_dispatched_safe
-        #                     → executor (correct, AFTER user approval)
-        #
-        # This single change ensures the executor ALWAYS runs after orchestrator
-        # has enriched the payload with context + profile_hint, AND always runs
-        # after user confirmation for high-risk tasks.
         bus.subscribe("task_dispatched_safe", self.execute_plan)
         bus.subscribe("target_selected",      self._on_target_selected)
         self.is_running = True
@@ -162,37 +283,20 @@ class Executor:
 
     async def execute_plan(self, event: Any) -> None:
         """
-        Receive a task and dispatch it as a background asyncio.Task.
-
-        CONCURRENCY FIX:
-        Previously execute_plan() awaited _run_plan() directly. This held the
-        entire executor coroutine — and therefore the event loop — blocked for
-        the full duration of the command (seconds to minutes for downloads).
-        No new panel input, bus event, or health poll could be processed.
-
-        Fix: wrap _run_plan() in asyncio.create_task(). The task runs
-        concurrently on the same event loop without blocking it. The panel
-        remains fully responsive while apt installs, files download, or
-        pytest runs in the background.
-
-        Multiple tasks can run simultaneously (e.g. a ghost background task
-        while waiting for a sudo password on another). Each has its own
-        task_id so bus events, dedup, and the running_tasks registry are
-        all cleanly scoped.
+        Receive a task_dispatched_safe event and dispatch it as a background
+        asyncio.Task so the event loop stays free (CONCURRENCY fix).
         """
         task_data = event.data
         task_id   = task_data.get("task_id")
 
-        # Dedup guard — same task arriving on both channels
         if task_id in self._seen_task_ids:
             logger.debug(
-                "execute_plan: task [%s] already running — ignoring duplicate from '%s'.",
-                task_id, getattr(event, "name", "unknown"),
+                "execute_plan: task [%s] already running — ignoring duplicate.",
+                task_id,
             )
             return
         self._seen_task_ids.add(task_id)
 
-        # Wrap in a Task so the event loop stays free
         task = asyncio.create_task(
             self._run_plan(event),
             name=f"operonix-task-{task_id}",
@@ -201,9 +305,6 @@ class Executor:
 
         def _on_done(t: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
-            # Keep task_id in _seen_task_ids for 5 s after completion to absorb
-            # any late-arriving duplicate events (e.g. orchestrator re-emitting
-            # task_dispatched_safe on a different code path).
             asyncio.get_event_loop().call_later(
                 5.0, self._seen_task_ids.discard, task_id
             )
@@ -213,37 +314,30 @@ class Executor:
                 logger.error("Task [%s] raised: %s", task_id, t.exception())
 
         task.add_done_callback(_on_done)
-
-        # Publish immediately so dashboard shows the task as queued/running
         bus.publish(
             "task_queued",
-            {
-                "task_id":        task_id,
-                "concurrent_count": len(self._running_tasks),
-            },
+            {"task_id": task_id, "concurrent_count": len(self._running_tasks)},
             source="executor",
         )
         logger.info(
-            "Task [%s] dispatched as background task (%d running).",
-            task_id, len(self._running_tasks),
+            "Task [%s] dispatched (%d running).", task_id, len(self._running_tasks)
         )
+
+    # ── Plan runner ────────────────────────────────────────────────────────
 
     async def _run_plan(self, event: Any) -> None:
         """
-        The actual execution logic — runs inside a background Task.
-        Identical to the previous execute_plan() body.
+        Execute the plan steps.  Each step is dispatched via
+        _execute_step_safe() which uses the MethodDecision from the
+        orchestrator when present, or falls back to the legacy capability
+        waterfall for backward compatibility.
         """
         metrics.total_tasks += 1
         start     = time.time()
         task_data = event.data
         task_id   = task_data.get("task_id")
 
-        # BUG 1 FIX — task_safety_cleared carries the full confirmation_required
-        # payload.  The executor's steps live at the top level when built by
-        # intent_parser, but confirmation_manager re-publishes the whole dict
-        # including a nested "full_task" key.  If top-level steps is empty,
-        # unwrap full_task.steps as the authoritative fallback so the command
-        # is never silently dropped.
+        # BUG 1 FIX — unwrap steps from full_task when top-level is empty
         steps = task_data.get("steps") or []
         if not steps:
             full_task = task_data.get("full_task") or {}
@@ -256,20 +350,22 @@ class Executor:
 
         context          = task_data.get("context") or {}
         intent           = task_data.get("intent")
-        preferred_method: str | None = task_data.get("preferred_method")
+        preferred_method = task_data.get("preferred_method")
+
+        # ── MethodDecision from orchestrator (Plan §3.1) ──────────────────
+        # When present, the executor uses this as the sole routing authority.
+        # When absent (legacy tasks), it falls back to the capability waterfall.
+        method_decision: MethodDecision | None = task_data.get("method_decision")
 
         self._enrich_context_with_cwd(context)
 
-        # BUG 3 FIX — confirmation path: context may arrive empty because
-        # inject_task_metadata (which merges context) is only triggered by
-        # capability_mapped, which is never re-emitted after safety clearance.
-        # Pull context from full_task if the top-level context is bare.
+        # BUG 3 FIX — enrich context from full_task when top-level is bare
         if not context.get("cwd"):
             full_task_ctx = (task_data.get("full_task") or {}).get("context") or {}
             if full_task_ctx:
-                context.update({k: v for k, v in full_task_ctx.items() if not context.get(k)})
-                logger.debug("Task [%s] context enriched from full_task.context", task_id)
-            # Last resort: pull cwd directly from full_task parameters
+                context.update(
+                    {k: v for k, v in full_task_ctx.items() if not context.get(k)}
+                )
             if not context.get("cwd"):
                 params = (task_data.get("full_task") or {}).get("parameters") or {}
                 if params.get("cwd"):
@@ -277,12 +373,9 @@ class Executor:
             self._enrich_context_with_cwd(context)
 
         # CAVEAT 1 — normalise profile_hint into every step's args
-        # so _resolve_and_inject_profile always finds it via args["profile_hint"]
-        # regardless of which event channel delivered the task.
         profile_hint_top = task_data.get("profile_hint")
         if not profile_hint_top and steps:
             profile_hint_top = steps[0].get("args", {}).get("profile_hint")
-
         if profile_hint_top:
             for step in steps:
                 step.setdefault("args", {})
@@ -290,10 +383,12 @@ class Executor:
                     step["args"]["profile_hint"] = profile_hint_top
 
         logger.info(
-            "Starting Task [%s] — %d steps | preferred=%s | profile_hint=%s",
+            "Starting Task [%s] — %d steps | preferred=%s | profile=%s | "
+            "decision=%s",
             task_id, len(steps),
             preferred_method or "auto",
             profile_hint_top or "auto",
+            method_decision.method.value if method_decision else "legacy",
         )
 
         method_used: str = "unknown"
@@ -306,9 +401,17 @@ class Executor:
                 source="executor",
             )
 
-            success, result, step_method = await self._execute_step_safe(
-                task_id, step_index, step, context, preferred_method=preferred_method
-            )
+            if method_decision is not None:
+                # ── New path: MethodDecision-driven execution ─────────────
+                success, result, step_method = await self._execute_with_decision(
+                    task_id, step_index, step, context, method_decision
+                )
+            else:
+                # ── Legacy path: capability waterfall (backward compat) ───
+                success, result, step_method = await self._execute_step_safe(
+                    task_id, step_index, step, context,
+                    preferred_method=preferred_method,
+                )
 
             if step_method:
                 method_used = step_method
@@ -325,21 +428,10 @@ class Executor:
                     },
                     source="executor",
                 )
-
-                # ── REFLECTOR FEED: execution_complete on failure ──────────
-                # RISK R3: pass only steps[:step_index+1] — steps that
-                #   actually ran. The full `steps` list includes future steps
-                #   that were never attempted; including them would mislead
-                #   the Reflector's root-cause analysis.
-                # RISK R5: result may be a str OR a dict {"type":...,
-                #   "message":...}. Extract safely without AttributeError.
-                # RISK R4: app_context falls back through three sources so
-                #   the Reflector never receives None.
-                # RISK R1: wrapped in try/except so a Reflector publish
-                #   failure cannot abort the task_failed flow above.
+                # REFLECTOR FEED — failure (RISK R1-R5)
                 try:
-                    _err_str:  str | None = None
-                    _err_type: str | None = None
+                    _err_str  = None
+                    _err_type = None
                     if isinstance(result, str):
                         _err_str = result
                     elif isinstance(result, dict):
@@ -364,22 +456,24 @@ class Executor:
                             "error":       _err_str,
                             "error_type":  _err_type,
                             "steps":       steps[: step_index + 1],
-                            "duration_ms": round((time.time() - start) * 1000, 1),
+                            "duration_ms": round(
+                                (time.time() - start) * 1000, 1
+                            ),
                         },
                         source="executor",
                     )
-                except Exception as _ref_exc:
+                except Exception as ref_exc:
                     logger.debug(
                         "execution_complete (failure) publish error (non-fatal): %s",
-                        _ref_exc,
+                        ref_exc,
                     )
 
                 retry_manager.clear_task(task_id)
-                logger.error("Task [%s] failed at step %d: %s", task_id, step_index, result)
+                logger.error(
+                    "Task [%s] failed at step %d: %s", task_id, step_index, result
+                )
                 return
 
-            # Truncate string output before publishing to the panel so that
-            # large stdout (e.g. ls -la on a home dir) does not flood the UI.
             display_result = (
                 truncate_output(result) if isinstance(result, str) else result
             )
@@ -387,7 +481,11 @@ class Executor:
             context["last_action"] = action
             bus.publish(
                 "execution_step_success",
-                {"task_id": task_id, "step_index": step_index, "result": display_result},
+                {
+                    "task_id":    task_id,
+                    "step_index": step_index,
+                    "result":     display_result,
+                },
                 source="executor",
             )
             logger.info("Step %d completed: %s", step_index, action)
@@ -412,13 +510,7 @@ class Executor:
             source="executor",
         )
 
-        # ── REFLECTOR FEED: execution_complete on success ──────────────────
-        # RISK R2: elapsed is captured from `start` defined at _run_plan()
-        #   entry — not re-computed here — so duration is the true wall-clock
-        #   time for this task, matching metrics.total_duration_seconds above.
-        # RISK R4: app_context falls back through three sources.
-        # RISK R1: wrapped in try/except so a Reflector publish error never
-        #   prevents retry_manager.clear_task() from running.
+        # REFLECTOR FEED — success (RISK R1-R2-R4)
         try:
             bus.publish(
                 "execution_complete",
@@ -440,16 +532,495 @@ class Executor:
                 },
                 source="executor",
             )
-        except Exception as _ref_exc:
+        except Exception as ref_exc:
             logger.debug(
                 "execution_complete (success) publish error (non-fatal): %s",
-                _ref_exc,
+                ref_exc,
             )
 
         retry_manager.clear_task(task_id)
         logger.info("Task [%s] completed (method=%s)", task_id, method_used)
 
-    # ── Step execution ─────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────
+    # NEW: MethodDecision-driven execution (Plan §3.1, Gap 1, Gap 2, Gap 3)
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _execute_with_decision(
+        self,
+        task_id      : str,
+        step_index   : int,
+        step         : dict,
+        context      : dict,
+        decision     : MethodDecision,
+    ) -> tuple[bool, Any, str]:
+        """
+        Execute a single step using the pre-computed MethodDecision.
+
+        Walks the fallback_chain according to FailureClass rules:
+          ENV_TRANSIENT    → retry same method ×MAX_RETRY_ATTEMPTS, no fallback
+          ROUTING_MISMATCH → no retry, advance to next in fallback_chain,
+                             publish routing_mismatch event for learner
+          ENV_PERMANENT    → no retry, mark unavailable, advance fallback_chain
+          EXECUTION_LOGIC  → no retry, no fallback, surface to debugger
+
+        Gap 2: payload slot is read via decision.payload.for_method(method)
+               — no translation occurs here.
+        Gap 3: UIReadinessGuard.validate(decision) is called immediately
+               before any UI tool invocation.
+        """
+        current = decision
+        max_transient_retries: int = int(
+            getattr(settings, "MAX_RETRY_ATTEMPTS", 3)
+        )
+
+        while True:
+            method    = current.method
+            tool_type = method.value   # "plugin" | "api" | "shell" | "ui"
+            payload   = current.payload.for_method(method)
+
+            bus.publish(
+                "tool_selected",
+                {
+                    "task_id":    task_id,
+                    "step_index": step_index,
+                    "tool_type":  tool_type,
+                    "method":     tool_type,
+                },
+                source="executor",
+            )
+
+            # Gap 3 — JIT UI readiness check immediately before invocation
+            if method == MethodType.UI:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, _ui_readiness_guard.validate, current
+                    )
+                except FocusDriftError as drift_exc:
+                    logger.warning(
+                        "UIReadinessGuard: focus drift on step %d — "
+                        "attempting re-focus: %s",
+                        step_index, drift_exc,
+                    )
+                    # One re-focus attempt via focus_manager
+                    refocused = False
+                    if current.expected_app:
+                        refocused = await focus_manager.ensure_focus(
+                            current.expected_app
+                        )
+                    if not refocused:
+                        stamped = current.with_failure(
+                            FailureClass.ENV_TRANSIENT,
+                            str(drift_exc),
+                        )
+                        return await self._handle_failure(
+                            task_id, step_index, step, stamped,
+                            max_transient_retries,
+                        )
+                    # Re-focus succeeded — re-run the JIT check once more
+                    try:
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, _ui_readiness_guard.validate, current
+                        )
+                    except (FocusDriftError, UIStateMismatchError) as recheck_exc:
+                        stamped = current.with_failure(
+                            FailureClass.ENV_TRANSIENT,
+                            str(recheck_exc),
+                        )
+                        return await self._handle_failure(
+                            task_id, step_index, step, stamped,
+                            max_transient_retries,
+                        )
+                except UIStateMismatchError as mismatch_exc:
+                    stamped = current.with_failure(
+                        FailureClass.ENV_TRANSIENT,
+                        str(mismatch_exc),
+                    )
+                    return await self._handle_failure(
+                        task_id, step_index, step, stamped,
+                        max_transient_retries,
+                    )
+
+            # ── Invoke the tool for this method ───────────────────────────
+            transient_attempt = 0
+            while True:
+                try:
+                    ok, result = await self._invoke_method(
+                        method, payload, step, context, task_id
+                    )
+                    if ok:
+                        return True, result, tool_type
+                    # Tool ran but reported its own failure (e.g. plugin
+                    # returned {"status": "error"}).  Classify and route.
+                    _, failure_class = await error_classifier.classify_with_failure_class(
+                        str(result)
+                    )
+                    break   # exit inner retry loop → handle_failure
+
+                except Exception as exc:
+                    _, failure_class = await error_classifier.from_exception(exc)
+                    result = str(exc)
+
+                    if failure_class == FailureClass.ENV_TRANSIENT:
+                        transient_attempt += 1
+                        if transient_attempt <= max_transient_retries:
+                            backoff = 0.5 * (2 ** (transient_attempt - 1))
+                            logger.warning(
+                                "ENV_TRANSIENT on step %d attempt %d/%d "
+                                "(method=%s) — retry in %.1fs: %s",
+                                step_index, transient_attempt,
+                                max_transient_retries, tool_type, backoff, exc,
+                            )
+                            await asyncio.sleep(backoff)
+                            continue   # retry same method
+                        # Retries exhausted — still transient; give up on
+                        # this method without feeding the learner
+                        logger.warning(
+                            "ENV_TRANSIENT retries exhausted for method=%s "
+                            "step=%d", tool_type, step_index,
+                        )
+                    break  # exit inner retry loop → handle_failure
+
+            stamped = current.with_failure(failure_class, str(result))
+            outcome = await self._handle_failure(
+                task_id, step_index, step, stamped, max_transient_retries
+            )
+
+            # _handle_failure returns (False, error, method) for terminal
+            # failures, or sets current to the next decision for fallback.
+            if isinstance(outcome, tuple):
+                return outcome
+
+            # outcome is the next MethodDecision to try
+            current = outcome
+
+    async def _handle_failure(
+        self,
+        task_id              : str,
+        step_index           : int,
+        step                 : dict,
+        decision             : MethodDecision,
+        max_transient_retries: int,
+    ) -> Any:
+        """
+        Apply Gap 1 failure routing rules and either:
+          a) Return (False, error_dict, method_str) — terminal failure
+          b) Return the next MethodDecision — continue with fallback
+
+        Gap 1 rules:
+          ENV_TRANSIENT    → terminal (retries already exhausted in caller)
+          ROUTING_MISMATCH → publish routing_mismatch + advance fallback
+          ENV_PERMANENT    → publish method_unavailable + advance fallback
+          EXECUTION_LOGIC  → publish execution_error + terminal (surface bug)
+        """
+        failure_class  = decision.failure_class
+        failure_detail = decision.failure_detail or "unknown error"
+        method_str     = decision.method.value
+
+        if failure_class == FailureClass.ENV_TRANSIENT:
+            # Retries already exhausted — report failure, do NOT feed learner,
+            # do NOT descend fallback chain (transient ≠ wrong method).
+            logger.warning(
+                "ENV_TRANSIENT exhausted on step %d method=%s: %s",
+                step_index, method_str, failure_detail,
+            )
+            bus.publish(
+                "execution_transient_failure",
+                {
+                    "task_id":      task_id,
+                    "step_index":   step_index,
+                    "method":       method_str,
+                    "failure_class": failure_class.value,
+                    "detail":       failure_detail,
+                },
+                source="executor",
+            )
+            return False, {"type": "transient", "message": failure_detail}, method_str
+
+        if failure_class == FailureClass.ROUTING_MISMATCH:
+            # Wrong method for this intent — feed the learner, try next fallback
+            logger.warning(
+                "ROUTING_MISMATCH on step %d method=%s: %s",
+                step_index, method_str, failure_detail,
+            )
+            bus.publish(
+                "routing_mismatch",
+                {
+                    "task_id":       task_id,
+                    "step_index":    step_index,
+                    "intent":        step.get("action"),
+                    "method":        method_str,
+                    "failure_class": failure_class.value,
+                    "detail":        failure_detail,
+                    "fallback_chain": [
+                        m.value for m in decision.fallback_chain
+                    ],
+                    "decision_log":  decision.to_log_dict(),
+                },
+                source="executor",
+            )
+
+        elif failure_class == FailureClass.ENV_PERMANENT:
+            logger.warning(
+                "ENV_PERMANENT on step %d method=%s: %s",
+                step_index, method_str, failure_detail,
+            )
+            bus.publish(
+                "method_unavailable",
+                {
+                    "task_id":    task_id,
+                    "method":     method_str,
+                    "detail":     failure_detail,
+                },
+                source="executor",
+            )
+
+        elif failure_class == FailureClass.EXECUTION_LOGIC:
+            logger.error(
+                "EXECUTION_LOGIC bug on step %d method=%s: %s — "
+                "surfacing to debugger, no fallback.",
+                step_index, method_str, failure_detail,
+            )
+            bus.publish(
+                "execution_logic_error",
+                {
+                    "task_id":    task_id,
+                    "step_index": step_index,
+                    "method":     method_str,
+                    "detail":     failure_detail,
+                },
+                source="executor",
+            )
+            return (
+                False,
+                {"type": "logic_error", "message": failure_detail},
+                method_str,
+            )
+
+        # Try next method in the fallback chain (ROUTING_MISMATCH + ENV_PERMANENT)
+        next_method = decision.next_method()
+        if next_method is None:
+            logger.error(
+                "Fallback chain exhausted after %s failure on step %d.",
+                failure_class.name, step_index,
+            )
+            bus.publish(
+                "fallback_exhausted",
+                {
+                    "task_id":       task_id,
+                    "step_index":    step_index,
+                    "failure_class": failure_class.value,
+                    "detail":        failure_detail,
+                },
+                source="executor",
+            )
+            return (
+                False,
+                {"type": "exhausted", "message": failure_detail},
+                method_str,
+            )
+
+        next_decision = decision.advance()
+        logger.info(
+            "Fallback: step %d advancing from %s → %s",
+            step_index, method_str, next_decision.method.value,
+        )
+        bus.publish(
+            "fallback_triggered",
+            {
+                "task_id":    task_id,
+                "step_index": step_index,
+                "from":       method_str,
+                "to":         next_decision.method.value,
+            },
+            source="executor",
+        )
+        return next_decision   # caller continues the while loop
+
+    async def _invoke_method(
+        self,
+        method  : MethodType,
+        payload : Any,
+        step    : dict,
+        context : dict,
+        task_id : str,
+    ) -> tuple[bool, Any]:
+        """
+        Dispatch to the correct tool for *method* using the pre-serialized
+        *payload* slot (Gap 2 — no translation here).
+
+        Returns (ok: bool, result: Any).
+        Raises on transient/permanent/logic errors — caller classifies.
+        """
+        action = step.get("action", "")
+
+        if method == MethodType.PLUGIN:
+            return await self._invoke_plugin(payload, action, context, task_id)
+
+        if method == MethodType.API:
+            return await self._invoke_api(payload, task_id)
+
+        if method == MethodType.SHELL:
+            return await self._invoke_shell(payload, step, context, task_id)
+
+        if method == MethodType.UI:
+            return await self._invoke_ui(payload, action, context, task_id)
+
+        raise NotImplementedError(f"Unknown MethodType: {method}")
+
+    async def _invoke_plugin(
+        self,
+        payload : Any,   # MappingProxyType (plugin_kwargs slot)
+        action  : str,
+        context : dict,
+        task_id : str,
+    ) -> tuple[bool, Any]:
+        from plugins.registry import plugin_registry
+        from brain.intent_matcher import match_intent_local
+
+        kwargs = dict(payload) if payload else {}
+        intent_str = kwargs.get("_intent") or action
+
+        cap_map: dict[str, Any] = {}
+        for pname, entry in plugin_registry.entries.items():
+            for cap in getattr(entry.manifest, "capabilities", []) or []:
+                cap_map[str(cap).lower().replace("_", " ")] = entry
+            cap_map[pname.replace("_", " ")] = entry
+
+        if not cap_map:
+            return False, "No plugins registered"
+
+        threshold = float(getattr(settings, "PLUGIN_EVOLVE_THRESHOLD", 0.75))
+        matched_cap, score = match_intent_local(
+            intent_str.lower().replace("_", " "),
+            list(cap_map.keys()),
+            threshold=threshold,
+        )
+        if not matched_cap:
+            return False, f"No plugin matched intent '{intent_str}' above threshold {threshold}"
+
+        entry           = cap_map[matched_cap]
+        plugin_instance = entry.instance
+        plugin_name     = entry.manifest.name
+
+        plugin_args = self._normalize_args_for_plugin(
+            plugin_instance, kwargs, action, context
+        )
+        validation_error = plugin_instance.validate(plugin_args)
+        if validation_error:
+            return False, f"Plugin '{plugin_name}' validation failed: {validation_error}"
+
+        timeout = float(getattr(settings, "PLUGIN_TIMEOUT", 60.0))
+        plugin_result = await asyncio.wait_for(
+            plugin_instance.run(context, plugin_args),
+            timeout=timeout,
+        )
+
+        if isinstance(plugin_result, dict):
+            if plugin_result.get("status") == "success":
+                return True, plugin_result.get("result")
+            return False, plugin_result.get("message", "Plugin returned error")
+        return True, plugin_result
+
+    async def _invoke_api(
+        self,
+        payload : Any,   # MappingProxyType (api_body slot)
+        task_id : str,
+    ) -> tuple[bool, Any]:
+        from tools.api_tool import api_tool
+        args = dict(payload) if payload else {}
+        result = await api_tool.run(args)
+        if result.get("success"):
+            return True, result.get("data")
+        return False, result
+
+    async def _invoke_shell(
+        self,
+        payload : Any,   # tuple[str, ...] (shell_argv slot)
+        step    : dict,
+        context : dict,
+        task_id : str,
+    ) -> tuple[bool, Any]:
+        """
+        Invoke the shell tool using the frozen argv tuple from LayeredPayload.
+        Profile resolution (Bridge/Ghost/Lab) is preserved unchanged.
+        """
+        argv    = list(payload) if payload else []
+        action  = step.get("action", "")
+        args    = dict(step.get("args", {}))
+
+        # Inject the reconstructed command into args so the shell tool's
+        # existing logic (profile resolution, pts check) works unchanged.
+        import shlex as _shlex
+        args["command"] = _shlex.join(argv) if argv else args.get("command", "")
+        args["task_id"] = task_id
+
+        is_panel_sudo = (
+            args.get("needs_password")
+            or args.get("profile_hint") == "panel_sudo"
+        )
+
+        if not is_panel_sudo:
+            args = await self._resolve_and_inject_profile(
+                task_id, 0, action, args, context
+            )
+            if args is None:
+                try:
+                    chosen_profile = await asyncio.wait_for(
+                        self._wait_for_target_selection(task_id), timeout=60.0
+                    )
+                except asyncio.TimeoutError:
+                    return False, "Target selection timed out"
+                args = dict(step.get("args", {}))
+                args["task_id"]  = task_id
+                args["_profile"] = chosen_profile
+                args["cwd"]      = context.get("cwd")
+        else:
+            args["cwd"] = args.get("cwd") or context.get("cwd")
+
+        tool_entry = tool_registry.get_entry("shell_tool")
+        if not tool_entry:
+            return False, "shell_tool not registered"
+        tool = tool_entry.instance
+
+        if asyncio.iscoroutinefunction(tool.run):
+            ok, result = await tool.run(action, args)
+        else:
+            ok, result = await asyncio.get_running_loop().run_in_executor(
+                None, tool.run, action, args
+            )
+        return ok, result
+
+    async def _invoke_ui(
+        self,
+        payload : Any,   # MappingProxyType (ui_action slot)
+        action  : str,
+        context : dict,
+        task_id : str,
+    ) -> tuple[bool, Any]:
+        """
+        Invoke the UI tool.
+
+        Note: capture_fresh_frame() must be called as the FIRST step inside
+        the UI tool invocation itself (Optimization B), not here.  This
+        method's sole responsibility is to dispatch the payload to the tool.
+        """
+        args = dict(payload) if payload else {}
+        args["task_id"] = task_id
+
+        tool_entry = tool_registry.get_entry("ui_tool")
+        if not tool_entry:
+            return False, "ui_tool not registered"
+        tool = tool_entry.instance
+
+        if asyncio.iscoroutinefunction(tool.run):
+            ok, result = await tool.run(action, args)
+        else:
+            ok, result = await asyncio.get_running_loop().run_in_executor(
+                None, tool.run, action, args
+            )
+        return ok, result
+
+    # ── Legacy step execution (backward compat — capability waterfall) ─────
 
     async def _execute_step_safe(
         self,
@@ -459,23 +1030,21 @@ class Executor:
         context: dict,
         preferred_method: str | None = None,
     ) -> tuple[bool, Any, str]:
+        """
+        Legacy execution path for tasks that arrive without a MethodDecision.
+        Preserved unchanged from the original so existing capabilities and
+        tool routing continue to work during the migration period.
+        """
         action = step.get("action")
         args   = step.get("args", {})
 
         if action in self.restricted_actions:
             return False, f"Restricted action blocked: {action}", "blocked"
 
-        # Skip window focus for:
-        # 1. Plugin actions — background/automation plugins don't need a focused window
-        # 2. Shell/command actions — they run in terminals, not in specific GUI windows
-        #    (run_command, execute, git_op etc. target the terminal, not the active app)
-        # 3. Any action where no specific window target is needed
-        # Focusing causes failures when the active window title doesn't resolve
-        # via wmctrl/xdotool (e.g. "Untitled - Google Chrome" is generic).
         _SKIP_FOCUS_FOR_METHODS = {"plugin"}
         _needs_focus = (
             preferred_method not in _SKIP_FOCUS_FOR_METHODS
-            and action not in _SHELL_ACTIONS   # shell actions target terminal, not GUI window
+            and action not in _SHELL_ACTIONS
         )
         window_title = context.get("window_title")
         if window_title and _needs_focus:
@@ -487,27 +1056,14 @@ class Executor:
                     "focus_failed",
                 )
 
-        # ── Hybrid profile resolution ──────────────────────────────────────
         if action in _SHELL_ACTIONS:
-            # BUG 1 FIX: panel_sudo commands must SKIP terminal_resolver entirely.
-            # The executor was resolving Ghost/Bridge BEFORE shell_tool got to check
-            # needs_password, then injecting _profile=GhostTarget which overrode
-            # the interactive flow. panel_sudo has its own subprocess strategy
-            # (sudo -S + ProcessBridge) that is incompatible with the profile system.
-            #
-            # BUG 2 FIX: task_id was never injected into step args, so shell_tool
-            # and process_bridge received task_id="unknown" for every command.
-            # Inject it here, before profile resolution or dispatch.
             args = dict(args)
-            args["task_id"] = task_id   # BUG 2 FIX — always stamp task_id into args
-
+            args["task_id"] = task_id
             is_panel_sudo = (
                 args.get("needs_password")
                 or args.get("profile_hint") == "panel_sudo"
             )
-
             if not is_panel_sudo:
-                # Normal path — resolve execution profile via terminal_resolver
                 args = await self._resolve_and_inject_profile(
                     task_id, step_index, action, args, context
                 )
@@ -524,12 +1080,10 @@ class Executor:
                             "target_selection",
                         )
                     args = dict(step.get("args", {}))
-                    args["task_id"]  = task_id   # keep task_id on rebuilt args too
+                    args["task_id"]  = task_id
                     args["_profile"] = chosen_profile
                     args["cwd"]      = context.get("cwd")
             else:
-                # panel_sudo path — skip terminal_resolver, just stamp cwd
-                # shell_tool._execute_interactive handles everything from here
                 args["cwd"] = args.get("cwd") or context.get("cwd")
 
         # ── Direct plugin dispatch ─────────────────────────────────────────
@@ -546,39 +1100,31 @@ class Executor:
 
             if cap_map:
                 action_normalized = action.lower().replace("_", " ").strip()
-                plugin_threshold  = float(getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55))
+                plugin_threshold  = float(
+                    getattr(settings, "PLUGIN_INTENT_MATCH_THRESHOLD", 0.55)
+                )
                 matched_cap, score = match_intent_local(
-                    action_normalized, list(cap_map.keys()), threshold=plugin_threshold,
+                    action_normalized, list(cap_map.keys()),
+                    threshold=plugin_threshold,
                 )
                 if matched_cap:
                     matched_entry   = cap_map[matched_cap]
                     plugin_instance = matched_entry.instance
                     plugin_name     = matched_entry.manifest.name
 
-                    # ── Arg normalization ──────────────────────────────────
-                    # The intent-parser produces generic shapes (e.g.
-                    # {'command': 'open', 'args': ['cursor']}) that may not
-                    # match the plugin's declared parameter names (e.g.
-                    # 'app_name').  Normalize before validating so the plugin
-                    # receives the right keys regardless of how the planner
-                    # phrased the step.
                     plugin_args = self._normalize_args_for_plugin(
                         plugin_instance, args or {}, action, context,
                     )
-
                     validation_error = plugin_instance.validate(plugin_args)
                     if validation_error:
-                        # Normalization couldn't fully satisfy the plugin —
-                        # log and fall through to the waterfall rather than
-                        # dispatching with known-bad args.
                         logger.warning(
-                            "Plugin '%s' validation still failed after normalization: %s "
-                            "— skipping plugin, falling through to waterfall.",
+                            "Plugin '%s' validation still failed after "
+                            "normalization: %s — falling through.",
                             plugin_name, validation_error,
                         )
                     else:
                         logger.info(
-                            "🔌 Plugin dispatch: '%s' → '%s' (cap='%s', score=%.2f)",
+                            "Plugin dispatch: '%s' → '%s' (cap='%s', score=%.2f)",
                             action, plugin_name, matched_cap, score,
                         )
                         bus.publish(
@@ -592,65 +1138,41 @@ class Executor:
                             },
                             source="executor",
                         )
-
                         try:
                             plugin_result = await asyncio.wait_for(
                                 plugin_instance.run(context, plugin_args),
-                                timeout=float(getattr(settings, "PLUGIN_TIMEOUT", 60.0)),
+                                timeout=float(
+                                    getattr(settings, "PLUGIN_TIMEOUT", 60.0)
+                                ),
                             )
                             if isinstance(plugin_result, dict):
                                 if plugin_result.get("status") == "success":
                                     return True, plugin_result.get("result"), "plugin"
-                                else:
-                                    logger.warning(
-                                        "Plugin '%s' returned error: %s — falling through.",
-                                        plugin_name, plugin_result.get("message", "unknown"),
-                                    )
+                                logger.warning(
+                                    "Plugin '%s' returned error: %s — falling through.",
+                                    plugin_name,
+                                    plugin_result.get("message", "unknown"),
+                                )
                             else:
                                 return True, plugin_result, "plugin"
                         except asyncio.TimeoutError:
                             logger.warning("Plugin '%s' timed out.", plugin_name)
                         except Exception as plugin_exc:
-                            logger.warning("Plugin '%s' exception: %s — falling through.", plugin_name, plugin_exc)
+                            logger.warning(
+                                "Plugin '%s' exception: %s — falling through.",
+                                plugin_name, plugin_exc,
+                            )
         except Exception as exc:
             logger.debug("Plugin dispatch pre-check failed (non-fatal): %s", exc)
 
-        # ── Waterfall ──────────────────────────────────────────────────────
-        waterfall       = self._build_waterfall(preferred_method)
-        tried_tools: list[str] = []
-        fallback_attempts = 0
-        max_fallbacks   = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
+        # ── Capability registry ────────────────────────────────────────────
+        _NO_CAP_PREFIX  = "No capability registered"
+        _cap_meta       = capability_registry.metadata.get(action, {})
+        _cap_method     = _cap_meta.get("method") or "api"
+        _cap_attempt    = 0
+        _cap_max        = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
         last_error: Any = f"No tool available for action: {action}"
         method_used     = "unknown"
-
-        # ── PRE-WATERFALL: capability_registry (RISK 1-5 FIX) ─────────────
-        #
-        # DOUBLE-EXECUTION (Risk 1 original): capability_registry.execute()
-        # was called inside the waterfall loop, so a failed command was run
-        # again on the next tier.  Now called once here, before the loop.
-        #
-        # RISK 1 — retry loop was broken: should_retry=True had no loop,
-        #   so a retryable capability failure just fell off the end silently.
-        #   FIX: explicit retry loop using peek_should_retry() (non-consuming)
-        #   to check eligibility, then should_retry() (consuming + backoff)
-        #   to actually burn the slot before re-running the capability.
-        #
-        # RISK 3 — method_used hardcoded "plugin" for all cap results.
-        #   FIX: resolve from registry metadata; fall back to "api" if absent
-        #   so learning system records the correct method per intent.
-        #
-        # RISK 5 — should_retry() consumed a slot even when not retrying.
-        #   FIX: use peek_should_retry() to check eligibility without side
-        #   effects; only call should_retry() when actually about to retry.
-
-        _NO_CAP_PREFIX = "No capability registered"
-
-        # Resolve the correct method_used label for this capability (Risk 3)
-        _cap_meta   = capability_registry.metadata.get(action, {})
-        _cap_method = _cap_meta.get("method") or "api"
-
-        _cap_attempt = 0
-        _cap_max     = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
 
         while _cap_attempt <= _cap_max:
             try:
@@ -658,103 +1180,53 @@ class Executor:
                     action, context, args
                 )
             except Exception as cap_exc:
-                # capability_registry itself raised (import error, bug, etc.)
-                # Not a command failure — fall through to waterfall.
                 logger.debug(
-                    "capability_registry.execute raised for '%s': %s — "
-                    "falling through to waterfall.",
+                    "capability_registry.execute raised for '%s': %s",
                     action, cap_exc,
                 )
-                break   # exit while loop → enter waterfall
+                break
 
             if cap_ok:
-                # ── Success path ──────────────────────────────────────────
                 if isinstance(cap_result, dict) and "success" in cap_result:
                     if cap_result["success"]:
                         return True, cap_result.get("result"), _cap_method
-                    else:
-                        # Capability ran but reported its own failure.
-                        # Treat as a definitive command failure — no waterfall.
-                        last_error = cap_result.get("result", "Capability failed")
-                        return False, last_error, _cap_method
-                else:
-                    # Plain result (dict without "success" key, or non-dict)
-                    return True, cap_result, _cap_method
+                    return False, cap_result.get("result", "Capability failed"), _cap_method
+                return True, cap_result, _cap_method
 
-            else:
-                # ── Failure path ──────────────────────────────────────────
-                cap_err_str = str(cap_result)
+            cap_err_str = str(cap_result)
+            if _NO_CAP_PREFIX in cap_err_str:
+                break
 
-                if _NO_CAP_PREFIX in cap_err_str:
-                    # No capability registered for this intent at all.
-                    # Fall through to the waterfall so tool_selector can
-                    # handle it (ollama_tool, api_tool, etc.).
-                    break   # exit while loop → enter waterfall
-
-                # A real capability was found but it failed.
-                # Do NOT re-run via the waterfall — that is the double-
-                # execution bug.  Instead, check if the error is retryable
-                # and loop back through capability_registry only.
-                last_error = cap_result
-                logger.warning(
-                    "Capability '%s' failed (attempt %d/%d): %s",
-                    action, _cap_attempt + 1, _cap_max, cap_result,
+            last_error = cap_result
+            logger.warning(
+                "Capability '%s' failed (attempt %d/%d): %s",
+                action, _cap_attempt + 1, _cap_max, cap_result,
+            )
+            category = await self._classify_error_dynamically(str(last_error))
+            if retry_manager.peek_should_retry(
+                task_id, step_index, error_type=category, max_retries=_cap_max
+            ):
+                await retry_manager.should_retry(
+                    task_id, step_index, error_type=category, max_retries=_cap_max
                 )
+                _cap_attempt += 1
+                continue
+            bus.publish(
+                "retry_failed",
+                {"task_id": task_id, "step": step_index},
+                source="retry_manager",
+            )
+            return (
+                False,
+                {"type": "exhausted", "message": last_error, "tried": [action]},
+                _cap_method,
+            )
 
-                category = await self._classify_error_dynamically(
-                    str(last_error)
-                )
-
-                # Risk 5 fix: peek first (no side effects) to decide whether
-                # to loop; consume the slot only if we are actually retrying.
-                if retry_manager.peek_should_retry(
-                    task_id, step_index,
-                    error_type=category,
-                    max_retries=_cap_max,
-                ):
-                    # Consume the slot + apply backoff delay
-                    await retry_manager.should_retry(
-                        task_id, step_index,
-                        error_type=category,
-                        max_retries=_cap_max,
-                    )
-                    _cap_attempt += 1
-                    continue   # retry capability_registry
-                else:
-                    # Non-retryable or exhausted — definitive failure.
-                    bus.publish(
-                        "retry_failed",
-                        {"task_id": task_id, "step": step_index},
-                        source="retry_manager",
-                    )
-                    return (
-                        False,
-                        {
-                            "type":    "exhausted",
-                            "message": last_error,
-                            "tried":   [action],
-                        },
-                        _cap_method,
-                    )
-
-        # ── WATERFALL: for intents with no registered capability ───────────
-        # Reached only when capability_registry returned "No capability
-        # registered" or raised.  tool_selector picks the best available
-        # tool for this tier and we call tool_instance.run() directly.
-        #
-        # RISK 2 FIX — tool interface guard:
-        #   tool_instance.run() signature is (action, args) for shell/api
-        #   tools, but other tool types may differ.  We guard with hasattr
-        #   and a signature probe so a mismatched tool raises a clear error
-        #   instead of silently swallowing it in the broad except block.
-        #
-        # RISK 4 FIX — empty waterfall last_error:
-        #   If no tool is found in any tier, last_error was still the
-        #   generic "No tool available" string, which _classify_error
-        #   maps to "not_found" and retry_manager skips permanently.
-        #   Now last_error is set to a more descriptive string and
-        #   method_used is set to "none" so the learning system does not
-        #   record a misleading "unknown" entry.
+        # ── Tool waterfall ─────────────────────────────────────────────────
+        waterfall         = self._build_waterfall(preferred_method)
+        tried_tools: list[str] = []
+        fallback_attempts = 0
+        max_fallbacks     = int(getattr(settings, "MAX_RETRY_ATTEMPTS", 3))
 
         for tier in waterfall:
             if fallback_attempts >= max_fallbacks:
@@ -766,15 +1238,8 @@ class Executor:
                 context,
                 exclude=tried_tools,
             )
-
             if not tool_instance:
-                logger.debug(
-                    "No %s tool for '%s', trying next tier.", tier, action
-                )
-                # Risk 4: update last_error to reflect missing tool
-                last_error = (
-                    f"No {tier} tool registered for action '{action}'"
-                )
+                last_error = f"No {tier} tool registered for action '{action}'"
                 continue
 
             tool_name = getattr(tool_instance, "name", tool_type)
@@ -794,26 +1259,21 @@ class Executor:
             )
 
             try:
-                # Risk 2 fix: guard tool interface before calling run()
+                import inspect as _inspect
                 if not hasattr(tool_instance, "run"):
                     raise TypeError(
-                        f"Tool '{tool_name}' has no run() method — "
-                        f"interface mismatch for action '{action}'"
+                        f"Tool '{tool_name}' has no run() method"
                     )
-                import inspect as _inspect
-                _sig = _inspect.signature(tool_instance.run)
+                _sig    = _inspect.signature(tool_instance.run)
                 _params = list(_sig.parameters.keys())
-                # Expect at least (action, args) or (self, action, args)
                 if len(_params) < 2:
                     raise TypeError(
-                        f"Tool '{tool_name}'.run() has unexpected signature "
-                        f"{_params} — expected (action, args)"
+                        f"Tool '{tool_name}'.run() unexpected signature {_params}"
                     )
 
                 if asyncio.iscoroutinefunction(tool_instance.run):
                     ok, tool_result = await tool_instance.run(action, args)
                 else:
-                    # Sync tool — run in thread so event loop stays free
                     ok, tool_result = await asyncio.get_running_loop().run_in_executor(
                         None, tool_instance.run, action, args
                     )
@@ -825,7 +1285,6 @@ class Executor:
             except asyncio.TimeoutError:
                 last_error = "Execution timed out"
             except TypeError as type_exc:
-                # Interface mismatch — log clearly, don't swallow
                 last_error = str(type_exc)
                 logger.error(
                     "Tool interface error for '%s' tier='%s': %s",
@@ -843,11 +1302,7 @@ class Executor:
                 task_id, step_index, error_type=category
             )
             if should_retry:
-                logger.info(
-                    "Retrying step %d via waterfall (error=%s)", step_index, category
-                )
                 continue
-
             fallback_attempts += 1
             bus.publish(
                 "fallback_triggered",
@@ -855,8 +1310,6 @@ class Executor:
                 source="executor",
             )
 
-        # Risk 4: if waterfall ran but tried nothing, method_used is still
-        # "unknown" — set to "none" so learning system is not misled.
         if method_used == "unknown" and not tried_tools:
             method_used = "none"
 
@@ -866,15 +1319,59 @@ class Executor:
             method_used,
         )
 
-    # ── Hybrid profile resolution ──────────────────────────────────────────
+    # ── Shared helpers (unchanged from original) ───────────────────────────
+
+    async def _classify_error_dynamically(self, result: Any) -> str:
+        result_str = str(result).lower()
+        patterns = {
+            "permission_denied": r"(permission|denied|access|forbidden|not allowed)",
+            "not_found":         r"(not found|no such|does not exist|404)",
+            "timeout":           r"(timeout|timed out|deadline|took too long)",
+            "network":           r"(connection|network|unreachable|offline)",
+        }
+        for category, pattern in patterns.items():
+            if re.search(pattern, result_str):
+                return category
+        prompt = (
+            f"Classify this execution error into one category.\n"
+            f"Error: {result_str}\n"
+            f'Return ONLY JSON: {{"category": "permission_denied|not_found|'
+            f'timeout|network|unknown_error"}}'
+        )
+        try:
+            response = await asyncio.wait_for(
+                llm_client.generate(prompt, use_json=True), timeout=2.0
+            )
+            if isinstance(response, dict):
+                return response.get("category", "unknown_error")
+        except Exception:
+            pass
+        return "unknown_error"
+
+    def _resolve_tool_call(
+        self, intent: str, args: dict
+    ) -> tuple[str, str, dict] | None:
+        try:
+            all_tools = tool_registry.get_all_tools()
+        except Exception:
+            all_tools = {}
+        for tool_name, tool_obj in all_tools.items():
+            if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
+                return tool_name, intent, args
+            if (
+                hasattr(tool_obj, "supported_intents")
+                and intent in tool_obj.supported_intents
+            ):
+                return tool_name, intent, args
+        return None
 
     async def _resolve_and_inject_profile(
         self,
-        task_id: str,
-        step_index: int,
-        action: str,
-        args: dict,
-        context: dict,
+        task_id    : str,
+        step_index : int,
+        action     : str,
+        args       : dict,
+        context    : dict,
     ) -> dict | None:
         cwd          = context.get("cwd") or args.get("cwd")
         command      = args.get("command") or args.get("cmd", "")
@@ -882,14 +1379,14 @@ class Executor:
         venv_path    = args.get("venv_path") or context.get("venv_path")
 
         profile = await asyncio.get_running_loop().run_in_executor(
-            None, terminal_resolver.resolve, cwd, command, profile_hint, venv_path,
+            None,
+            terminal_resolver.resolve,
+            cwd, command, profile_hint, venv_path,
         )
-
         logger.info(
-            "Task [%s] step %d → %s", task_id, step_index, type(profile).__name__,
+            "Task [%s] step %d → %s", task_id, step_index, type(profile).__name__
         )
 
-        # CAVEAT 3 — Bridge pre-flight permission check
         if isinstance(profile, BridgeTarget):
             profile = await asyncio.get_running_loop().run_in_executor(
                 None, self._check_bridge_permission, profile, task_id, cwd,
@@ -925,19 +1422,13 @@ class Executor:
     def _check_bridge_permission(
         profile: BridgeTarget,
         task_id: str,
-        cwd: str | None,
+        cwd    : str | None,
     ) -> BridgeTarget | GhostTarget:
-        """
-        CAVEAT 3 — pre-flight pts write permission check (runs in thread executor).
-
-        Opens the pts device O_WRONLY|O_NOCTTY and closes it immediately.
-        On PermissionError → downgrade to Ghost + publish dashboard warning.
-        On missing device → same fallback.
-        """
         pts = profile.pts_path
-
         if not pts or not os.path.exists(pts):
-            logger.warning("Bridge pre-flight: pts '%s' missing — downgrading to Ghost", pts)
+            logger.warning(
+                "Bridge pre-flight: pts '%s' missing — downgrading to Ghost", pts
+            )
             bus.publish(
                 "bridge_permission_denied",
                 {
@@ -956,11 +1447,9 @@ class Executor:
             os.close(fd)
             logger.debug("Bridge pre-flight: pts '%s' writable ✓", pts)
             return profile
-
         except PermissionError:
             logger.warning(
-                "Bridge pre-flight: PermissionError on '%s' — downgrading to Ghost. "
-                "Fix: echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope",
+                "Bridge pre-flight: PermissionError on '%s' — downgrading to Ghost.",
                 pts,
             )
             bus.publish(
@@ -978,9 +1467,10 @@ class Executor:
                 source="executor",
             )
             return GhostTarget(cwd=cwd)
-
         except OSError as exc:
-            logger.warning("Bridge pre-flight: OSError on '%s': %s — Ghost", pts, exc)
+            logger.warning(
+                "Bridge pre-flight: OSError on '%s': %s — Ghost", pts, exc
+            )
             bus.publish(
                 "bridge_permission_denied",
                 {
@@ -993,8 +1483,10 @@ class Executor:
             )
             return GhostTarget(cwd=cwd)
 
-    async def _wait_for_target_selection(self, task_id: str) -> BridgeTarget:
-        loop = asyncio.get_running_loop()
+    async def _wait_for_target_selection(
+        self, task_id: str
+    ) -> BridgeTarget:
+        loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._pending_target_selections[task_id] = fut
         return await fut
@@ -1013,9 +1505,10 @@ class Executor:
             cwd          = data.get("cwd"),
         )
         fut.set_result(chosen)
-        logger.info("Target selected [%s]: %s (%s)", task_id, chosen.window_title, chosen.pts_path)
-
-    # ── Context enrichment ─────────────────────────────────────────────────
+        logger.info(
+            "Target selected [%s]: %s (%s)",
+            task_id, chosen.window_title, chosen.pts_path,
+        )
 
     @staticmethod
     def _enrich_context_with_cwd(context: dict) -> None:
@@ -1031,71 +1524,45 @@ class Executor:
         context["cwd"] = os.getcwd()
         logger.debug("cwd not in context — using process CWD: %s", context["cwd"])
 
-    # ── Waterfall helpers ──────────────────────────────────────────────────
+    @staticmethod
+    def _build_waterfall(preferred_method: str | None) -> list[str]:
+        if preferred_method and preferred_method in _WATERFALL_ORDER:
+            idx = _WATERFALL_ORDER.index(preferred_method)
+            return _WATERFALL_ORDER[idx:] + _WATERFALL_ORDER[:idx]
+        return list(_WATERFALL_ORDER)
 
     @staticmethod
     def _normalize_args_for_plugin(
         plugin_instance: Any,
-        args: dict,
-        action: str,
-        context: dict,
+        args           : dict,
+        action         : str,
+        context        : dict,
     ) -> dict:
-        """
-        Translate the executor's raw step-args into the shape a plugin expects.
-
-        The intent-parser produces generic shapes like
-            {'command': 'open', 'args': ['cursor']}
-        while a plugin may declare specific parameters like 'app_name'.
-        This method asks the plugin to validate the raw args first; if that
-        fails it runs a series of heuristic mappings derived from the
-        validation error message and the plugin's own parameter names,
-        then re-validates.  The original args are never mutated.
-
-        Mapping rules (applied in order, first match wins per missing key):
-          1. If error mentions a key name and that key appears in one of the
-             known raw-arg positions, map it directly.
-          2. 'app_name'  ← args['args'][0] | args['target'] | args['name']
-                           | args['command'] (when command ≠ a known shell verb)
-          3. 'file_path' / 'path' ← args['args'][0] | args['file'] | args['target']
-          4. 'url'        ← args['args'][0] | args['target']
-          5. 'query'      ← args['args'][0] | args['text'] | args['target']
-          6. 'text'       ← args['args'][0] | args['query'] | args['target']
-          7. Fallback: spread positional args list into the first N missing keys.
-
-        Internal executor keys (_profile, task_id, cwd) are always forwarded
-        unchanged so shell_tool and process_bridge keep working.
-        """
         _SHELL_VERBS: frozenset[str] = frozenset({
             "open", "run", "execute", "launch", "start",
             "xdg-open", "gtk-launch", "gio",
         })
-        _INTERNAL_KEYS: frozenset[str] = frozenset({"_profile", "task_id", "cwd", "profile_hint"})
+        _INTERNAL_KEYS: frozenset[str] = frozenset({
+            "_profile", "task_id", "cwd", "profile_hint"
+        })
 
-        # Fast path — no normalization needed
         first_error = plugin_instance.validate(args)
         if first_error is None:
             return args
 
         normalized = {k: v for k, v in args.items() if k in _INTERNAL_KEYS}
         positional: list[str] = [str(a) for a in (args.get("args") or [])]
-        command: str = str(args.get("command") or "").strip().lower()
+        command: str          = str(args.get("command") or "").strip().lower()
         target_val: str | None = (
             positional[0] if positional else
             args.get("target") or args.get("name") or None
         )
-
-        # Collect all non-internal, non-positional raw args as candidates
         raw_scalars: dict[str, Any] = {
             k: v for k, v in args.items()
             if k not in _INTERNAL_KEYS and k not in {"args", "command"}
         }
-
-        # Determine which keys the plugin still needs by re-validating an
-        # empty candidate dict — we call validate repeatedly below so keep
-        # track of what we've already satisfied.
         candidate: dict[str, Any] = dict(raw_scalars)
 
-        # ── Rule 2: app_name ──────────────────────────────────────────────
         if "app_name" not in candidate:
             if target_val and command in _SHELL_VERBS:
                 candidate["app_name"] = target_val
@@ -1104,33 +1571,22 @@ class Executor:
             elif target_val:
                 candidate["app_name"] = target_val
 
-        # ── Rule 3: file_path / path ──────────────────────────────────────
         for fkey in ("file_path", "path"):
             if fkey not in candidate and target_val:
                 candidate[fkey] = target_val
 
-        # ── Rule 4: url ───────────────────────────────────────────────────
         if "url" not in candidate and target_val:
             candidate["url"] = target_val
 
-        # ── Rule 5: query ─────────────────────────────────────────────────
         if "query" not in candidate:
-            candidate["query"] = (
-                args.get("text") or target_val or action
-            )
+            candidate["query"] = args.get("text") or target_val or action
 
-        # ── Rule 6: text ──────────────────────────────────────────────────
         if "text" not in candidate:
-            candidate["text"] = (
-                args.get("query") or target_val or action
-            )
+            candidate["text"] = args.get("query") or target_val or action
 
-        # ── Rule 7: generic positional spread ─────────────────────────────
-        # Re-validate to find remaining missing keys, then fill from positional
-        test_args = {**normalized, **candidate}
+        test_args       = {**normalized, **candidate}
         remaining_error = plugin_instance.validate(test_args)
         if remaining_error and positional:
-            # Parse "Missing 'key'" style messages
             import re as _re
             missing_keys = _re.findall(r"['\"](\w+)['\"]", remaining_error)
             for i, mkey in enumerate(missing_keys):
@@ -1139,70 +1595,13 @@ class Executor:
 
         normalized.update(candidate)
 
-        # Final validation log
         final_error = plugin_instance.validate(normalized)
         if final_error:
             logger.debug(
                 "_normalize_args_for_plugin: still invalid after normalization: %s "
-                "(action=%s, raw_args=%s)",
-                final_error, action, args,
+                "(action=%s)", final_error, action,
             )
-        else:
-            logger.debug(
-                "_normalize_args_for_plugin: normalized args for action='%s': %s",
-                action, {k: v for k, v in normalized.items() if k not in _INTERNAL_KEYS},
-            )
-
         return normalized
-
-    @staticmethod
-    def _build_waterfall(preferred_method: str | None) -> list[str]:
-        if preferred_method and preferred_method in _WATERFALL_ORDER:
-            idx = _WATERFALL_ORDER.index(preferred_method)
-            return _WATERFALL_ORDER[idx:] + _WATERFALL_ORDER[:idx]
-        return list(_WATERFALL_ORDER)
-
-    # ── Error classification ───────────────────────────────────────────────
-
-    async def _classify_error_dynamically(self, result: Any) -> str:
-        result_str = str(result).lower()
-        patterns = {
-            "permission_denied": r"(permission|denied|access|forbidden|not allowed)",
-            "not_found":         r"(not found|no such|does not exist|404)",
-            "timeout":           r"(timeout|timed out|deadline|took too long)",
-            "network":           r"(connection|network|unreachable|offline)",
-        }
-        for category, pattern in patterns.items():
-            if re.search(pattern, result_str):
-                return category
-        prompt = (
-            f"Classify this execution error into one category.\n"
-            f"Error: {result_str}\n"
-            f'Return ONLY JSON: {{"category": "permission_denied|not_found|timeout|network|unknown_error"}}'
-        )
-        try:
-            response = await asyncio.wait_for(
-                llm_client.generate(prompt, use_json=True), timeout=2.0
-            )
-            if isinstance(response, dict):
-                return response.get("category", "unknown_error")
-        except Exception:
-            pass
-        return "unknown_error"
-
-    # ── Tool resolution ────────────────────────────────────────────────────
-
-    def _resolve_tool_call(self, intent: str, args: dict) -> tuple[str, str, dict] | None:
-        try:
-            all_tools = tool_registry.get_all_tools()
-        except Exception:
-            all_tools = {}
-        for tool_name, tool_obj in all_tools.items():
-            if hasattr(tool_obj, "can_handle") and tool_obj.can_handle(intent):
-                return tool_name, intent, args
-            if hasattr(tool_obj, "supported_intents") and intent in tool_obj.supported_intents:
-                return tool_name, intent, args
-        return None
 
 
 executor = Executor()
