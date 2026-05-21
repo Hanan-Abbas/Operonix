@@ -909,9 +909,26 @@ class Executor:
         if validation_error:
             return False, f"Plugin '{plugin_name}' validation failed: {validation_error}"
 
+        # Build scoped service context from the plugin's manifest
+        _service_ctx: dict = {}
+        try:
+            from plugins.context_builder import plugin_context_builder
+            _allowed = list(getattr(entry.manifest, "allowed_services", []) or [])
+            _service_ctx = plugin_context_builder.build_for(
+                plugin_name=plugin_name,
+                allowed_services=_allowed,
+                task_id=task_id,
+            )
+        except Exception as _ctx_exc:
+            logger.warning(
+                "_invoke_plugin: context_builder failed for '%s': %s — "
+                "running with empty service_ctx.",
+                plugin_name, _ctx_exc,
+            )
+
         timeout = float(getattr(settings, "PLUGIN_TIMEOUT", 60.0))
         plugin_result = await asyncio.wait_for(
-            plugin_instance.run(context, plugin_args),
+            plugin_instance.run(context, plugin_args, service_ctx=_service_ctx),
             timeout=timeout,
         )
 
@@ -1138,9 +1155,32 @@ class Executor:
                             },
                             source="executor",
                         )
+
+                        # Build scoped service context from the plugin's manifest
+                        _service_ctx: dict = {}
+                        try:
+                            from plugins.context_builder import plugin_context_builder
+                            _allowed = list(
+                                getattr(matched_entry.manifest, "allowed_services", []) or []
+                            )
+                            _service_ctx = plugin_context_builder.build_for(
+                                plugin_name=plugin_name,
+                                allowed_services=_allowed,
+                                task_id=task_id,
+                            )
+                        except Exception as _ctx_exc:
+                            logger.warning(
+                                "Plugin dispatch: context_builder failed for '%s': %s "
+                                "— running with empty service_ctx.",
+                                plugin_name, _ctx_exc,
+                            )
+
                         try:
                             plugin_result = await asyncio.wait_for(
-                                plugin_instance.run(context, plugin_args),
+                                plugin_instance.run(
+                                    context, plugin_args,
+                                    service_ctx=_service_ctx,
+                                ),
                                 timeout=float(
                                     getattr(settings, "PLUGIN_TIMEOUT", 60.0)
                                 ),
