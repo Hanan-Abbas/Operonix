@@ -80,8 +80,11 @@ class CapabilityMapper:
         self._load_learned_aliases()
         self._load_ops_metadata()          # NEW — load CAPABILITY_METADATA
         await self._generate_capability_vectors()
-        bus.subscribe("intent_validated", self.map_intent_to_capability)
+        bus.subscribe("intent_validated",        self.map_intent_to_capability)
         bus.subscribe("evolution_aliases_updated", self._on_aliases_updated)
+        # When a plugin is deployed, index its capabilities so future intents
+        # resolve to it without going through vector lookup → mapping_failed.
+        bus.subscribe("capability_registered",   self._on_capability_registered)
         self.logger.info("Capability Mapper: Online (Vector/Semantic backed).")
 
     # ── Ops metadata loader ───────────────────────────────────────────── #
@@ -338,6 +341,86 @@ class CapabilityMapper:
         bus.publish("capability_mapped", mapping_result, source="capability_mapper")
 
     # ── Event callbacks ───────────────────────────────────────────────── #
+
+    async def _on_capability_registered(self, event: object) -> None:
+        """
+        Fired by plugin_generator after a plugin is approved and hot-reloaded.
+
+        Adds vector entries for every capability string the plugin declares
+        so that future intents resolve to it directly — no mapping_failed,
+        no duplicate gap detection.
+
+        Also writes learned aliases: each capability string → itself, so
+        normalize_intent() finds an exact match before touching embeddings.
+        """
+        data         = event.data if hasattr(event, "data") else event
+        plugin_name  = data.get("name", "")
+        intent       = data.get("intent", "")
+        capabilities = data.get("capabilities") or ([intent] if intent else [])
+
+        for cap in capabilities:
+            if not cap:
+                continue
+            cap_norm = cap.replace("_", " ").strip()
+
+            # Add to capability_vectors so cosine lookup finds it
+            vec = await self._get_embedding(cap_norm)
+            self.capability_vectors[cap_norm] = vec
+            # Also index under the raw capability string (underscored form)
+            self.capability_vectors[cap] = vec
+
+            # Write as a learned alias so normalize_intent() short-circuits
+            self.learned_aliases[cap_norm] = cap_norm
+            self.learned_aliases[cap]      = cap_norm
+
+            self.logger.info(
+                "CapabilityMapper: indexed new plugin capability '%s' (plugin='%s')",
+                cap, plugin_name,
+            )
+
+        # Persist the new learned aliases to disk so they survive restarts
+        self._save_learned_aliases()
+
+    def mark_gap_filled(self, intent: str) -> None:
+        """
+        Called by capability_gap_detector after a plugin is confirmed deployed
+        for `intent`. Clears any in-memory state that could cause re-triggering.
+
+        Specifically: if the mapper had previously fired mapping_failed for this
+        intent, any retry task holding that failure state is now stale. This
+        method ensures normalize_intent() will find the capability on its next
+        call rather than re-entering the vector search path.
+        """
+        cap_norm = intent.replace("_", " ").strip()
+        # If already indexed (by _on_capability_registered), nothing to do.
+        if cap_norm in self.capability_vectors:
+            self.logger.debug(
+                "mark_gap_filled: '%s' already indexed — no action needed.", intent
+            )
+            return
+        # Not indexed yet (race condition: mark_gap_filled called before
+        # _on_capability_registered fires). Schedule a vector rebuild.
+        self.logger.info(
+            "mark_gap_filled: '%s' not yet indexed — scheduling vector rebuild.",
+            intent,
+        )
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._generate_capability_vectors())
+        except Exception as exc:
+            self.logger.debug("mark_gap_filled: could not schedule rebuild: %s", exc)
+
+    def _save_learned_aliases(self) -> None:
+        """Persist in-memory learned_aliases to disk."""
+        try:
+            import json as _json
+            os.makedirs(os.path.dirname(_LEARNED_PATH), exist_ok=True)
+            with open(_LEARNED_PATH, "w", encoding="utf-8") as fh:
+                _json.dump(self.learned_aliases, fh, indent=2)
+        except Exception as exc:
+            self.logger.warning("Could not persist learned aliases: %s", exc)
 
     async def _on_aliases_updated(self, _event: object) -> None:
         self._load_learned_aliases()
