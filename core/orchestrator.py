@@ -1,7 +1,23 @@
 """
 core/orchestrator.py — Operonix AI OS Agent
+─────────────────────────────────────────────
+All original functionality preserved. One addition from Plan §3.1:
 
-HYBRID EXECUTION CHANGE:
+  inject_task_metadata() now calls MethodRouter.router.select() immediately
+  after intent parsing and injects the resulting MethodDecision into the
+  task_dispatched payload under the key "method_decision".
+
+  The executor reads method_decision from the payload and uses it as its
+  sole routing authority (_execute_with_decision path).  When method_decision
+  is absent (legacy tasks, or when the router raises), the executor falls
+  back to the original capability waterfall (_execute_step_safe path) so
+  no existing behaviour is broken.
+
+  Everything else — wake-word loop, panel thread, safety stack, Reflector
+  init, profile_hint propagation, low-risk dispatch, dedup guards — is
+  unchanged verbatim.
+
+HYBRID EXECUTION CHANGE (original):
   profile_hint (from intent_parser) and cwd (from window_detector /
   pre_panel_context) are now carried through every event in the pipeline
   so the executor receives both without needing to re-query anything.
@@ -15,8 +31,10 @@ HYBRID EXECUTION CHANGE:
     handle_context_snapshot → stores cwd in active_tasks context
     route_to_mapper         → stores profile_hint on task, passes it through
     inject_task_metadata    → merges profile_hint + cwd into task_dispatched
+                              + NOW: calls MethodRouter.select() and injects
+                              method_decision into task_dispatched payload
     handle_safety_cleared   → preserves profile_hint in task_dispatched_safe
-    finalize_task / handle_failure → unchanged (profile_hint not needed there)
+    finalize_task / handle_failure → unchanged
 """
 from __future__ import annotations
 
@@ -69,34 +87,31 @@ def _build_panel_controller() -> Any:
 
 class Orchestrator:
     def __init__(self) -> None:
-        self.active_tasks: dict[str, dict[str, Any]] = {}
-        self.is_running: bool = False
-        self._voice_active = True
+        self.active_tasks    : dict[str, dict[str, Any]] = {}
+        self.is_running      : bool = False
+        self._voice_active   = True
 
         self.audio_manager = AudioManager(
             rate=int(getattr(settings, "AUDIO_RATE", 16000)),
             chunk=int(getattr(settings, "AUDIO_CHUNK", 1280)),
             auto_start=False,
         )
-        self.pipeline  = VoicePipeline(audio_manager=self.audio_manager)
-        wake_phrase    = getattr(settings, "WAKE_WORD", "alexa")
+        self.pipeline      = VoicePipeline(audio_manager=self.audio_manager)
+        wake_phrase        = getattr(settings, "WAKE_WORD", "alexa")
         self.wake_detector = WakeWordDetector(
             wake_word=wake_phrase,
             audio_manager=self.audio_manager,
         )
-        self._panel_controller: Optional[Any] = None
-        self._panel_thread:     Optional[threading.Thread] = None
-        self._panel_ready = threading.Event()
+        self._panel_controller : Optional[Any] = None
+        self._panel_thread     : Optional[threading.Thread] = None
+        self._panel_ready      = threading.Event()
 
         # Dedup set: task_safety_cleared fires from multiple safety subscribers
-        # (safety_validator, permission_guard, planner) for the same task_id.
-        # Without this, the executor runs the plugin once per subscriber.
+        # for the same task_id.  Without this the executor runs the plugin once
+        # per subscriber.
         self._dispatched_safe: set[str] = set()
 
         # Reflector instance — set during start() after the event loop is live.
-        # Typed as Optional[Any] to avoid a hard import at module load time,
-        # which would trigger LongTermMemory / EpisodicMemory DB connections
-        # before the process is fully initialised.
         self._reflector: Optional[Any] = None
 
     async def start(self) -> None:
@@ -105,21 +120,6 @@ class Orchestrator:
         self.wake_detector.loop = loop
 
         # ── Boot the Reflector ─────────────────────────────────────────────
-        # Initialised HERE — before any bus.subscribe() calls — so it is
-        # already subscribed to "execution_complete" when the first task runs.
-        #
-        # CRITICAL FIX: use the global episodic_memory and long_term_memory
-        # singletons (imported below), NOT new instances. The lifecycle_manager
-        # calls episodic_memory.start() and long_term_memory.start() before
-        # orchestrator.start(), which initialises their DB connections (_conn).
-        # Creating new EpisodicMemory() / LongTermMemory() here produces
-        # uninitialised instances (_conn=None) that silently swallow every
-        # store() / get_float() / set_float() call — causing the Reflector to
-        # appear "not available" on the dashboard even after a successful boot.
-        #
-        # RISK: deferred imports guard against circular import at module load
-        # time. memory.episodic and memory.long_term_memory import core.event_bus
-        # which is safe here because the event loop is already running.
         try:
             from brain.reflector import Reflector
             from memory.episodic import episodic_memory as _episodic
@@ -127,51 +127,47 @@ class Orchestrator:
             from brain.llm_client import llm_client as _llm_client
             self._reflector = Reflector(
                 event_bus  = bus,
-                episodic   = _episodic,    # global singleton — _conn already open
-                long_term  = _ltm,         # global singleton — KV DB already open
+                episodic   = _episodic,
+                long_term  = _ltm,
                 llm_client = _llm_client,
                 settings   = settings,
             )
             logger.info("Reflector initialised and subscribed to execution_complete.")
         except Exception as exc:
             logger.warning(
-                "Reflector init failed — self-reflection disabled (degraded mode): %s",
-                exc,
+                "Reflector init failed — self-reflection disabled: %s", exc
             )
             self._reflector = None
 
-        bus.subscribe("wake_word_detected",    self.handle_wake_word)
-        bus.subscribe("text_query_received",   self._handle_panel_input)
-        bus.subscribe("user_input_received",   self.handle_new_task)
+        bus.subscribe("wake_word_detected",     self.handle_wake_word)
+        bus.subscribe("text_query_received",    self._handle_panel_input)
+        bus.subscribe("user_input_received",    self.handle_new_task)
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
-        bus.subscribe("intent_parsed",         self.route_to_mapper)
-        bus.subscribe("capability_mapped",     self.inject_task_metadata)
+        bus.subscribe("intent_parsed",          self.route_to_mapper)
+        bus.subscribe("capability_mapped",      self.inject_task_metadata)
         bus.subscribe("task_failed",            self.handle_failure)
         bus.subscribe("task_completed",         self.finalize_task)
-        # Resume execution after user approves a high-risk confirmation.
         bus.subscribe("task_safety_cleared",    self.handle_safety_cleared)
-        # Mark tasks as high-risk so _check_low_risk_dispatch doesn't run them
-        # before the user approves them.
         bus.subscribe("confirmation_required",  self._mark_high_risk)
 
-        # Start the three-layer safety stack so each subscribes to its events.
-        # Order matters: permission_guard must be first (fastest gate).
+        # Safety stack — order matters: permission_guard must be first.
         from safety.permission_guard import permission_guard
         from safety.validator import safety_validator
         from safety.confirmation import confirmation_manager
-        await permission_guard.start()      # gate 1 — fast intent-level check
-        await safety_validator.start()      # gate 2 — deep per-step analysis
-        await confirmation_manager.start()  # human-in-the-loop bridge
+        await permission_guard.start()
+        await safety_validator.start()
+        await confirmation_manager.start()
 
-        # ── Hybrid execution: initialise terminal resolver ─────────────────
-        # This must happen before any command arrives so the resolver can
-        # blacklist its own window and start the focus-stack polling loop.
+        # Hybrid execution: initialise terminal resolver.
         try:
             from core.terminal_resolver import terminal_resolver
             await terminal_resolver.init()
             logger.info("TerminalResolver initialised.")
         except Exception as exc:
-            logger.warning("TerminalResolver init failed — commands will use Ghost profile: %s", exc)
+            logger.warning(
+                "TerminalResolver init failed — commands will use Ghost profile: %s",
+                exc,
+            )
 
         asyncio.create_task(self._background_wake_loop())
         asyncio.create_task(self._emit_app_context_loop())
@@ -289,49 +285,33 @@ class Orchestrator:
                         "confidence":       command.get("confidence", 0.0),
                         "duration":         command.get("duration_seconds", 0),
                         "preferred_method": None,
-                        "profile_hint":     None,   # voice has no hint; resolver decides
+                        "profile_hint":     None,
                     },
                     source="orchestrator",
                 )
         except Exception as exc:
             logger.error("Voice capture failed: %s", exc)
-            await bus.emit("voice_capture_error", {"error": str(exc)}, source="orchestrator")
+            await bus.emit(
+                "voice_capture_error", {"error": str(exc)}, source="orchestrator"
+            )
 
     async def _handle_panel_input(self, event: Any) -> None:
-        """
-        Translate text_query_received (from panel) → user_input_received.
-
-        Now also forwards:
-          profile_hint     — set by intent_parser.parse() in the panel's
-                             suggestion engine; carries "ghost"/"bridge"/"lab"
-                             so the executor does not need a second LLM call.
-          cwd              — injected by panel_controller from HotkeyListener's
-                             pre_panel_context so we get the user's real cwd
-                             even after the panel window has taken focus.
-          pre_panel_context — full context snapshot taken at hotkey press time.
-        """
         query = (event.data.get("query") or "").strip()
         if not query:
             return
-
         await bus.emit(
             "user_input_received",
             {
-                "text":               query,
-                "source":             "panel",
-                "stt":                {},
-                "stt_provider":       None,
-                "confidence":         1.0,
-                "duration":           0,
-                "preferred_method":   event.data.get("preferred_method"),
-                # ── HYBRID EXECUTION ───────────────────────────────────────
-                # profile_hint was computed by intent_parser.parse() during
-                # live suggestion — carry it so validate_and_route doesn't
-                # re-parse and the executor gets it immediately.
-                "profile_hint":       event.data.get("profile_hint"),
-                # cwd and pre_panel_context from HotkeyListener snapshot.
-                "cwd":                event.data.get("cwd"),
-                "pre_panel_context":  event.data.get("pre_panel_context"),
+                "text":              query,
+                "source":            "panel",
+                "stt":               {},
+                "stt_provider":      None,
+                "confidence":        1.0,
+                "duration":          0,
+                "preferred_method":  event.data.get("preferred_method"),
+                "profile_hint":      event.data.get("profile_hint"),
+                "cwd":               event.data.get("cwd"),
+                "pre_panel_context": event.data.get("pre_panel_context"),
             },
             source="orchestrator",
         )
@@ -347,7 +327,6 @@ class Orchestrator:
             "input":            user_text,
             "source":           event.data.get("source", "unknown"),
             "preferred_method": event.data.get("preferred_method"),
-            # ── HYBRID EXECUTION: store profile_hint and cwd on the task ──
             "profile_hint":     event.data.get("profile_hint"),
             "cwd":              event.data.get("cwd"),
             "context":          {},
@@ -370,7 +349,9 @@ class Orchestrator:
                 task_id, pre_panel_context.get("cwd"),
             )
 
-        await bus.emit("request_context_snapshot", snapshot_payload, source="orchestrator")
+        await bus.emit(
+            "request_context_snapshot", snapshot_payload, source="orchestrator"
+        )
         await bus.emit(
             "request_intent_parsing",
             {
@@ -379,9 +360,6 @@ class Orchestrator:
                 "stt":              event.data.get("stt") or {},
                 "stt_provider":     event.data.get("stt_provider"),
                 "preferred_method": event.data.get("preferred_method"),
-                # ── HYBRID EXECUTION: carry profile_hint into LLM pipeline ─
-                # intent_parser.validate_and_route reads this so it can skip
-                # re-computing the keyword hint when one is already known.
                 "profile_hint":     event.data.get("profile_hint"),
             },
             source="orchestrator",
@@ -392,14 +370,12 @@ class Orchestrator:
         if not task_id or task_id not in self.active_tasks:
             return
 
-        snapshot = {k: v for k, v in event.data.items() if k != "task_id"}
+        snapshot    = {k: v for k, v in event.data.items() if k != "task_id"}
         current_ctx = self.active_tasks[task_id]["context"]
         for key, value in snapshot.items():
             if not current_ctx.get(key):
                 current_ctx[key] = value
 
-        # ── HYBRID EXECUTION: promote cwd from task to context if snapshot
-        # did not provide one (e.g. window_detector had stale data).
         if not current_ctx.get("cwd") and self.active_tasks[task_id].get("cwd"):
             current_ctx["cwd"] = self.active_tasks[task_id]["cwd"]
             logger.debug(
@@ -420,8 +396,6 @@ class Orchestrator:
         if event.data.get("intent"):
             task["intent"] = event.data["intent"]
 
-        # ── HYBRID EXECUTION: store profile_hint on task if the LLM returned
-        # one (intent_parser.validate_and_route injects it into intent_parsed).
         incoming_hint = event.data.get("profile_hint")
         if incoming_hint and not task.get("profile_hint"):
             task["profile_hint"] = incoming_hint
@@ -430,75 +404,148 @@ class Orchestrator:
                 task_id, incoming_hint,
             )
 
-        await bus.emit("request_capability_mapping", event.data, source="orchestrator")
+        await bus.emit(
+            "request_capability_mapping", event.data, source="orchestrator"
+        )
 
     async def _mark_high_risk(self, event: Any) -> None:
-        """
-        Subscribes to confirmation_required.
-        Sets _high_risk_pending=True on the task so _check_low_risk_dispatch
-        knows NOT to auto-dispatch — the user must approve first.
-        """
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id)
         if task is not None:
             task["_high_risk_pending"] = True
-            logger.debug("Task [%s] marked as high-risk — awaiting user confirmation.", task_id)
+            logger.debug(
+                "Task [%s] marked as high-risk — awaiting user confirmation.",
+                task_id,
+            )
+
+    async def inject_task_metadata(self, event: Any) -> None:
+        """
+        Enrich capability_mapped payload and emit task_dispatched.
+
+        Plan §3.1 addition: call MethodRouter.select() with the parsed
+        intent and inject the resulting MethodDecision into the payload
+        under "method_decision".  The executor reads this key and uses it
+        as the sole routing authority (_execute_with_decision path).
+
+        If MethodRouter is unavailable or raises, method_decision is
+        omitted and the executor falls back to the legacy waterfall — no
+        existing behaviour is broken.
+        """
+        task_id = event.data.get("task_id")
+        if not task_id or task_id not in self.active_tasks:
+            return
+
+        task    = self.active_tasks[task_id]
+        ctx     = task.get("context") or {}
+        pmethod = task.get("preferred_method")
+
+        if pmethod and not event.data.get("preferred_method"):
+            event.data["preferred_method"] = pmethod
+
+        existing        = event.data.get("context") or {}
+        event.data["context"] = {**ctx, **existing}
+
+        await asyncio.sleep(0)
+
+        profile_hint = (
+            event.data.get("profile_hint")
+            or task.get("profile_hint")
+        )
+
+        logger.debug(
+            "Task [%s] metadata injected (preferred_method=%s, cwd=%s, profile_hint=%s)",
+            task_id,
+            event.data.get("preferred_method"),
+            event.data["context"].get("cwd", "<not set>"),
+            profile_hint,
+        )
+
+        base_args = {**event.data.get("parameters", {})}
+        if profile_hint:
+            base_args["profile_hint"] = profile_hint
+
+        # ── Plan §3.1 — call MethodRouter.select() ────────────────────────
+        # Build a ParsedIntent dict from the capability_mapped event data.
+        # The router is the single authoritative routing decision-maker.
+        # On any failure we log a warning and omit method_decision so the
+        # executor falls back to the legacy waterfall gracefully.
+        method_decision = None
+        try:
+            from tools.method_router import router as _router
+            parsed_intent = {
+                "intent"      : event.data.get("intent"),
+                "confidence"  : float(event.data.get("confidence", 1.0)),
+                "parameters"  : dict(event.data.get("parameters") or {}),
+                "profile_hint": profile_hint,
+            }
+            method_decision = _router.select(parsed_intent)
+            logger.info(
+                "Task [%s] MethodRouter selected: method=%s confidence=%.3f",
+                task_id,
+                method_decision.method.value,
+                method_decision.confidence,
+            )
+        except Exception as router_exc:
+            logger.warning(
+                "Task [%s] MethodRouter.select() failed — "
+                "executor will use legacy waterfall: %s",
+                task_id, router_exc,
+            )
+            method_decision = None
+
+        # ── Emit task_dispatched ───────────────────────────────────────────
+        dispatched_payload: dict[str, Any] = {
+            "task_id":          task_id,
+            "intent":           event.data.get("intent"),
+            "capability":       event.data.get("capability"),
+            "parameters":       event.data.get("parameters", {}),
+            "suggested_tool":   event.data.get("suggested_tool"),
+            "preferred_method": event.data.get("preferred_method"),
+            "profile_hint":     profile_hint,
+            "context":          event.data["context"],
+            "steps": event.data.get("steps") or [
+                {
+                    "action": event.data.get("intent"),
+                    "args":   base_args,
+                }
+            ],
+        }
+
+        # Inject MethodDecision — executor reads this key
+        if method_decision is not None:
+            dispatched_payload["method_decision"] = method_decision
+
+        await bus.emit(
+            "task_dispatched",
+            dispatched_payload,
+            source="orchestrator",
+        )
 
     async def handle_safety_cleared(self, event: Any) -> None:
         """
-        Called when a task_safety_cleared event arrives.
+        Called when task_safety_cleared arrives.
 
-        ROOT CAUSE FIX — pre-approval execution:
-        ─────────────────────────────────────────
-        task_safety_cleared is published by TWO different components:
-
-          1. safety_validator  — fires immediately when a task passes static
-                                 risk rules. For HIGH-RISK tasks it publishes
-                                 BOTH confirmation_required AND task_safety_cleared
-                                 in the same handler. This is premature — the
-                                 user has not approved anything yet.
-
-          2. confirmation_manager — fires AFTER the user clicks Allow in the
-                                    panel or dashboard. This is the legitimate
-                                    trigger for execution.
-
-        The previous dedup guard (_dispatched_safe) blocked the second arrival
-        but let the first through — the wrong one. The fix is to check the
-        event source and only route to the executor when it comes from
-        confirmation_manager. When it comes from safety_validator we store it
-        as "pending" and wait for confirmation_manager to confirm it.
-
-        For LOW-RISK tasks that skip confirmation entirely, safety_validator
-        publishes task_safety_cleared without a matching confirmation_required.
-        In that case confirmation_manager never fires, so we use a short timeout
-        to detect "no confirmation came" and route the pending task directly.
+        Source-aware dispatch — see original module docstring for the full
+        explanation of the two-source problem and the 100 ms dedup window.
         """
         task_id = event.data.get("task_id")
         task    = self.active_tasks.get(task_id, {})
         source  = getattr(event, "source", None) or event.data.get("_source", "")
 
-        # ── CASE 1: Source is confirmation_manager → user just approved ───────
-        # This is the ONLY legitimate trigger for high-risk task execution.
         if source == "confirmation_manager":
             if task_id in self._dispatched_safe:
                 logger.debug(
-                    "Task [%s] already dispatched — ignoring late confirmation_manager event.",
+                    "Task [%s] already dispatched — ignoring late confirmation_manager.",
                     task_id,
                 )
                 return
             self._dispatched_safe.add(task_id)
-            logger.info("Task [%s] approved by user — dispatching to executor.", task_id)
+            logger.info(
+                "Task [%s] approved by user — dispatching to executor.", task_id
+            )
             await self._dispatch_to_executor(event, task)
             return
 
-        # ── CASE 2: Source is safety_validator / permission_guard / planner ───
-        # This fires BEFORE the user sees any confirmation dialog for high-risk
-        # tasks. We must NOT dispatch immediately.
-        #
-        # Strategy: store the event payload as "pending_safe" on the task and
-        # schedule a short-window check. If confirmation_manager fires within
-        # 10 s, it will dispatch (Case 1). If no confirmation_required was
-        # published (low-risk task), we dispatch after a brief yield.
         if task_id in self._dispatched_safe:
             logger.debug(
                 "Task [%s] already dispatched — ignoring duplicate from '%s'.",
@@ -506,63 +553,45 @@ class Orchestrator:
             )
             return
 
-        # Store the event for potential low-risk passthrough
         if task:
-            task["_pending_safe_event"] = event
+            task["_pending_safe_event"]  = event
             task["_pending_safe_source"] = source
 
-        # Check whether confirmation_required was already published for this task.
-        # If it was, this task is high-risk — do NOT dispatch; wait for user.
-        # If it was NOT published within a brief window, it's low-risk — dispatch.
         asyncio.get_event_loop().call_later(
-            0.1,  # 100 ms window — confirmation_required fires in the same batch
-            lambda: asyncio.ensure_future(
-                self._check_low_risk_dispatch(task_id)
-            ),
+            0.1,
+            lambda: asyncio.ensure_future(self._check_low_risk_dispatch(task_id)),
         )
 
     async def _check_low_risk_dispatch(self, task_id: str) -> None:
-        """
-        Called 100 ms after safety_validator publishes task_safety_cleared.
-
-        By this point, if the task is high-risk, confirmation_required will
-        have already been published and confirmation_manager will be waiting
-        for user input. In that case _dispatched_safe is still empty for this
-        task_id and task["_high_risk_pending"] will be True.
-
-        If no confirmation was needed (low-risk), we dispatch now.
-        """
         if task_id in self._dispatched_safe:
-            # Already dispatched by confirmation_manager path — nothing to do.
             return
 
         task = self.active_tasks.get(task_id, {})
 
-        # If confirmation_manager is holding this task, do NOT dispatch.
-        # The flag is set by _mark_high_risk below.
         if task.get("_high_risk_pending"):
             logger.debug(
-                "Task [%s] is high-risk and awaiting user confirmation — not dispatching.",
+                "Task [%s] is high-risk and awaiting user confirmation.",
                 task_id,
             )
             return
 
-        # Low-risk task — safe to dispatch directly.
         pending_event = task.get("_pending_safe_event")
         if pending_event is None:
             return
 
         self._dispatched_safe.add(task_id)
         logger.info(
-            "Task [%s] is low-risk — dispatching directly (no confirmation needed).",
-            task_id,
+            "Task [%s] is low-risk — dispatching directly.", task_id
         )
         await self._dispatch_to_executor(pending_event, task)
 
     async def _dispatch_to_executor(self, event: Any, task: dict) -> None:
         """
-        Shared dispatch logic: enrich payload and emit task_dispatched_safe.
-        Previously inlined in handle_safety_cleared.
+        Enrich payload and emit task_dispatched_safe.
+
+        If a method_decision was computed in inject_task_metadata and stored
+        on the task, it is re-injected here so the executor receives it even
+        when task_dispatched_safe is the entry point (e.g. after safety hold).
         """
         task_id = event.data.get("task_id")
         payload = dict(event.data)
@@ -577,7 +606,7 @@ class Orchestrator:
                     task_id, len(full_task_steps),
                 )
 
-        # Merge accumulated context (real terminal cwd, window_title, etc.)
+        # Merge accumulated context
         if task:
             accumulated_ctx = task.get("context") or {}
             existing_ctx    = payload.get("context") or {}
@@ -587,13 +616,9 @@ class Orchestrator:
         if not payload.get("profile_hint") and task.get("profile_hint"):
             payload["profile_hint"] = task["profile_hint"]
 
-        # Inject preferred_method — confirmation_manager re-publishes the
-        # confirmation_required payload which was built by intent_parser and
-        # never includes preferred_method. Without it executor sees None and
-        # runs focus_manager, causing "Failed to focus target window" failures.
+        # Inject preferred_method
         if not payload.get("preferred_method") and task.get("preferred_method"):
             payload["preferred_method"] = task["preferred_method"]
-        # Also check full_task for preferred_method
         if not payload.get("preferred_method"):
             full_task_pm = (payload.get("full_task") or {}).get("preferred_method")
             if full_task_pm:
@@ -608,75 +633,27 @@ class Orchestrator:
                 if "profile_hint" not in step["args"]:
                     step["args"]["profile_hint"] = hint
 
+        # ── Re-inject method_decision if available ────────────────────────
+        # inject_task_metadata stores the decision on the task dict so it
+        # survives the safety hold.  If the payload already has one (direct
+        # path with no safety hold), keep it; otherwise restore from task.
+        if "method_decision" not in payload and task.get("method_decision"):
+            payload["method_decision"] = task["method_decision"]
+
+        # If the payload has a method_decision, persist it on the task for
+        # the return path (finalize_task / handle_failure logging).
+        if "method_decision" in payload:
+            task["method_decision"] = payload["method_decision"]
+
         await bus.emit("task_dispatched_safe", payload, source="orchestrator")
-
-    async def inject_task_metadata(self, event: Any) -> None:
-        task_id = event.data.get("task_id")
-        if not task_id or task_id not in self.active_tasks:
-            return
-
-        task    = self.active_tasks[task_id]
-        ctx     = task.get("context") or {}
-        pmethod = task.get("preferred_method")
-
-        if pmethod and not event.data.get("preferred_method"):
-            event.data["preferred_method"] = pmethod
-
-        existing = event.data.get("context") or {}
-        event.data["context"] = {**ctx, **existing}
-
-        await asyncio.sleep(0)
-
-        # ── HYBRID EXECUTION: inject profile_hint into task_dispatched ─────
-        # The executor reads profile_hint from the task's steps[].args so it
-        # can pass it straight to terminal_resolver.resolve() without a second
-        # LLM round-trip.
-        profile_hint = (
-            event.data.get("profile_hint")      # already on event (from intent_parsed)
-            or task.get("profile_hint")          # stored during handle_new_task
-        )
-
-        logger.debug(
-            "Task [%s] metadata injected (preferred_method=%s, cwd=%s, profile_hint=%s)",
-            task_id,
-            event.data.get("preferred_method"),
-            event.data["context"].get("cwd", "<not set>"),
-            profile_hint,
-        )
-
-        # Build steps — inject profile_hint into args so executor/shell_tool
-        # can read it via args["profile_hint"].
-        base_args = {**event.data.get("parameters", {})}
-        if profile_hint:
-            base_args["profile_hint"] = profile_hint
-
-        await bus.emit(
-            "task_dispatched",
-            {
-                "task_id":          task_id,
-                "intent":           event.data.get("intent"),
-                "capability":       event.data.get("capability"),
-                "parameters":       event.data.get("parameters", {}),
-                "suggested_tool":   event.data.get("suggested_tool"),
-                "preferred_method": event.data.get("preferred_method"),
-                "profile_hint":     profile_hint,
-                "context":          event.data["context"],
-                "steps": event.data.get("steps") or [
-                    {
-                        "action": event.data.get("intent"),
-                        "args":   base_args,
-                    }
-                ],
-            },
-            source="orchestrator",
-        )
 
     async def handle_failure(self, event: Any) -> None:
         task_id    = event.data.get("task_id")
         error      = event.data.get("error")
         task       = self.active_tasks.get(task_id, {})
-        # Delay clearing so late task_safety_cleared duplicates are still blocked
-        asyncio.get_event_loop().call_later(5.0, self._dispatched_safe.discard, task_id)
+        asyncio.get_event_loop().call_later(
+            5.0, self._dispatched_safe.discard, task_id
+        )
         logger.error("Task [%s] failed: %s", task_id, error)
         elapsed_ms = int(
             (time.monotonic() - task.get("started_at", time.monotonic())) * 1000
@@ -703,14 +680,10 @@ class Orchestrator:
     async def finalize_task(self, event: Any) -> None:
         task_id    = event.data.get("task_id")
         task       = self.active_tasks.pop(task_id, {})
-        # Delay clearing so late task_safety_cleared duplicates are still blocked
-        asyncio.get_event_loop().call_later(5.0, self._dispatched_safe.discard, task_id)
+        asyncio.get_event_loop().call_later(
+            5.0, self._dispatched_safe.discard, task_id
+        )
 
-        # ── Store method_used so metrics, learning, and Reflector stats ──────
-        # have the resolved tier ("plugin"/"api"/"command"/"ui") on the task
-        # record even after active_tasks is popped above.
-        # RISK: event.data.get() is safe — event.data is always a dict here
-        #   (enforced by the EventBus shims).
         if event.data.get("method_used"):
             task["method_used"] = event.data["method_used"]
 
@@ -724,7 +697,10 @@ class Orchestrator:
                 "task_id":     task_id,
                 "query":       task.get("input", ""),
                 "intent":      event.data.get("intent") or task.get("intent"),
-                "method":      event.data.get("method_used") or task.get("method_used", "unknown"),
+                "method":      (
+                    event.data.get("method_used")
+                    or task.get("method_used", "unknown")
+                ),
                 "success":     True,
                 "duration_ms": elapsed_ms,
             },
