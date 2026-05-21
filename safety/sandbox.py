@@ -93,9 +93,10 @@ except Exception:
     pass  # Windows / macOS silently skip
 
 # ── Load and execute the plugin ─────────────────────────────────────────────
-plugin_path = {plugin_path!r}
-context     = {context_json}
-args        = {args_json}
+plugin_path  = {plugin_path!r}
+context      = {context_json}
+args         = {args_json}
+service_ctx  = {service_ctx_json}
 
 try:
     import importlib.util
@@ -129,7 +130,12 @@ try:
     # pre-deployment testing — calling validate({{}}) would always fail for any
     # plugin that guards required arguments, producing false negatives.
     # Argument validation is enforced by the executor at real runtime.
-    result = asyncio.run(plugin_instance.run(context, args))
+    #
+    # service_ctx is passed as a keyword argument so plugins that don't yet
+    # accept it (old-style run(context, args)) still work via **kwargs.
+    result = asyncio.run(
+        plugin_instance.run(context, args, service_ctx=service_ctx)
+    )
 
     # run() MUST return a dict with a "status" key — enforce that contract here
     if not isinstance(result, dict):
@@ -210,12 +216,21 @@ class Sandbox:
         memory_mb: int = DEFAULT_MEMORY_LIMIT_MB,
         cpu_seconds: int = DEFAULT_CPU_LIMIT_SECONDS,
         category: str = "generic",
+        service_ctx: dict | None = None,
     ) -> SandboxResult:
         """
         Runs a plugin file in a separate subprocess with resource limits.
         Returns a SandboxResult with structured output.
 
         Args:
+            service_ctx: Scoped service dict built by PluginContextBuilder.
+                         Serialised to JSON and injected into the subprocess
+                         runner so the plugin's run() receives it.
+                         NOTE: only JSON-serialisable values survive the
+                         subprocess boundary — live objects (callables,
+                         instances) are replaced with their string repr so
+                         the plugin receives a safe snapshot rather than
+                         nothing at all.
             category: Plugin category from template_engine. Used to apply
                       category-specific execution strategy:
                       - "background": daemon-thread plugins return immediately;
@@ -229,11 +244,36 @@ class Sandbox:
                 error=f"Plugin file not found: {plugin_path}",
             )
 
+        # ── Serialise service_ctx for the subprocess boundary ─────────────────
+        # Live objects (callables, class instances) can't cross a subprocess
+        # boundary via JSON. We serialise what we can:
+        #   - window_context callable → call it now, embed the snapshot dict
+        #   - other objects           → embed their string repr as a placeholder
+        # The plugin's service_ctx.get("window_context") will return the
+        # snapshot dict directly (not a callable) inside the subprocess.
+        _safe_ctx: dict = {}
+        for svc_key, svc_val in (service_ctx or {}).items():
+            if callable(svc_val):
+                # window_context and similar live-snapshot callables
+                try:
+                    _safe_ctx[svc_key] = svc_val()   # call once, embed snapshot
+                except Exception:
+                    _safe_ctx[svc_key] = None
+            else:
+                try:
+                    json.dumps(svc_val)              # test serialisability
+                    _safe_ctx[svc_key] = svc_val
+                except (TypeError, ValueError):
+                    # Non-serialisable object — embed repr so plugin knows
+                    # the service was present but can't be passed through
+                    _safe_ctx[svc_key] = f"<{type(svc_val).__name__} — subprocess boundary>"
+
         # Build the runner script dynamically
         runner_code = _RUNNER_TEMPLATE.format(
             plugin_path=plugin_path,
             context_json=json.dumps(context),
             args_json=json.dumps(args),
+            service_ctx_json=json.dumps(_safe_ctx),
             memory_mb=memory_mb,
             cpu_seconds=cpu_seconds,
         )
