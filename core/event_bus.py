@@ -1,32 +1,129 @@
+"""
+core/event_bus.py
+──────────────────
+Event bus — extended with typed routing_mismatch event (Plan §3.3 / Phase 3).
+
+Changes from original
+──────────────────────
+All original functionality is preserved verbatim:
+  • Event class with dict-compat shims
+  • subscribe(), emit(), publish(), run(), _execute_callback()
+  • Priority queue (stop/abort/fail → 10, log/metric → 90, default 50)
+  • Qt dead-object guard in _execute_callback()
+  • Thread-safe publish() via call_soon_threadsafe()
+
+Plan Phase 3 addition — typed routing_mismatch event
+──────────────────────────────────────────────────────
+The plan requires that when the executor tags a failure as
+FailureClass.ROUTING_MISMATCH, a structured event is emitted with:
+  • The full fallback chain (so the dashboard can show what was tried)
+  • The MethodDecision log dict (intent, method, confidence, rejected)
+  • The failure detail
+
+This is implemented as:
+
+  emit_routing_mismatch(data) -> coroutine
+    Async helper that publishes a "routing_mismatch" event at priority 10
+    (same as "fail" — high urgency) with the structured payload validated
+    against ROUTING_MISMATCH_SCHEMA.  Missing keys are filled with safe
+    defaults so malformed executor payloads never crash the bus.
+
+  publish_routing_mismatch(data)
+    Synchronous wrapper for emit_routing_mismatch(), callable from
+    non-async executor paths via the standard thread-safe publish() route.
+
+Both methods are also available on the module-level `bus` singleton so
+callers import nothing extra:
+    bus.publish_routing_mismatch({...})
+    await bus.emit_routing_mismatch({...})
+
+The executor (executor.py _handle_failure) already calls bus.publish()
+with event type "routing_mismatch" — these helpers are additive.  They
+add schema validation and the correct priority, but they are not required
+for the event to flow; the existing publish() call is sufficient.
+"""
+from __future__ import annotations
+
 import asyncio
-import logging
 import fnmatch
+import logging
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+logger = logging.getLogger("EventBus")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing mismatch event schema — required keys with safe defaults
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ROUTING_MISMATCH_DEFAULTS: dict[str, Any] = {
+    "task_id"       : "unknown",
+    "step_index"    : -1,
+    "intent"        : "unknown",
+    "method"        : "unknown",
+    "failure_class" : "routing_mismatch",
+    "detail"        : "",
+    "fallback_chain": [],
+    "decision_log"  : {},
+}
+
+
+def _build_routing_mismatch_payload(data: dict) -> dict:
+    """
+    Merge *data* with safe defaults so every routing_mismatch event has
+    the same schema regardless of what the executor provided.
+
+    Also injects a human-readable summary string for the dashboard's
+    live_logs.js component which displays it directly.
+    """
+    payload = {**_ROUTING_MISMATCH_DEFAULTS, **data}
+
+    # Human-readable summary for dashboard display (Phase 3 observability)
+    payload.setdefault(
+        "summary",
+        (
+            f"Routing mismatch: intent='{payload['intent']}' "
+            f"method='{payload['method']}' — "
+            f"{payload['detail'] or 'no detail'}"
+        ),
+    )
+
+    # Normalise fallback_chain to a list of strings
+    raw_chain = payload.get("fallback_chain") or []
+    if raw_chain and not isinstance(raw_chain[0], str):
+        payload["fallback_chain"] = [
+            m.value if hasattr(m, "value") else str(m) for m in raw_chain
+        ]
+
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Event
+# ─────────────────────────────────────────────────────────────────────────────
 
 class Event:
 
-    def __init__(self, name: str, data: Any = None, source: str = "system"):
-        self.name = name
-        self.data = data
-        self.source = source or "system"
+    def __init__(
+        self,
+        name   : str,
+        data   : Any  = None,
+        source : str  = "system",
+    ) -> None:
+        self.name      = name
+        self.data      = data
+        self.source    = source or "system"
         self.timestamp = datetime.now().isoformat()
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"[{self.timestamp}] {self.source} -> {self.name}: {self.data}"
 
-    def __lt__(self, other):
-        # Tie-breaker: Compare timestamps if priorities are equal
+    def __lt__(self, other: "Event") -> bool:
         return self.timestamp < other.timestamp
 
     # ── Dict-compatibility shims ──────────────────────────────────────────────
-    # Many listeners were written to call event.get("key") or event["key"]
-    # as if the event were a plain dict.  These shims delegate to self.data
-    # so those callers work without modification.
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Delegate .get() to the event's data dict (or return default)."""
         if isinstance(self.data, dict):
             return self.data.get(key, default)
         return default
@@ -42,83 +139,140 @@ class Event:
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EventBus
+# ─────────────────────────────────────────────────────────────────────────────
+
 class EventBus:
 
-    def __init__(self):
-        self.listeners: Dict[str, List[Callable]] = {}
-        self.logger = logging.getLogger("EventBus")
+    # Priority constants — lower number = processed first
+    _PRIORITY_HIGH    : int = 10   # stop, abort, fail, security, routing_mismatch
+    _PRIORITY_DEFAULT : int = 50
+    _PRIORITY_LOW     : int = 90   # log, metric, update, state
 
-        # The main thread's loop will be stored here
-        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._queue = asyncio.PriorityQueue()
+    def __init__(self) -> None:
+        self.listeners   : Dict[str, List[Callable]] = {}
+        self.logger      = logging.getLogger("EventBus")
+        self._event_loop : Optional[asyncio.AbstractEventLoop] = None
+        self._queue      = asyncio.PriorityQueue()
 
-    def subscribe(self, event_pattern: str, callback: Callable):
+    # ── Subscription ──────────────────────────────────────────────────────────
+
+    def subscribe(self, event_pattern: str, callback: Callable) -> None:
         if event_pattern not in self.listeners:
             self.listeners[event_pattern] = []
         if callback not in self.listeners[event_pattern]:
             self.listeners[event_pattern].append(callback)
-            self.logger.info(f"Subscribed to pattern: {event_pattern}")
+            self.logger.info("Subscribed to pattern: %s", event_pattern)
 
-    async def emit(self, event_type: str, data: Any = None, source: str = None):
-        """Pushes an event into the priority queue."""
+    # ── Core emit / publish (unchanged) ───────────────────────────────────────
+
+    async def emit(
+        self,
+        event_type : str,
+        data       : Any = None,
+        source     : str = None,
+    ) -> None:
+        """Push an event into the priority queue."""
         event = Event(event_type, data, source)
 
-        priority = 50
         event_lower = event_type.lower()
         if any(
             x in event_lower
-            for x in ["stop", "abort", "security", "fail", "alert"]
+            for x in ["stop", "abort", "security", "fail", "alert",
+                       "routing_mismatch"]   # Phase 3: routing_mismatch is high-priority
         ):
-            priority = 10
+            priority = self._PRIORITY_HIGH
         elif any(
-            x in event_lower for x in ["log", "metric", "update", "state"]
+            x in event_lower
+            for x in ["log", "metric", "update", "state"]
         ):
-            priority = 90
+            priority = self._PRIORITY_LOW
+        else:
+            priority = self._PRIORITY_DEFAULT
 
         await self._queue.put((priority, event))
 
-    def publish(self, event_type: str, data: Any = None, source: str = None):
-        """100% Thread-safe event publishing."""
-        
-        # Guard against None event loop
+    def publish(
+        self,
+        event_type : str,
+        data       : Any = None,
+        source     : str = None,
+    ) -> None:
+        """100% thread-safe event publishing."""
         if self._event_loop is None:
-            self.logger.warning(f"Event loop not initialized yet. Dropping event '{event_type}'")
+            self.logger.warning(
+                "Event loop not initialized yet. Dropping event '%s'", event_type
+            )
             return
-        
+
         if not self._event_loop.is_running():
-            self.logger.warning(f"Event loop not running. Dropping event '{event_type}'")
+            self.logger.warning(
+                "Event loop not running. Dropping event '%s'", event_type
+            )
             return
-        
+
         try:
-            # Check if we're already in the event loop thread
             current_loop = asyncio.get_running_loop()
             if current_loop == self._event_loop:
-                # Same thread - direct task creation
                 current_loop.create_task(self.emit(event_type, data, source))
                 return
         except RuntimeError:
-            # We're in a different thread
             pass
-        
-        # Different thread - use thread-safe method
+
         try:
             self._event_loop.call_soon_threadsafe(
-                self._schedule_event,
-                event_type, data, source
+                self._schedule_event, event_type, data, source
             )
-        except RuntimeError as e:
-            self.logger.error(f"Failed to schedule event '{event_type}': {e}")
+        except RuntimeError as exc:
+            self.logger.error(
+                "Failed to schedule event '%s': %s", event_type, exc
+            )
 
-    def _schedule_event(self, event_type, data, source):
-        """Helper to schedule event from foreign thread."""
+    def _schedule_event(
+        self, event_type: str, data: Any, source: str
+    ) -> None:
         try:
             asyncio.create_task(self.emit(event_type, data, source))
-        except Exception as e:
-            self.logger.error(f"Failed to emit event '{event_type}': {e}")
+        except Exception as exc:
+            self.logger.error(
+                "Failed to emit event '%s': %s", event_type, exc
+            )
 
-    async def run(self):
-        """The main loop that processes events."""
-        # Capture the main loop right as it starts running
+    # ── Phase 3 — typed routing_mismatch helpers ──────────────────────────────
+
+    async def emit_routing_mismatch(self, data: dict) -> None:
+        """
+        Emit a structured "routing_mismatch" event at high priority.
+
+        *data* is merged with _ROUTING_MISMATCH_DEFAULTS so every field
+        is guaranteed to be present.  Subscribers (learner.py, logs.py)
+        can rely on the schema without defensive key checks.
+
+        Required fields (filled with defaults if absent):
+            task_id, step_index, intent, method, failure_class,
+            detail, fallback_chain, decision_log
+
+        Added automatically:
+            summary — human-readable string for dashboard display
+        """
+        payload = _build_routing_mismatch_payload(data)
+        await self.emit("routing_mismatch", payload, source="event_bus")
+
+    def publish_routing_mismatch(self, data: dict) -> None:
+        """
+        Synchronous wrapper for emit_routing_mismatch().
+
+        Use this from non-async contexts (e.g. a thread that cannot await).
+        Uses the standard thread-safe publish() path so no extra wiring
+        is needed.
+        """
+        payload = _build_routing_mismatch_payload(data)
+        self.publish("routing_mismatch", payload, source="event_bus")
+
+    # ── Run loop (unchanged) ──────────────────────────────────────────────────
+
+    async def run(self) -> None:
         self._event_loop = asyncio.get_running_loop()
         self.logger.info("Event Bus is running...")
 
@@ -126,7 +280,7 @@ class EventBus:
             priority, event = await self._queue.get()
             print(f"[Priority {priority}] {event}")
 
-            matched_listeners = []
+            matched_listeners: list[Callable] = []
             for pattern, callbacks in self.listeners.items():
                 if fnmatch.fnmatch(event.name, pattern):
                     matched_listeners.extend(callbacks)
@@ -136,21 +290,23 @@ class EventBus:
 
             self._queue.task_done()
 
-    async def _execute_callback(self, callback: Callable, event: Event):
-        # Guard: if the callback is bound to a Qt object, that object may have
-        # been destroyed (C++ layer deleted) while the Python wrapper still
-        # exists. Attempting to call it raises RuntimeError with the message
-        # "wrapped C/C++ object … has been deleted".  We detect this by
-        # checking __self__ on bound methods and catching that specific error.
+    async def _execute_callback(
+        self, callback: Callable, event: Event
+    ) -> None:
+        # Guard: Qt objects may be deleted while their Python wrapper still
+        # exists.  Calling a bound method on a deleted C++ object raises
+        # RuntimeError("wrapped C/C++ object … has been deleted").
         bound_obj = getattr(callback, "__self__", None)
         if bound_obj is not None:
-            # isValid() covers QObject subclasses; sip/PyQt5 objects expose it.
-            is_valid_fn = getattr(bound_obj, "isValid", None) or getattr(bound_obj, "sip_isdeleted", None)
+            is_valid_fn = getattr(bound_obj, "isValid", None) or getattr(
+                bound_obj, "sip_isdeleted", None
+            )
             if is_valid_fn is not None:
                 try:
                     if callable(is_valid_fn) and not is_valid_fn():
                         self.logger.debug(
-                            "Skipping dead Qt callback for %s — unsubscribing.", event.name
+                            "Skipping dead Qt callback for %s — unsubscribing.",
+                            event.name,
                         )
                         self._unsubscribe_dead(callback)
                         return
@@ -162,24 +318,30 @@ class EventBus:
                 await callback(event)
             else:
                 callback(event)
-        except RuntimeError as e:
-            err_str = str(e)
+        except RuntimeError as exc:
+            err_str = str(exc)
             if "wrapped C/C++ object" in err_str and "has been deleted" in err_str:
                 self.logger.debug(
-                    "Dead Qt object in listener for %s — removing callback.", event.name
+                    "Dead Qt object in listener for %s — removing callback.",
+                    event.name,
                 )
                 self._unsubscribe_dead(callback)
             else:
-                self.logger.error(f"Error in listener for {event.name}: {e}")
-        except Exception as e:
-            self.logger.error(f"Error in listener for {event.name}: {e}")
+                self.logger.error(
+                    "Error in listener for %s: %s", event.name, exc
+                )
+        except Exception as exc:
+            self.logger.error(
+                "Error in listener for %s: %s", event.name, exc
+            )
 
     def _unsubscribe_dead(self, callback: Callable) -> None:
-        """Remove a callback that belongs to a destroyed object from all patterns."""
         for pattern in list(self.listeners.keys()):
             try:
                 self.listeners[pattern].remove(callback)
             except ValueError:
                 pass
 
+
+# Module-level singleton
 bus = EventBus()
