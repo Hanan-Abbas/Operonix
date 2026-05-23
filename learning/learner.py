@@ -1,12 +1,41 @@
 """
 learning/learner.py
+────────────────────
+Pattern learner — extended with Gap 1 FailureClass gate.
 
-Panel integration
-─────────────────
-Subscribes to `execution_strategy_overridden` (fired by panel's suggestion
-engine whenever the user picks a non-default method).  Stores (app, intent,
-chosen_method) tuples in a dedicated override_rankings store so that
-`learning/retriever.py` can return a learned method order on the next query.
+Changes from original
+──────────────────────
+The original learner subscribed to:
+  • task_completed              → learn_from_success()
+  • execution_strategy_overridden → _learn_from_override()
+  • reflection_complete          → _learn_from_reflection()
+
+All three subscriptions and their logic are preserved verbatim.
+
+Gap 1 addition — routing_mismatch gate
+───────────────────────────────────────
+The plan mandates that learner.py must ONLY receive ROUTING_MISMATCH
+events from the executor.  ENV_TRANSIENT failures (network drops, locked
+files, AX timeouts) must never reach the learner or they corrupt the
+routing weights — the "death spiral" documented in Gap 1.
+
+  New subscription: "routing_mismatch" → _learn_from_routing_mismatch()
+
+  This event is published by the executor's _handle_failure() method
+  (executor.py) with a full decision log.  The learner reads the intent
+  and the method that failed, and down-weights that (intent, method) pair
+  in the override_rankings store so the router picks a lower-priority
+  method next time.
+
+  Critically:
+    • ENV_TRANSIENT events are tagged and filtered by error_classifier.py
+      BEFORE they reach the bus as routing_mismatch — they never arrive here.
+    • The learner never inspects raw exception messages.
+    • The down-weight is additive and bounded (max penalty per pair is
+      capped at settings.LEARNER_MAX_MISMATCH_PENALTY, default 10) so a
+      single bad run cannot permanently exile a method.
+
+  No other changes to existing methods.
 """
 from __future__ import annotations
 
@@ -16,77 +45,85 @@ import os
 from collections import defaultdict
 from typing import Any
 
+from core.config import settings
 from core.event_bus import bus
 from learning.pattern_validator import pattern_validator
 
 
 class PatternLearner:
-    """🧠 The experience aggregator of the AI OS.
+    """
+    Experience aggregator for the Operonix AI OS.
 
     Watches successful tasks, extracts repeatable step patterns, and saves
-    them so the Planner doesn't have to use expensive LLMs for repeat
-    requests.
+    them so the Planner doesn't need expensive LLM calls for repeat requests.
 
-    Also watches panel strategy overrides and builds a per-(app, intent)
-    method ranking that the suggestion engine uses to pre-rank strategies.
+    Also watches:
+      • Panel strategy overrides → builds per-(app, intent) method rankings.
+      • Reflector lessons        → updates rankings from implicit performance data.
+      • routing_mismatch events  → down-weights methods that were wrong for an
+                                   intent (Gap 1 fix — ENV_TRANSIENT excluded).
     """
 
     def __init__(self, store_path: str = "learning/pattern_store.json") -> None:
         self.logger = logging.getLogger("PatternLearner")
         self.store_path = store_path
-        # Override rankings store path sits alongside pattern_store.json
         self._override_store_path = os.path.join(
             os.path.dirname(store_path), "override_rankings.json"
+        )
+        # Gap 1: separate store for routing mismatch penalties so they can be
+        # inspected independently from user-override rankings.
+        self._mismatch_store_path = os.path.join(
+            os.path.dirname(store_path), "mismatch_penalties.json"
         )
         self.patterns: dict[str, list] = {}
         # Structure: {app: {intent: {method: count}}}
         self._override_counts: dict[str, dict[str, dict[str, int]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(int))
         )
+        # Gap 1: penalty store — {intent: {method: penalty_count}}
+        # Stored separately so penalties are never confused with positive signals.
+        self._mismatch_penalties: dict[str, dict[str, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
         self._load_store()
         self._load_override_store()
+        self._load_mismatch_store()
 
     async def start(self) -> None:
         """Subscribe to the EventBus."""
-        bus.subscribe("task_completed",                 self.learn_from_success)
-        bus.subscribe("execution_strategy_overridden",  self._learn_from_override)
+        bus.subscribe("task_completed",                self.learn_from_success)
+        bus.subscribe("execution_strategy_overridden", self._learn_from_override)
+        bus.subscribe("reflection_complete",           self._learn_from_reflection)
 
-        # ── REFLECTOR INTEGRATION ──────────────────────────────────────────
-        # The Reflector publishes "reflection_complete" after every task with
-        # a structured Lesson dict (intent, capability_used, outcome, root_cause,
-        # confidence_delta, app_context). We subscribe here to:
-        #   1. Update per-capability success tallies for the suggestion engine.
-        #   2. Persist per-(app, intent, capability) performance data so
-        #      get_method_ranking() can return Reflector-informed rankings,
-        #      not just user-override-informed ones.
-        #
-        # RISK: reflection_complete fires for EVERY task (success AND failure).
-        #   _learn_from_reflection() guards against double-learning with the
-        #   task_completed subscription by only tracking capability-tier wins,
-        #   not full step patterns (those are handled by learn_from_success).
-        bus.subscribe("reflection_complete", self._learn_from_reflection)
+        # Gap 1 — routing mismatch gate
+        # The executor publishes "routing_mismatch" ONLY for FailureClass.ROUTING_MISMATCH.
+        # ENV_TRANSIENT, ENV_PERMANENT, and EXECUTION_LOGIC never arrive here.
+        bus.subscribe("routing_mismatch", self._learn_from_routing_mismatch)
 
         self.logger.info(
-            "🧠 Pattern Learner: Active. "
-            "Watching task completions, panel overrides, and Reflector lessons."
+            "PatternLearner: Active. Watching task completions, panel overrides, "
+            "Reflector lessons, and routing mismatches."
         )
 
     # ── Task pattern learning (unchanged) ─────────────────────────────────────
 
     async def learn_from_success(self, event: Any) -> None:
-        data = event.data
+        data    = event.data
         task_id = data.get("task_id")
-        steps = data.get("steps", [])
-        intent = data.get("intent")
+        steps   = data.get("steps", [])
+        intent  = data.get("intent")
 
         if not intent or not steps:
-            self.logger.debug("Skipping learning for task [%s]: Missing intent or steps.", task_id)
+            self.logger.debug(
+                "Skipping learning for task [%s]: Missing intent or steps.", task_id
+            )
             return
 
-        self.logger.info("🤔 Analysing task [%s] for intent '%s'...", task_id, intent)
+        self.logger.info(
+            "Analysing task [%s] for intent '%s'...", task_id, intent
+        )
 
         abstracted_steps = self._abstract_steps(steps)
-
         is_valid = await pattern_validator.validate_pattern(intent, abstracted_steps)
         if not is_valid:
             return
@@ -104,13 +141,13 @@ class PatternLearner:
 
         if not duplicate_found:
             self.patterns[intent].append({
-                "steps": abstracted_steps,
+                "steps":       abstracted_steps,
                 "usage_count": 1,
-                "step_count": len(abstracted_steps),
+                "step_count":  len(abstracted_steps),
             })
             self._save_store()
             self.logger.info(
-                "💾 Learned new pattern for '%s'! Total: %d",
+                "Learned new pattern for '%s'! Total: %d",
                 intent, len(self.patterns[intent]),
             )
             bus.publish(
@@ -119,23 +156,17 @@ class PatternLearner:
                 source="learner",
             )
         else:
-            self.logger.debug("Pattern for '%s' already exists. Incremented usage count.", intent)
+            self.logger.debug(
+                "Pattern for '%s' already exists. Incremented usage count.", intent
+            )
 
-    # ── Panel override learning ────────────────────────────────────────────────
+    # ── Panel override learning (unchanged) ───────────────────────────────────
 
     async def _learn_from_override(self, event: Any) -> None:
-        """
-        Called when the panel fires `execution_strategy_overridden`.
-        Increments a per-(app, intent, chosen_method) counter so the
-        retriever can derive a ranked method list.
-
-        Payload expected:
-            {app, intent, chosen_method, default_method}
-        """
-        data = event.data
-        app: str = data.get("app", "unknown")
-        intent: str = data.get("intent") or "unknown"
-        chosen: str = data.get("chosen_method", "")
+        data   = event.data
+        app    : str = data.get("app", "unknown")
+        intent : str = data.get("intent") or "unknown"
+        chosen : str = data.get("chosen_method", "")
 
         if not chosen:
             return
@@ -144,107 +175,169 @@ class PatternLearner:
         self._save_override_store()
 
         self.logger.info(
-            "📌 Override learned: app=%s intent=%s method=%s (count=%d)",
+            "Override learned: app=%s intent=%s method=%s (count=%d)",
             app, intent, chosen,
             self._override_counts[app][intent][chosen],
         )
 
     def get_method_ranking(self, app: str, intent: str) -> list[str]:
         """
-        Public synchronous method called by the panel's suggestion engine
-        (via `learned_ranking` callback in PanelController).
-
-        Returns methods sorted by how often the user has chosen them for
-        this (app, intent) pair, highest first.  Returns [] if no overrides
-        recorded yet.
+        Return methods sorted by how often the user has chosen them for
+        this (app, intent) pair.  Incorporates routing mismatch penalties:
+        a method's net score = override_count - mismatch_penalty_count.
+        Methods with a net score <= 0 are moved to the end of the list
+        rather than removed entirely, so a single bad run cannot permanently
+        disable a method.
         """
         counts = self._override_counts.get(app, {}).get(intent, {})
         if not counts:
-            # Try the wildcard app key so cross-app patterns transfer.
             counts = self._override_counts.get("*", {}).get(intent, {})
-        if not counts:
+
+        penalties = self._mismatch_penalties.get(intent, {})
+
+        if not counts and not penalties:
             return []
 
-        ranked = sorted(counts.items(), key=lambda kv: -kv[1])
-        return [method for method, _ in ranked]
+        # Build net scores: all methods that appear in either store
+        all_methods = set(counts.keys()) | set(penalties.keys())
+        scored: list[tuple[str, int]] = []
+        for method in all_methods:
+            net = counts.get(method, 0) - penalties.get(method, 0)
+            scored.append((method, net))
 
-    # ── Reflector lesson learning ──────────────────────────────────────────────
+        # Sort: highest net score first; negative-score methods go to the tail
+        scored.sort(key=lambda kv: -kv[1])
+        return [method for method, _ in scored]
+
+    # ── Reflector lesson learning (unchanged) ─────────────────────────────────
 
     async def _learn_from_reflection(self, event: Any) -> None:
-        """
-        Called when the Reflector publishes "reflection_complete".
-
-        Extracts the capability tier that ran (plugin/api/command/ui) and the
-        outcome (success/failure) and updates per-(app, intent, capability)
-        counts so get_method_ranking() returns Reflector-informed rankings in
-        addition to user-override-informed ones.
-
-        This is complementary to _learn_from_override() — overrides capture
-        explicit user choices, reflections capture implicit performance data.
-
-        Lesson payload keys (from brain.Reflector.Lesson.to_dict()):
-            intent, capability_used, app_context, outcome,
-            confidence_delta, root_cause, suggested_fix, evolution_needed
-
-        RISK MITIGATIONS:
-          R1 — Fully wrapped in try/except; a bad Reflector payload never
-               crashes the learner's event loop.
-          R2 — Only SUCCESS outcomes update the ranking counts. Failures
-               already lower the Reflector's confidence score in LongTermMemory;
-               incrementing a failure count here too would double-penalise and
-               bias the ranking incorrectly.
-          R3 — capability_used may be a full tier name ("plugin") or a
-               specific plugin identifier ("plugin:coding_plugin"). We
-               normalise to the tier prefix so rankings stay at the tier level,
-               matching what the Planner and Executor use.
-          R4 — app_context and intent are normalised to lowercase strings to
-               match the format used in _override_counts and get_method_ranking.
-        """
         try:
             data            = event.data or {}
-            intent: str     = (data.get("intent") or "unknown").strip().lower()     # R4
-            app_context:str = (data.get("app_context") or "unknown").strip().lower() # R4
-            outcome: str    = data.get("outcome", "unknown")
-            capability: str = data.get("capability_used") or data.get("capability", "")
+            intent     : str = (data.get("intent")      or "unknown").strip().lower()
+            app_context: str = (data.get("app_context") or "unknown").strip().lower()
+            outcome    : str = data.get("outcome", "unknown")
+            capability : str = data.get("capability_used") or data.get("capability", "")
 
             if not intent or not capability:
                 return
 
-            # R3 — normalise "plugin:coding_plugin" → "plugin"
-            tier = capability.split(":")[0].strip().lower() if ":" in capability else capability.lower()
+            tier = (
+                capability.split(":")[0].strip().lower()
+                if ":" in capability else capability.lower()
+            )
 
-            # R2 — only count successes toward ranking
             if outcome != "success":
                 self.logger.debug(
-                    "PatternLearner: skipping reflection for non-success outcome='%s' "
-                    "intent='%s'", outcome, intent,
+                    "Skipping reflection for non-success outcome='%s' intent='%s'",
+                    outcome, intent,
                 )
                 return
 
-            # Use wildcard app key "*" as a cross-app signal in addition to the
-            # specific app, so ranking benefits transfer across applications.
             for app_key in (app_context, "*"):
                 self._override_counts[app_key][intent][tier] += 1
 
             self._save_override_store()
-
             self.logger.debug(
-                "📡 Reflection learned: app=%s intent=%s tier=%s (success)",
+                "Reflection learned: app=%s intent=%s tier=%s (success)",
                 app_context, intent, tier,
             )
 
         except Exception as exc:
-            self.logger.warning(
-                "_learn_from_reflection failed (non-fatal): %s", exc
-            )  # R1
+            self.logger.warning("_learn_from_reflection failed (non-fatal): %s", exc)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Gap 1: routing mismatch down-weighting ────────────────────────────────
+
+    async def _learn_from_routing_mismatch(self, event: Any) -> None:
+        """
+        Called ONLY when the executor publishes "routing_mismatch" —
+        i.e. FailureClass.ROUTING_MISMATCH was tagged by error_classifier.py.
+
+        ENV_TRANSIENT, ENV_PERMANENT, and EXECUTION_LOGIC events are NEVER
+        routed here.  They are handled by the executor's retry/fallback/debugger
+        paths and never reach the bus as "routing_mismatch".
+
+        Down-weighting logic
+        ─────────────────────
+        For the (intent, method) pair that failed:
+          1. Increment _mismatch_penalties[intent][method] by 1.
+          2. Cap the penalty at settings.LEARNER_MAX_MISMATCH_PENALTY (default 10)
+             so a single bad period cannot permanently exile a method.
+          3. Persist to mismatch_penalties.json.
+          4. Publish "method_weight_updated" so the dashboard can show the change.
+
+        get_method_ranking() already reads _mismatch_penalties and applies them
+        as a net score reduction — no additional wiring needed.
+        """
+        try:
+            data   = event.data or {}
+            intent : str = (data.get("intent") or "").strip().lower()
+            method : str = (data.get("method") or "").strip().lower()
+
+            if not intent or not method:
+                self.logger.debug(
+                    "_learn_from_routing_mismatch: missing intent or method — skipping."
+                )
+                return
+
+            # Validate that this is genuinely a routing mismatch signal
+            failure_class: str = (data.get("failure_class") or "").lower()
+            if failure_class and failure_class != "routing_mismatch":
+                # Defensive guard: if the event bus somehow delivers a non-mismatch
+                # event to this handler, do not corrupt the weights.
+                self.logger.warning(
+                    "_learn_from_routing_mismatch: unexpected failure_class='%s' "
+                    "for intent='%s' — skipping to protect learner integrity.",
+                    failure_class, intent,
+                )
+                return
+
+            max_penalty: int = int(
+                getattr(settings, "LEARNER_MAX_MISMATCH_PENALTY", 10)
+            )
+            current = self._mismatch_penalties[intent][method]
+            if current >= max_penalty:
+                self.logger.debug(
+                    "Mismatch penalty for (intent='%s', method='%s') already at "
+                    "cap %d — not incrementing further.",
+                    intent, method, max_penalty,
+                )
+                return
+
+            self._mismatch_penalties[intent][method] = current + 1
+            self._save_mismatch_store()
+
+            new_penalty = self._mismatch_penalties[intent][method]
+            self.logger.info(
+                "Routing mismatch recorded: intent='%s' method='%s' "
+                "penalty=%d/%d",
+                intent, method, new_penalty, max_penalty,
+            )
+
+            bus.publish(
+                "method_weight_updated",
+                {
+                    "intent"      : intent,
+                    "method"      : method,
+                    "penalty"     : new_penalty,
+                    "max_penalty" : max_penalty,
+                    "source"      : "routing_mismatch",
+                },
+                source="learner",
+            )
+
+        except Exception as exc:
+            self.logger.warning(
+                "_learn_from_routing_mismatch failed (non-fatal): %s", exc
+            )
+
+    # ── Helpers (unchanged) ───────────────────────────────────────────────────
 
     def _abstract_steps(self, steps: list) -> list:
         abstracted = []
         for step in steps:
-            action = step.get("action")
-            args = step.get("args", {})
+            action       = step.get("action")
+            args         = step.get("args", {})
             abstract_args = {key: f"<{key.upper()}>" for key in args}
             abstracted.append({"action": action, "args": abstract_args})
         return abstracted
@@ -274,7 +367,6 @@ class PatternLearner:
             try:
                 with open(self._override_store_path) as f:
                     raw = json.load(f)
-                # Rebuild defaultdict structure from plain JSON dict.
                 for app, intents in raw.items():
                     for intent, methods in intents.items():
                         for method, count in methods.items():
@@ -285,9 +377,11 @@ class PatternLearner:
     def _save_override_store(self) -> None:
         try:
             os.makedirs(os.path.dirname(self._override_store_path), exist_ok=True)
-            # Convert nested defaultdicts to plain dicts for JSON serialisation.
             serialisable = {
-                app: {intent: dict(methods) for intent, methods in intents.items()}
+                app: {
+                    intent: dict(methods)
+                    for intent, methods in intents.items()
+                }
                 for app, intents in self._override_counts.items()
             }
             with open(self._override_store_path, "w") as f:
@@ -295,6 +389,29 @@ class PatternLearner:
         except Exception as exc:
             self.logger.error("Failed to save override store: %s", exc)
 
+    def _load_mismatch_store(self) -> None:
+        if os.path.exists(self._mismatch_store_path):
+            try:
+                with open(self._mismatch_store_path) as f:
+                    raw = json.load(f)
+                for intent, methods in raw.items():
+                    for method, penalty in methods.items():
+                        self._mismatch_penalties[intent][method] = penalty
+            except Exception as exc:
+                self.logger.error("Failed to load mismatch penalty store: %s", exc)
 
-# Global instance
+    def _save_mismatch_store(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self._mismatch_store_path), exist_ok=True)
+            serialisable = {
+                intent: dict(methods)
+                for intent, methods in self._mismatch_penalties.items()
+            }
+            with open(self._mismatch_store_path, "w") as f:
+                json.dump(serialisable, f, indent=4)
+        except Exception as exc:
+            self.logger.error("Failed to save mismatch penalty store: %s", exc)
+
+
+# Global singleton
 learner = PatternLearner()
