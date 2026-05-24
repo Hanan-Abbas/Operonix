@@ -73,8 +73,6 @@ The goal is practical: a reliable, observable foundation for building agents tha
 
 Operonix follows a layered architecture where each system has a clear, bounded responsibility. Input flows from voice, panel, or API through the orchestration core and AI brain, then down through safety validation, the executor, and finally into desktop automation. Memory and learning feed results back up to improve future decisions.
 
-<div align='center'>
-
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        INPUT LAYER                          │
@@ -130,8 +128,6 @@ Operonix follows a layered architecture where each system has a clear, bounded r
                           ▲
                           └─── feedback loop → Brain
 ```
-
-</div>
 
 ---
 
