@@ -25,7 +25,7 @@
 
 <br/>
 
-[**Getting Started**](#getting-started) · [**Why Operonix**](#why-operonix) · [**Architecture**](#architecture) · [**Features**](#features) · [**LLM Providers**](#llm-providers) · [**Plugins**](#plugin-system) · [**Contributing**](#contributing)
+[**Getting Started**](#getting-started) · [**Example**](#example-workflow) · [**Why Operonix**](#why-operonix) · [**Architecture**](#architecture) · [**Features**](#features) · [**LLM Providers**](#llm-providers) · [**Plugins**](#plugin-system) · [**Limitations**](#current-limitations) · [**Contributing**](#contributing)
 
 <br/>
 
@@ -63,7 +63,7 @@ Operonix is not a single tool — it is a **platform**. Each layer, from intent 
 
 Most automation tools depend on rigid scripts, fixed APIs, or browser-only environments. They break when interfaces change and require constant manual maintenance.
 
-Operonix is designed differently. It operates directly on the desktop using an LLM-driven reasoning layer that interprets intent, selects appropriate tools, and adapts to varying application states — without requiring pre-programmed click paths or application-specific integrations.
+Operonix is designed differently. It operates directly on the desktop using an LLM-driven reasoning layer that interprets intent, selects appropriate tools, and adapts to varying application states — without depending entirely on hardcoded click paths or application-specific APIs.
 
 The goal is practical: a reliable, observable foundation for building agents that can handle real desktop workflows, with the safety controls and engineering structure needed to deploy them responsibly.
 
@@ -73,7 +73,7 @@ The goal is practical: a reliable, observable foundation for building agents tha
 
 Operonix follows a layered architecture where each system has a clear, bounded responsibility. Input flows from voice, panel, or API through the orchestration core and AI brain, then down through safety validation, the executor, and finally into desktop automation. Memory and learning feed results back up to improve future decisions.
 
-<div align="center">
+<div align='center'>
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -97,7 +97,7 @@ Operonix follows a layered architecture where each system has a clear, bounded r
                         │
           ┌─────────────┴─────────────┐
           │                           │
-┌─────────▼──────────┐   ┌────────────▼──────────┐
+┌─────────▼──────────┐   ┌────────────▼───────────┐
 │      SAFETY        │   │       CONTEXT          │
 │ Risk · Audit       │   │ App · Window · Perms   │
 │ Sandbox · Guard    │   │ Focus · State          │
@@ -110,9 +110,9 @@ Operonix follows a layered architecture where each system has a clear, bounded r
 └────────────────┬─────────────────────┬──────────────────────┘
                  │                     │
 ┌────────────────▼──────┐   ┌──────────▼────────────────────┐
-│     CAPABILITIES      │   │          PLUGINS               │
-│ File · Web · UI       │   │ Loader · Sandbox · Health      │
-│ Command · Text        │   │ Evolver · Generator · Registry │
+│     CAPABILITIES      │   │          PLUGINS              │
+│ File · Web · UI       │   │ Loader · Sandbox · Health     │
+│ Command · Text        │   │ Evolver · Generator · Registry│
 └────────────────┬──────┘   └──────────┬────────────────────┘
                  └──────────┬──────────┘
                             │
@@ -123,13 +123,14 @@ Operonix follows a layered architecture where each system has a clear, bounded r
 └────────────────────┬──────────────────┬─────────────────────┘
                      │                  │
           ┌──────────▼────────┐   ┌─────▼───────────────────┐
-          │      MEMORY       │   │       LEARNING           │
-          │ Episodic · Session│   │ Patterns · Prompt trust  │
-          │ Long-term · Vector│   │ Pruning · Retriever      │
+          │      MEMORY       │   │       LEARNING          │
+          │ Episodic · Session│   │ Patterns · Prompt trust │
+          │ Long-term · Vector│   │ Pruning · Retriever     │
           └───────────────────┘   └─────────────────────────┘
                           ▲
                           └─── feedback loop → Brain
 ```
+
 </div>
 
 ---
@@ -221,6 +222,41 @@ ollama serve
 ```bash
 python3 -m core.main
 ```
+
+---
+
+## Example Workflow
+
+Here is how a natural language request moves through the Operonix pipeline end to end:
+
+```text
+User: "Open Firefox and search for autonomous agents"
+
+→ Voice / Panel receives input
+→ Intent parser identifies goal and required actions
+→ Planner generates a multi-step execution plan
+→ Safety validator checks permissions and risk rules
+→ Executor dispatches steps with retry logic
+→ Automation engine launches Firefox and interacts with the UI
+→ Result is logged to memory and surfaced in the dashboard
+```
+
+Each step is observable, logged, and — where relevant — validated before the next begins.
+
+---
+
+## Current Limitations
+
+Operonix is in active development. The following constraints apply in the current state:
+
+- **Linux only** — Windows and macOS are not yet supported
+- **Desktop environment compatibility** — behaviour may vary across display managers and window managers
+- **Vision-based automation is experimental** — accuracy depends on screen resolution and application layout
+- **Some plugins require manual permission approval** before the agent can invoke them
+- **Long-running autonomous workflows** are still being refined and may require human checkpoints
+- **Voice pipeline** is functional but not yet production-stable across all audio configurations
+
+These are known areas of active work, not fundamental design constraints.
 
 ---
 
