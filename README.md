@@ -1,15 +1,10 @@
 <div align="center">
 
-<br/>
-
-```
-  ██████╗ ██████╗ ███████╗██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗
- ██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔═══██╗████╗  ██║██║╚██╗██╔╝
- ██║   ██║██████╔╝█████╗  ██████╔╝██║   ██║██╔██╗ ██║██║ ╚███╔╝ 
- ██║   ██║██╔═══╝ ██╔══╝  ██╔══██╗██║   ██║██║╚██╗██║██║ ██╔██╗ 
- ╚██████╔╝██║     ███████╗██║  ██║╚██████╔╝██║ ╚████║██║██╔╝ ██╗
-  ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png"/>
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png"/>
+  <img alt="Operonix" src="assets/banner-dark.png" width="700"/>
+</picture>
 
 **AI-Powered Desktop Automation & Orchestration Platform**
 
@@ -95,7 +90,7 @@ Operonix follows a layered architecture where each system has a clear, bounded r
                         │
           ┌─────────────┴─────────────┐
           │                           │
-┌─────────▼──────────┐   ┌────────────▼───────────┐
+┌─────────▼──────────┐   ┌────────────▼──────────┐
 │      SAFETY        │   │       CONTEXT          │
 │ Risk · Audit       │   │ App · Window · Perms   │
 │ Sandbox · Guard    │   │ Focus · State          │
@@ -108,9 +103,9 @@ Operonix follows a layered architecture where each system has a clear, bounded r
 └────────────────┬─────────────────────┬──────────────────────┘
                  │                     │
 ┌────────────────▼──────┐   ┌──────────▼────────────────────┐
-│     CAPABILITIES      │   │          PLUGINS              │
-│ File · Web · UI       │   │ Loader · Sandbox · Health     │
-│ Command · Text        │   │ Evolver · Generator · Registry│
+│     CAPABILITIES      │   │          PLUGINS               │
+│ File · Web · UI       │   │ Loader · Sandbox · Health      │
+│ Command · Text        │   │ Evolver · Generator · Registry │
 └────────────────┬──────┘   └──────────┬────────────────────┘
                  └──────────┬──────────┘
                             │
@@ -121,9 +116,9 @@ Operonix follows a layered architecture where each system has a clear, bounded r
 └────────────────────┬──────────────────┬─────────────────────┘
                      │                  │
           ┌──────────▼────────┐   ┌─────▼───────────────────┐
-          │      MEMORY       │   │       LEARNING          │
-          │ Episodic · Session│   │ Patterns · Prompt trust │
-          │ Long-term · Vector│   │ Pruning · Retriever     │
+          │      MEMORY       │   │       LEARNING           │
+          │ Episodic · Session│   │ Patterns · Prompt trust  │
+          │ Long-term · Vector│   │ Pruning · Retriever      │
           └───────────────────┘   └─────────────────────────┘
                           ▲
                           └─── feedback loop → Brain
