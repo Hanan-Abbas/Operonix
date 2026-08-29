@@ -1,0 +1,19 @@
+# Operonix Local Agent Dependencies
+# Install with: pip install -r local_agent_requirements.txt
+
+# WebSocket communication
+websockets>=12.0
+
+# Desktop automation
+pyautogui>=0.9.54
+python-xlib>=0.33
+
+# Window management (Linux)
+python3-xdotool>=0.0.1
+
+# Screen capture
+Pillow>=10.0.0
+
+# Optional: for enhanced window detection
+# wmctrl is a system package, install with:
+# sudo apt-get install wmctrl xdotool x11-utils
