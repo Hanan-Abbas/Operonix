@@ -13,7 +13,7 @@ services:
     
     # Build settings (Render will automatically use Dockerfile.render)
     # Build command: handled by Dockerfile (pip install -r requirements.txt)
-    # Start command: CMD ["python3", "-m", "api.server"] in Dockerfile
+    # Start command: python3 -m api.server
     
     # Health check
     healthCheckPath: /health
