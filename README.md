@@ -216,6 +216,81 @@ python3 -m core.main
 
 ---
 
+## Deployment
+
+Operonix supports multiple deployment options depending on your needs:
+
+### 🐳 Local Docker Deployment
+
+Run Operonix locally using Docker for easy development and testing.
+
+```bash
+# Build and run with Docker Compose
+docker-compose build
+docker-compose up -d
+
+# Access the dashboard at http://localhost:8000
+```
+
+**Documentation:** See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed Docker setup.
+
+### ☁️ AWS App Runner Deployment
+
+Deploy to AWS App Runner for production use with full functionality.
+
+```bash
+# Deploy to AWS (requires AWS CLI configured)
+./aws/deploy.sh
+```
+
+**Cost:** Free tier for 3 months, then ~$43/month for 24/7 operation  
+**Documentation:** See [DEPLOYMENT.md](DEPLOYMENT.md#aws-free-tier-deployment)
+
+### 🚀 Hybrid Deployment (Recommended - Free Forever)
+
+Split Operonix into cloud backend (Render) + local agent (your laptop) for zero-cost deployment.
+
+**Architecture:**
+- **Cloud Backend (Render)**: LLM orchestrator, API, dashboard - free forever
+- **Local Agent**: Desktop automation, screen reading - runs on your machine
+
+**Benefits:**
+- ✅ $0.00/month forever
+- ✅ Scales to zero when not in use
+- ✅ Multi-user support
+- ✅ Full desktop automation
+
+**Quick Start:**
+
+```bash
+# 1. Deploy cloud backend to Render (via dashboard)
+#    - Push code to GitHub
+#    - Connect repo in Render dashboard
+#    - Configure environment variables
+#    - Deploy
+
+# 2. Run local agent on your machine
+python local_agent.py \
+    --session-id your-unique-id \
+    --backend-url https://your-app.onrender.com
+```
+
+**For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + your Render URL.  
+**Documentation:** See [HYBRID_DEPLOYMENT.md](HYBRID_DEPLOYMENT.md) for complete guide.
+
+### 📋 Deployment Comparison
+
+| Feature | Local Docker | AWS App Runner | Hybrid (Render) |
+|---------|--------------|----------------|----------------|
+| **Cost** | Free (your hardware) | $43/month after free tier | **Free forever** |
+| **Full Functionality** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Scales to Zero** | ❌ No | ❌ No | ✅ Yes |
+| **Multi-User** | ❌ No | ✅ Possible | ✅ Easy |
+| **Setup Complexity** | Low | Medium | Low |
+| **Best For** | Development | Production | Personal/Small Teams |
+
+---
+
 ## Example Workflow
 
 Here is how a natural language request moves through the Operonix pipeline end to end:
