@@ -1,0 +1,81 @@
+# Operonix Cloud Backend Dockerfile for Render
+# This is a lightweight version without desktop automation dependencies
+# Designed for Render free tier deployment
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies (minimal for cloud backend)
+RUN apt-get update && apt-get install -y \
+    # Python build dependencies
+    python3-dev \
+    build-essential \
+    libffi-dev \
+    libssl-dev \
+    # Utilities
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user
+RUN useradd -m -u 1000 operonix && \
+    mkdir -p /home/operonix/app && \
+    chown -R operonix:operonix /home/operonix
+
+WORKDIR /home/operonix/app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies (skip desktop automation packages)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir "packaging>=23.0,<24.0" --force-reinstall && \
+    # Install core dependencies excluding desktop automation
+    pip install --no-cache-dir \
+    aiohttp \
+    fastapi \
+    uvicorn \
+    aiosqlite \
+    psutil \
+    scikit-learn \
+    chromadb \
+    python-dotenv \
+    pydantic>=2.0.0 \
+    pytest \
+    pytest-asyncio
+
+# Copy application code (exclude desktop automation modules)
+COPY --chown=operonix:operonix api/ ./api/
+COPY --chown=operonix:operonix brain/ ./brain/
+COPY --chown=operonix:operonix core/ ./core/
+COPY --chown=operonix:operonix memory/ ./memory/
+COPY --chown=operonix:operonix learning/ ./learning/
+COPY --chown=operonix:operonix safety/ ./safety/
+COPY --chown=operonix:operonix capabilities/ ./capabilities/
+COPY --chown=operonix:operonix plugins/ ./plugins/
+COPY --chown=operonix:operonix dashboard/ ./dashboard/
+COPY --chown=operonix:operonix tools/ ./tools/
+COPY --chown=operonix:operonix context/ ./context/
+COPY --chown=operonix:operonix executor/ ./executor/
+COPY --chown=operonix:operonix debugging/ ./debugging/
+
+# Create necessary directories
+RUN mkdir -p logs memory data plugins/installed && \
+    chown -R operonix:operonix logs memory data plugins/installed
+
+# Switch to non-root user
+USER operonix
+
+# Expose API port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command - run the API server only (no desktop automation)
+CMD ["python3", "-m", "api.server"]
