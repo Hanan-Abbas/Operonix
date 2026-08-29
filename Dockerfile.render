@@ -31,22 +31,10 @@ WORKDIR /home/operonix/app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies (skip desktop automation packages)
+# Install Python dependencies using requirements.txt for Render compatibility
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir "packaging>=23.0,<24.0" --force-reinstall && \
-    # Install core dependencies excluding desktop automation
-    pip install --no-cache-dir \
-    aiohttp \
-    fastapi \
-    uvicorn \
-    aiosqlite \
-    psutil \
-    scikit-learn \
-    chromadb \
-    python-dotenv \
-    pydantic>=2.0.0 \
-    pytest \
-    pytest-asyncio
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code (exclude desktop automation modules)
 COPY --chown=operonix:operonix api/ ./api/
