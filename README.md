@@ -249,8 +249,8 @@ python local_agent.py \
     --backend-url https://your-app.onrender.com
 ```
 
-**For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + your Render URL.  
-**Documentation:** See [HYBRID_DEPLOYMENT.md](HYBRID_DEPLOYMENT.md) for complete guide.
+**For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + `setup_agent.sh` + your Render URL.  
+**Documentation:** See [HYBRID_DEPLOYMENT.md](HYBRID_DEPLOYMENT.md) and [FRIEND_SETUP.md](FRIEND_SETUP.md) for complete guides.
 
 ---
 
