@@ -1,0 +1,49 @@
+# Render Deployment Configuration for Operonix Cloud Backend
+# This deploys the LLM orchestrator, API, and dashboard to Render free tier
+
+services:
+  - type: web
+    name: operonix-cloud
+    env: docker
+    plan: free
+    
+    # Docker configuration
+    dockerContext: .
+    dockerfilePath: Dockerfile.render
+    
+    # Environment variables (configure in Render dashboard)
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        value: "*"
+      # LLM Provider Keys (set in Render dashboard)
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY  
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OLLAMA_BASE_URL
+        value: ""
+        sync: false
+    
+    # Health check
+    healthCheckPath: /health
+    
+    # Render automatically sleeps when idle (free tier behavior)
+    # Auto-suspends after 15 minutes of inactivity
+    
+    # Build and deployment
+    branch: main
+    autoDeploy: true
+
+databases:
+  # Optional: PostgreSQL for persistent session storage
+  # Comment out if using in-memory storage
+  - name: operonix-sessions
+    databaseName: operonix
+    user: operonix
+    plan: free
