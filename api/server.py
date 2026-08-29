@@ -80,6 +80,11 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/dashboard")
     async def ws_endpoint(websocket: WebSocket):
         await websocket_handler(websocket)
+    
+    @app.websocket("/ws/agent")
+    async def agent_ws_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for local agent connections in hybrid deployment"""
+        await websocket_handler(websocket)
 
     # ── Lifecycle hooks ───────────────────────────────────────────────────
     @app.on_event("startup")
