@@ -48,18 +48,35 @@ class LocalAgent:
         self.running = False
         
     async def connect(self):
-        """Connect to cloud backend via WebSocket"""
-        try:
-            logger.info(f"Connecting to backend: {self.backend_url}")
-            self.websocket = await websockets.connect(
-                self.backend_url,
-                extra_headers={"X-Session-ID": self.session_id}
-            )
-            logger.info("Connected to cloud backend")
-            self.running = True
-        except Exception as e:
-            logger.error(f"Failed to connect: {e}")
-            raise
+        """Connect to cloud backend via WebSocket with automatic retry"""
+        retry_count = 0
+        max_retries = 60  # 5 minutes total (60 * 5 seconds)
+        retry_delay = 5  # seconds
+        
+        while retry_count < max_retries and not self.running:
+            try:
+                logger.info(f"Connecting to backend: {self.backend_url} (attempt {retry_count + 1}/{max_retries})")
+                self.websocket = await websockets.connect(
+                    self.backend_url,
+                    extra_headers={"X-Session-ID": self.session_id},
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=10
+                )
+                logger.info("Connected to cloud backend")
+                self.running = True
+                return True
+            except Exception as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    logger.warning(f"Connection failed: {e}")
+                    logger.info(f"Waiting for cloud backend to wake up... retrying in {retry_delay}s")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Failed to connect after {max_retries} attempts")
+                    raise
+        
+        return False
     
     async def handle_command(self, command: dict):
         """Execute automation commands from cloud backend"""
@@ -182,9 +199,9 @@ class LocalAgent:
             return {"status": "error", "message": str(e)}
     
     async def listen(self):
-        """Listen for commands from cloud backend"""
-        try:
-            while self.running:
+        """Listen for commands from cloud backend with auto-reconnect"""
+        while self.running:
+            try:
                 message = await self.websocket.recv()
                 command = json.loads(message)
                 
@@ -194,12 +211,33 @@ class LocalAgent:
                 # Send result back
                 await self.websocket.send(json.dumps(result))
                 
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("Connection to backend closed")
-            self.running = False
-        except Exception as e:
-            logger.error(f"Error in listen loop: {e}")
-            self.running = False
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("Connection to backend closed")
+                self.running = False
+                # Attempt to reconnect
+                if await self.connect():
+                    logger.info("Reconnected to backend")
+                    # Resend connection message
+                    await self.websocket.send(json.dumps({
+                        "type": "connect",
+                        "session_id": self.session_id,
+                        "capabilities": [
+                            "screenshot",
+                            "click", 
+                            "type",
+                            "keypress",
+                            "hotkey",
+                            "get_windows",
+                            "focus_window"
+                        ]
+                    }))
+                else:
+                    logger.error("Reconnection failed, exiting")
+                    break
+            except Exception as e:
+                logger.error(f"Error in listen loop: {e}")
+                self.running = False
+                break
     
     async def run(self):
         """Main agent loop"""
