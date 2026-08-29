@@ -148,6 +148,37 @@ class ConnectionManager:
             return await conn.send(payload)
         return False
 
+    # ── Agent session management ─────────────────────────────────────────────
+
+    async def register_agent(self, conn: WSConnection, session_id: str) -> bool:
+        """Register a local agent with its session ID."""
+        if session_id in self._agent_sessions:
+            logger.warning("Session ID %s already registered, replacing", session_id)
+        
+        self._agent_sessions[session_id] = conn
+        logger.info("Agent registered: session_id=%s, client_id=%s", session_id, conn.client_id)
+        return True
+
+    async def send_to_agent(self, session_id: str, payload: dict) -> bool:
+        """Send payload to a specific agent by session ID."""
+        conn = self._agent_sessions.get(session_id)
+        if conn and conn.is_alive:
+            return await conn.send(payload)
+        logger.warning("Agent not found or dead: session_id=%s", session_id)
+        return False
+
+    def get_active_sessions(self) -> List[Dict[str, str]]:
+        """Get list of active agent sessions."""
+        return [
+            {
+                "session_id": session_id,
+                "client_id": conn.client_id,
+                "alive": conn.is_alive
+            }
+            for session_id, conn in self._agent_sessions.items()
+            if conn.is_alive
+        ]
+
     async def _forward_event(self, event) -> None:
         """EventBus callback — forwards every internal event to the dashboard."""
         payload = {
