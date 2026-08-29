@@ -63,6 +63,7 @@ class ConnectionManager:
     - Accept / disconnect clients
     - Broadcast system events to subscribed clients
     - Route inbound dashboard commands back to the EventBus
+    - Route commands to specific local agents via session IDs
     - Prune dead connections automatically
     """
 
@@ -70,6 +71,10 @@ class ConnectionManager:
         self._connections: Dict[str, WSConnection] = {}
         self._counter: int = 0
         self._bus = None          # injected after startup
+
+        # ── Session management for local agents ────────────────────────────
+        # Maps session IDs to their WebSocket connections for hybrid deployment
+        self._agent_sessions: Dict[str, WSConnection] = {}
 
         # ── Confirmation state ─────────────────────────────────────────────
         # Tracks the task_id of the currently pending confirmation so that
@@ -100,6 +105,11 @@ class ConnectionManager:
 
     def disconnect(self, conn: WSConnection) -> None:
         self._connections.pop(conn.client_id, None)
+        # Remove from agent sessions if this was an agent connection
+        for session_id, agent_conn in list(self._agent_sessions.items()):
+            if agent_conn.client_id == conn.client_id:
+                self._agent_sessions.pop(session_id, None)
+                logger.info("Agent session disconnected: %s", session_id)
         conn.is_alive = False
         logger.info("Client disconnected: %s  (total=%d)", conn.client_id, len(self._connections))
 
