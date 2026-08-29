@@ -1,0 +1,74 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+.venv
+venv/
+operonix/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+github_issues_creation.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation (keep README.md)
+*.md
+!README.md
+
+# Assets (not needed in container)
+assets/
+
+# CI/CD
+.github
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Development files
+create_github_issues.py
+.github_issues_state.json
+
+# Cache
+.cache
+*.cache
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database files (will be created in container)
+*.db
+*.sqlite
+*.sqlite3
