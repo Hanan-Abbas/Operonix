@@ -20,7 +20,7 @@
 
 <br/>
 
-[**Getting Started**](#getting-started) · [**Example**](#example-workflow) · [**Why Operonix**](#why-operonix) · [**Architecture**](#architecture) · [**Features**](#features) · [**LLM Providers**](#llm-providers) · [**Plugins**](#plugin-system) · [**Limitations**](#current-limitations) · [**Contributing**](#contributing)
+[**Getting Started**](#getting-started) · [**Deployment**](#deployment) · [**Example**](#example-workflow) · [**Why Operonix**](#why-operonix) · [**Architecture**](#architecture) · [**Features**](#features) · [**LLM Providers**](#llm-providers) · [**Plugins**](#plugin-system) · [**Limitations**](#current-limitations) · [**Contributing**](#contributing)
 
 <br/>
 
