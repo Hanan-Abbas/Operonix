@@ -218,35 +218,9 @@ python3 -m core.main
 
 ## Deployment
 
-Operonix supports multiple deployment options depending on your needs:
+Operonix uses a hybrid deployment architecture for zero-cost operation:
 
-### 🐳 Local Docker Deployment
-
-Run Operonix locally using Docker for easy development and testing.
-
-```bash
-# Build and run with Docker Compose
-docker-compose build
-docker-compose up -d
-
-# Access the dashboard at http://localhost:8000
-```
-
-**Documentation:** See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed Docker setup.
-
-### ☁️ AWS App Runner Deployment
-
-Deploy to AWS App Runner for production use with full functionality.
-
-```bash
-# Deploy to AWS (requires AWS CLI configured)
-./aws/deploy.sh
-```
-
-**Cost:** Free tier for 3 months, then ~$43/month for 24/7 operation  
-**Documentation:** See [DEPLOYMENT.md](DEPLOYMENT.md#aws-free-tier-deployment)
-
-### 🚀 Hybrid Deployment (Recommended - Free Forever)
+### 🚀 Hybrid Deployment (Free Forever)
 
 Split Operonix into cloud backend (Render) + local agent (your laptop) for zero-cost deployment.
 
@@ -277,17 +251,6 @@ python local_agent.py \
 
 **For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + your Render URL.  
 **Documentation:** See [HYBRID_DEPLOYMENT.md](HYBRID_DEPLOYMENT.md) for complete guide.
-
-### 📋 Deployment Comparison
-
-| Feature | Local Docker | AWS App Runner | Hybrid (Render) |
-|---------|--------------|----------------|----------------|
-| **Cost** | Free (your hardware) | $43/month after free tier | **Free forever** |
-| **Full Functionality** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Scales to Zero** | ❌ No | ❌ No | ✅ Yes |
-| **Multi-User** | ❌ No | ✅ Possible | ✅ Easy |
-| **Setup Complexity** | Low | Medium | Low |
-| **Best For** | Development | Production | Personal/Small Teams |
 
 ---
 
