@@ -18,6 +18,19 @@ This guide helps you set up the Operonix local agent to connect to a shared clou
 
 ### Step 1: Install System Dependencies
 
+**Option A: Quick Setup (Recommended)**
+
+If you have the `setup_agent.sh` script from your friend:
+
+```bash
+chmod +x setup_agent.sh
+./setup_agent.sh
+```
+
+This will automatically install all required system and Python dependencies.
+
+**Option B: Manual Setup**
+
 Open your terminal and run:
 
 ```bash
@@ -42,8 +55,13 @@ cd operonix-agent
 Copy these files from your friend into the `operonix-agent` directory:
 - `local_agent.py`
 - `local_agent_requirements.txt`
+- `setup_agent.sh` (optional, for quick setup)
 
 ### Step 4: Install Python Dependencies
+
+**If you used Option A (Quick Setup)**: Skip this step - already done.
+
+**If you used Option B (Manual Setup)**:
 
 ```bash
 pip install -r local_agent_requirements.txt
