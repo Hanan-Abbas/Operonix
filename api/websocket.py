@@ -366,6 +366,40 @@ class ConnectionManager:
                 )
                 await conn.send({"type": "ack", "action": "RELOAD_PLUGIN", "name": plugin_name})
 
+        # ── Agent connection handling for hybrid deployment ───────────────────
+        elif action == "AGENT_CONNECT":
+            session_id = msg.get("session_id")
+            capabilities = msg.get("capabilities", [])
+            if not session_id:
+                await conn.send({"type": "error", "message": "'session_id' required"})
+            else:
+                await self.register_agent(conn, session_id)
+                await conn.send({
+                    "type": "agent_registered",
+                    "session_id": session_id,
+                    "capabilities": capabilities
+                })
+
+        elif action == "AGENT_COMMAND":
+            # Command from local agent to cloud backend
+            command_type = msg.get("command_type")
+            session_id = msg.get("session_id")
+            if not command_type:
+                await conn.send({"type": "error", "message": "'command_type' required"})
+            else:
+                # Forward to EventBus for processing
+                if self._bus:
+                    await self._bus.emit(
+                        "agent_command",
+                        {
+                            "command_type": command_type,
+                            "session_id": session_id,
+                            "data": msg.get("data", {})
+                        },
+                        source="local_agent"
+                    )
+                await conn.send({"type": "ack", "action": "AGENT_COMMAND"})
+
         else:
             # Generic passthrough — let the orchestrator decide
             if self._bus:
