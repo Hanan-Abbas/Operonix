@@ -1,0 +1,61 @@
+# Zeabur Deployment Configuration for Operonix Cloud Backend
+# This deploys the LLM orchestrator, API, and dashboard to Zeabur free tier
+
+services:
+  - name: operonix-cloud
+    type: service
+    dockerfile: Dockerfile.render
+    dockerContext: .
+    
+    # Build settings
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m api.server
+    
+    # Port configuration
+    ports:
+      - port: 8000
+        protocol: HTTP
+    
+    # Health check
+    healthCheck:
+      http:
+        path: /health
+        port: 8000
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    # Environment variables
+    env:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        value: "*"
+      # LLM Provider Keys (set in Zeabur dashboard as secrets)
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OLLAMA_BASE_URL
+        value: ""
+        sync: false
+    
+    # Resource limits (Zeabur free tier)
+    resources:
+      memory: 512Mi
+      cpu: 0.5
+    
+    # Auto-scaling (Zeabur free tier behavior)
+    # Container may sleep during inactivity but wakes on request
+    # Your reconnection logic in local_agent.py handles this
+
+# Database (optional)
+# Uncomment if you want persistent PostgreSQL storage
+# databases:
+#   - name: operonix-sessions
+#     type: postgres
+#     version: "15"
