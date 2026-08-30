@@ -222,10 +222,10 @@ Operonix uses a hybrid deployment architecture for zero-cost operation:
 
 ### 🚀 Hybrid Deployment (Free Forever)
 
-Split Operonix into cloud backend (Render) + local agent (your laptop) for zero-cost deployment.
+Split Operonix into cloud backend (Zeabur) + local agent (your laptop) for zero-cost deployment.
 
 **Architecture:**
-- **Cloud Backend (Render)**: LLM orchestrator, API, dashboard - free forever
+- **Cloud Backend (Zeabur)**: LLM orchestrator, API, dashboard - free forever
 - **Local Agent**: Desktop automation, screen reading - runs on your machine
 
 **Benefits:**
@@ -233,23 +233,24 @@ Split Operonix into cloud backend (Render) + local agent (your laptop) for zero-
 - ✅ Scales to zero when not in use
 - ✅ Multi-user support
 - ✅ Full desktop automation
+- ✅ 4GB RAM burst during builds for faster deployment
 
 **Quick Start:**
 
 ```bash
-# 1. Deploy cloud backend to Render (via dashboard)
+# 1. Deploy cloud backend to Zeabur (via dashboard)
 #    - Push code to GitHub
-#    - Connect repo in Render dashboard
+#    - Connect repo in Zeabur dashboard
 #    - Configure environment variables
 #    - Deploy
 
 # 2. Run local agent on your machine
 python local_agent.py \
     --session-id your-unique-id \
-    --backend-url https://your-app.onrender.com
+    --backend-url https://your-app.zeabur.app
 ```
 
-**For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + `setup_agent.sh` + your Render URL.  
+**For Friends:** Share just `local_agent.py` + `local_agent_requirements.txt` + `setup_agent.sh` + your Zeabur URL.  
 **Documentation:** See [HYBRID_DEPLOYMENT.md](HYBRID_DEPLOYMENT.md) and [FRIEND_SETUP.md](FRIEND_SETUP.md) for complete guides.
 
 ---
