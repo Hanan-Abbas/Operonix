@@ -133,7 +133,7 @@ Session ID: agent-a1b2c3d4
 Enter this session ID in the cloud dashboard to connect
 ```
 
-**Automatic Reconnection**: The agent automatically handles Render's wake-up:
+**Automatic Reconnection**: The agent automatically handles Zeabur's wake-up:
 - If the cloud backend is sleeping, the agent will retry every 5 seconds
 - It will wait up to 5 minutes for the backend to wake up
 - If the connection drops, it will automatically reconnect
@@ -141,7 +141,7 @@ Enter this session ID in the cloud dashboard to connect
 
 #### 2.3 Connect Agent to Cloud
 
-1. Open your Render dashboard URL in a browser
+1. Open your Zeabur dashboard URL in a browser
 2. Enter your session ID in the connection field
 3. The cloud backend will now route automation commands to your local agent
 
@@ -167,7 +167,7 @@ Each user needs to:
 
 ### Cloud Backend Environment Variables
 
-Configure these in Render dashboard:
+Configure these in Zeabur dashboard:
 
 ```bash
 # LLM Provider (choose one or more)
@@ -188,7 +188,7 @@ PYTHONUNBUFFERED=1
 --session-id agent-unique-id
 
 # Backend URL
---backend-url https://your-app.onrender.com
+--backend-url https://your-app.zeabur.app
 ```
 
 ## Multi-Tenancy & Security
