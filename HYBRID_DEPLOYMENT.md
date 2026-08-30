@@ -4,7 +4,7 @@
 
 This guide covers deploying Operonix using a **hybrid architecture** that costs **$0.00 forever** by splitting the system into:
 
-- **Cloud Backend (Render)**: LLM orchestrator, API endpoints, dashboard - free forever
+- **Cloud Backend (Zeabur)**: LLM orchestrator, API endpoints, dashboard - free forever
 - **Local Agent (Your Laptop)**: Desktop automation, screen reading, voice - runs locally
 
 ## Architecture
