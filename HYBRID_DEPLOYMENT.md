@@ -206,7 +206,7 @@ The system uses session IDs to ensure commands are routed to the correct local a
 
 - **Session IDs**: Treat session IDs like passwords - don't share publicly
 - **HTTPS**: Always use HTTPS for cloud backend
-- **API Keys**: Store API keys in Render environment variables, not in code
+- **API Keys**: Store API keys in Zeabur environment variables (mark as secret), not in code
 - **CORS**: Configure CORS origins to your specific domains in production
 
 ## Troubleshooting
@@ -214,18 +214,18 @@ The system uses session IDs to ensure commands are routed to the correct local a
 ### Cloud Backend Issues
 
 **Service won't start:**
-- Check Render logs for errors
+- Check Zeabur logs for errors
 - Verify environment variables are set correctly
 - Ensure Dockerfile.render is valid
 
 **Service sleeps too quickly:**
-- Render free tier sleeps after 15 minutes of inactivity
+- Zeabur free tier may sleep during inactivity
 - This is expected behavior - the service will wake on next request
 
 **API errors:**
 - Check LLM API key is valid
 - Verify CORS configuration
-- Check Render service logs
+- Check Zeabur service logs
 
 ### Local Agent Issues
 
@@ -247,7 +247,7 @@ The system uses session IDs to ensure commands are routed to the correct local a
 
 **Connection drops:**
 - Check internet connection stability
-- Verify Render service is not sleeping
+- Verify Zeabur service is not sleeping
 - Check WebSocket timeout settings
 
 **Commands not reaching agent:**
