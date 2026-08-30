@@ -270,7 +270,7 @@ For production use, consider implementing:
 
 For high-availability:
 
-1. Deploy multiple Render services
+1. Deploy multiple Zeabur services
 2. Use load balancer to distribute connections
 3. Implement session affinity for WebSocket connections
 
@@ -285,12 +285,12 @@ Add monitoring for:
 
 ## Cost Analysis
 
-### Render Free Tier (Forever)
+### Zeabur Free Tier (Forever)
 
 - **Web Service**: Free
-- **CPU**: 512 MB RAM (free tier)
+- **CPU**: 512 MB RAM with 4GB burst during builds (free tier)
 - **Bandwidth**: 100 GB/month (free)
-- **Build Minutes**: 750/month (free)
+- **Build Performance**: Enhanced with 4GB RAM burst
 
 ### Local Agent
 
@@ -303,29 +303,30 @@ Add monitoring for:
 
 ## Comparison with Other Deployments
 
-| Feature | Hybrid (Render) | AWS App Runner | AWS Lambda |
-|---------|----------------|---------------|------------|
+| Feature | Hybrid (Zeabur) | AWS App Runner | AWS Lambda |
+|---------|-----------------|---------------|------------|
 | **Cost** | Free forever | $43/month after free tier | Free tier limited |
 | **Desktop Automation** | ✅ Full support | ✅ Full support | ❌ Not supported |
 | **Scales to Zero** | ✅ Yes | ❌ No | ✅ Yes |
-| **Setup Complexity** | Medium | Medium | High |
+| **Setup Complexity** | Low | Medium | High |
 | **Multi-User** | ✅ Easy | ✅ Possible | ❌ Complex |
 | **Long-running Tasks** | ✅ Supported | ✅ Supported | ❌ 15-min limit |
+| **Build Performance** | ✅ 4GB RAM burst | ❌ Standard | ❌ Standard |
 
 ## Migration from Full Docker
 
 If you're currently using the full Docker deployment:
 
 1. **Keep existing setup** for development/testing
-2. **Add Render deployment** for production cloud backend
-3. **Update local agent** to connect to Render instead of local Docker
+2. **Add Zeabur deployment** for production cloud backend
+3. **Update local agent** to connect to Zeabur instead of local Docker
 4. **Gradually migrate users** to the hybrid architecture
 
 ## Support
 
 For issues or questions:
 - GitHub Issues: https://github.com/Hanan-Abbas/Operonix/issues
-- Render Documentation: https://render.com/docs
+- Zeabur Documentation: https://zeabur.com/docs
 - Local Agent Issues: Check logs and system dependencies
 
 ## Summary
