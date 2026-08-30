@@ -11,7 +11,7 @@ This guide covers deploying Operonix using a **hybrid architecture** that costs 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Cloud Backend (Render)                        │
+│                  Cloud Backend (Zeabur)                         │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │  • FastAPI Server & Dashboard                            │   │
 │  │  • LLM Orchestrator (Groq/Gemini/OpenRouter)             │   │
@@ -36,11 +36,12 @@ This guide covers deploying Operonix using a **hybrid architecture** that costs 
 ## Why This Architecture?
 
 ### Benefits
-- **$0.00 Forever**: Render free tier has no expiration date
+- **$0.00 Forever**: Zeabur free tier has no expiration date
 - **Scales to Zero**: Cloud backend sleeps when not in use
 - **Multi-User Support**: Multiple users can share the same cloud backend
 - **Local Performance**: Your laptop handles heavy desktop operations
 - **Privacy**: Sensitive data stays on your local machine
+- **Better Builds**: 4GB RAM burst during builds for faster deployment
 
 ### Trade-offs
 - Each user must run the local agent script
