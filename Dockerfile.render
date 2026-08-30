@@ -1,6 +1,6 @@
-# Operonix Cloud Backend Dockerfile for Render
+# Operonix Cloud Backend Dockerfile for Zeabur
 # This is a lightweight version without desktop automation dependencies
-# Designed for Render free tier deployment
+# Designed for Zeabur free tier deployment
 
 FROM python:3.11-slim
 
