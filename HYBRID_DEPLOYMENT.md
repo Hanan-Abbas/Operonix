@@ -50,9 +50,9 @@ This guide covers deploying Operonix using a **hybrid architecture** that costs 
 
 ## Prerequisites
 
-### For Cloud Backend (Render)
-- GitHub or GitLab account
-- Render account (free)
+### For Cloud Backend (Zeabur)
+- GitHub account
+- Zeabur account (free, no credit card required)
 - LLM API keys (Groq recommended for free tier)
 
 ### For Local Agent
@@ -63,35 +63,36 @@ This guide covers deploying Operonix using a **hybrid architecture** that costs 
 
 ## Deployment Steps
 
-### Step 1: Deploy Cloud Backend to Render
+### Step 1: Deploy Cloud Backend to Zeabur
 
 #### 1.1 Prepare Your Repository
 
 ```bash
-# Ensure render.yaml and Dockerfile.render are in your repository
-git add render.yaml Dockerfile.render
-git commit -m "Add Render deployment configuration"
+# Ensure zeabur.yaml and Dockerfile.render are in your repository
+git add zeabur.yaml Dockerfile.render
+git commit -m "Add Zeabur deployment configuration"
 git push origin main
 ```
 
-#### 1.2 Deploy to Render
+#### 1.2 Deploy to Zeabur
 
-1. Go to [Render Dashboard](https://dashboard.render.com/)
-2. Click **"New +"** → **"Web Service"**
-3. Connect your GitHub/GitLab repository
-4. Render will automatically detect `render.yaml`
-5. Configure environment variables:
-   - `GROQ_API_KEY`: Your Groq API key (recommended)
-   - `OPENROUTER_API_KEY`: Optional alternative
-   - `GEMINI_API_KEY`: Optional alternative
+1. Go to [Zeabur Dashboard](https://zeabur.com)
+2. Sign up with GitHub (no credit card required)
+3. Click **"Create New Project"**
+4. Select your Operonix repository from GitHub
+5. Zeabur will automatically detect `zeabur.yaml`
+6. Configure environment variables:
+   - `GROQ_API_KEY`: Your Groq API key (recommended, mark as secret)
+   - `OPENROUTER_API_KEY`: Optional alternative (mark as secret)
+   - `GEMINI_API_KEY`: Optional alternative (mark as secret)
    - `CORS_ORIGINS`: `*` (or your domain)
-6. Click **"Deploy"**
+7. Click **"Deploy"**
 
 #### 1.3 Get Your Service URL
 
-After deployment, Render will provide a URL like:
+After deployment, Zeabur will provide a URL like:
 ```
-https://operonix-cloud.onrender.com
+https://operonix-cloud.zeabur.app
 ```
 
 Save this URL for the local agent configuration.
@@ -123,7 +124,7 @@ SESSION_ID="agent-$(uuidgen | cut -d'-' -f1)"
 # Run the agent
 python local_agent.py \
     --session-id $SESSION_ID \
-    --backend-url https://operonix-cloud.onrender.com
+    --backend-url https://operonix-cloud.zeabur.app
 ```
 
 The agent will display your session ID:
