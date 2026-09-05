@@ -63,7 +63,7 @@ class IntentResult(BaseModel):
     """Result of intent parsing/analysis."""
     name: str
     confidence: float = Field(ge=0.0, le=1.0)
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
     profile_hint: Optional[str] = None
     raw_intent: Optional[str] = None
     fallback_used: bool = False
@@ -80,8 +80,8 @@ class ContextSnapshot(BaseModel):
     window_title: Optional[str] = None
     cwd: Optional[str] = None
     sub_context: Optional[str] = None
-    ui_state: dict[str, Any] = Field(default_factory=dict)
-    permissions: list[str] = Field(default_factory=list)
+    ui_state: Dict[str, Any] = Field(default_factory=dict)
+    permissions: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     captured_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -95,10 +95,10 @@ class ContextSnapshot(BaseModel):
 
 class KnowledgeContext(BaseModel):
     """Retrieved knowledge from memory/RAG systems."""
-    retrieved_memories: list[dict[str, Any]] = Field(default_factory=list)
-    retrieved_documents: list[dict[str, Any]] = Field(default_factory=list)
-    learned_patterns: list[dict[str, Any]] = Field(default_factory=list)
-    provenance: dict[str, Any] = Field(default_factory=dict)
+    retrieved_memories: List[Dict[str, Any]] = Field(default_factory=list)
+    retrieved_documents: List[Dict[str, Any]] = Field(default_factory=list)
+    learned_patterns: List[Dict[str, Any]] = Field(default_factory=list)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ─── PLANNING ─────────────────────────────────────────────────────────────────
@@ -107,30 +107,30 @@ class PlanStep(BaseModel):
     """A single step in an execution plan."""
     step_id: str
     action: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: Dict[str, Any] = Field(default_factory=dict)
     objective: Optional[str] = None
     expected_outcome: Optional[str] = None
-    dependencies: list[str] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    dependencies: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     
     # Idempotency and side-effect classification
     idempotency: Literal["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"] = "CONDITIONAL"
     side_effect: Literal["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"] = "LIMITED_SIDE_EFFECT"
     reversibility: bool = False
-    preconditions: list[str] = Field(default_factory=list)
-    postconditions: list[str] = Field(default_factory=list)
+    preconditions: List[str] = Field(default_factory=list)
+    postconditions: List[str] = Field(default_factory=list)
     
     # Execution policy
-    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    retry_policy: Dict[str, Any] = Field(default_factory=dict)
     timeout: Optional[int] = None
 
 
 class Plan(BaseModel):
     """Complete execution plan for a task."""
     plan_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    steps: list[PlanStep]
+    steps: List[PlanStep]
     current_step_index: int = 0
-    completed_steps: list[str] = Field(default_factory=list)
+    completed_steps: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     class Config:
@@ -176,7 +176,7 @@ class RoutingCandidate(BaseModel):
     
     # Decision metadata
     rejection_reason: Optional[str] = None
-    policy_constraints: list[str] = Field(default_factory=list)
+    policy_constraints: List[str] = Field(default_factory=list)
     fallback_position: Optional[int] = None
 
 
@@ -184,11 +184,11 @@ class MethodDecision(BaseModel):
     """Decision on which execution method to use."""
     selected_candidate: RoutingCandidate
     confidence: float = Field(ge=0.0, le=1.0)
-    candidates_considered: list[RoutingCandidate] = Field(default_factory=list)
-    rejected_candidates: list[RoutingCandidate] = Field(default_factory=list)
-    fallback_candidates: list[RoutingCandidate] = Field(default_factory=list)
+    candidates_considered: List[RoutingCandidate] = Field(default_factory=list)
+    rejected_candidates: List[RoutingCandidate] = Field(default_factory=list)
+    fallback_candidates: List[RoutingCandidate] = Field(default_factory=list)
     policy_decision: Optional[str] = None
-    safety_constraints: list[str] = Field(default_factory=list)
+    safety_constraints: List[str] = Field(default_factory=list)
     routing_explanation: Optional[str] = None
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
@@ -217,8 +217,8 @@ class SafetyDecision(BaseModel):
     confirmation_required: bool = False
     confirmation_reason: Optional[str] = None
     user_decision: Optional[Literal["ALLOW", "DENY"]] = None
-    policy_constraints: list[str] = Field(default_factory=list)
-    safety_checks_performed: list[str] = Field(default_factory=list)
+    policy_constraints: List[str] = Field(default_factory=list)
+    safety_checks_performed: List[str] = Field(default_factory=list)
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     class Config:
@@ -242,7 +242,7 @@ class ExecutionResult(BaseModel):
     execution_id: str
     step_id: str
     success: bool
-    result_data: dict[str, Any] = Field(default_factory=dict)
+    result_data: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     error_type: Optional[str] = None
     attempt: int = 1
@@ -263,8 +263,8 @@ class VerificationResult(BaseModel):
     """Result of verifying that an execution produced the expected outcome."""
     status: Literal["VERIFIED", "FAILED", "UNCERTAIN"]
     observed_context: ContextSnapshot
-    expected_state: dict[str, Any] = Field(default_factory=dict)
-    actual_state: dict[str, Any] = Field(default_factory=dict)
+    expected_state: Dict[str, Any] = Field(default_factory=dict)
+    actual_state: Dict[str, Any] = Field(default_factory=dict)
     reason: Optional[str] = None
     verification_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
