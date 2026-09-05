@@ -47,6 +47,14 @@ chromadb
 python-dotenv    # For managing API keys and local configs in core/config.py
 pydantic>=2.0.0  # Data validation (FastAPI dependency)
 
+# --- LANGCHAIN & LANGGRAPH ---
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-groq>=0.1.0
+langchain-google-genai>=0.0.5
+langchain-community>=0.0.20
+langgraph>=0.0.20
+
 # --- TESTING ---
 pytest
 pytest-asyncio
