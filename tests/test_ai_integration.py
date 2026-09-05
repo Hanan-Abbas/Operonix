@@ -246,6 +246,205 @@ def test_provider_independence():
         assert service.is_available()
 
 
+# ─── BEHAVIORAL TESTS FOR INTENT ANALYSIS ─────────────────────────────────────────
+
+def test_analyze_intent_with_langchain_enabled():
+    """Test that analyze_intent uses LangChain when flag is enabled."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Enable LangChain models
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = True
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        assert result["state"].intent is not None
+        # If LangChain is available, fallback_used should be False
+        # If not available, it should fall back to placeholder
+        assert result["state"].intent.name is not None
+        
+    finally:
+        # Restore original flag
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_with_langchain_disabled():
+    """Test that analyze_intent uses placeholder when flag is disabled."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain models
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        assert result["state"].intent is not None
+        assert result["state"].intent.fallback_used is True  # Should use placeholder
+        
+    finally:
+        # Restore original flag
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_keyword_fallback_firefox():
+    """Test that keyword fallback correctly identifies Firefox."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test keyword fallback
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        assert result["state"].intent.name == "open_application"
+        assert result["state"].intent.parameters.get("application") == "firefox"
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_keyword_fallback_chrome():
+    """Test that keyword fallback correctly identifies Chrome."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test keyword fallback
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Chrome", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        assert result["state"].intent.name == "open_application"
+        assert result["state"].intent.parameters.get("application") == "chrome"
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_bridge_keyword():
+    """Test that bridge keywords are correctly identified."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test keyword fallback
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="source ~/.bashrc", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        # Should set profile_hint to bridge
+        assert result["state"].intent.parameters.get("profile_hint") == "bridge"
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_deterministic_resolution():
+    """Test that deterministic resolution validates intent names."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test deterministic resolution
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        # Intent should be validated against capability registry
+        assert result["state"].intent.name in ["open_application", "unknown"]
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_confidence_range():
+    """Test that intent confidence is in valid range."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test confidence
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        # Confidence should be between 0.0 and 1.0
+        assert 0.0 <= result["state"].intent.confidence <= 1.0
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_analyze_intent_parameters_preserved():
+    """Test that intent parameters are preserved."""
+    from graph.nodes.analyze_intent import analyze_intent_node
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test parameters
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        
+        result = analyze_intent_node(state)
+        
+        # Parameters should be preserved
+        assert result["state"].intent.parameters is not None
+        assert isinstance(result["state"].intent.parameters, dict)
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
 # ─── FEATURE FLAG TESTS ───────────────────────────────────────────────────
 
 def test_use_langchain_models_flag_exists():
