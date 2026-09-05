@@ -44,19 +44,15 @@ from graph.nodes.verify_step import verify_step_node
 def build_operonix_graph():
     """Build the Operonix LangGraph topology.
     
-    Phase 3 topology:
-    START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END
+    Phase 4 topology (First Vertical Slice):
+    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END
     
-    This adds planning integration with deterministic/AI split.
+    This adds the first vertical slice with retrieve_knowledge, route, safety_check, execute_step, verify_step.
     
     Later phases will add:
-    - retrieve_knowledge (RAG/memory)
-    - route (routing engine)
-    - safety_check (safety integration)
-    - execute_step (executor integration)
-    - verify_step (verification)
     - recover (recovery logic)
     - reflect (reflection)
+    - checkpointing (pause/resume)
     """
     try:
         from langgraph.graph import StateGraph, END
@@ -68,22 +64,32 @@ def build_operonix_graph():
         workflow.add_node("intake", intake_node)
         workflow.add_node("observe", observe_node)
         workflow.add_node("analyze_intent", analyze_intent_node)
+        workflow.add_node("retrieve_knowledge", retrieve_knowledge_node)
         workflow.add_node("create_plan", create_plan_node)
+        workflow.add_node("route", route_node)
+        workflow.add_node("safety_check", safety_check_node)
+        workflow.add_node("execute_step", execute_step_node)
+        workflow.add_node("verify_step", verify_step_node)
         workflow.add_node("finalize", finalize_node)
         
         # Define edges
         workflow.set_entry_point("intake")
         workflow.add_edge("intake", "observe")
         workflow.add_edge("observe", "analyze_intent")
-        workflow.add_edge("analyze_intent", "create_plan")
-        workflow.add_edge("create_plan", "finalize")
+        workflow.add_edge("analyze_intent", "retrieve_knowledge")
+        workflow.add_edge("retrieve_knowledge", "create_plan")
+        workflow.add_edge("create_plan", "route")
+        workflow.add_edge("route", "safety_check")
+        workflow.add_edge("safety_check", "execute_step")
+        workflow.add_edge("execute_step", "verify_step")
+        workflow.add_edge("verify_step", "finalize")
         workflow.add_edge("finalize", END)
         
         # Compile the graph
         compiled_graph = workflow.compile()
         
-        logger.info("Operonix LangGraph topology built successfully (Phase 3)")
-        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END")
+        logger.info("Operonix LangGraph topology built successfully (Phase 4)")
+        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END")
         
         return compiled_graph
         
