@@ -235,7 +235,7 @@ class CheckpointState(BaseModel):
     routing_decision: Optional[MethodDecision] = None
     safety_state: Optional[SafetyDecision] = None
     execution_status: Optional[TaskStatus] = None
-    recovery_data: dict[str, Any] = Field(default_factory=dict)
+    recovery_data: Dict[str, Any] = Field(default_factory=dict)
     context_snapshot: Optional[ContextSnapshot] = None
     state_schema_version: str = "1.0.0"
     workflow_version: str = "1.0.0"
