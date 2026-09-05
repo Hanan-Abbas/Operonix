@@ -31,6 +31,7 @@ from graph.nodes.intake import intake_node
 from graph.nodes.observe import observe_node
 from graph.nodes.finalize import finalize_node
 from graph.nodes.analyze_intent import analyze_intent_node
+from graph.nodes.create_plan import create_plan_node
 
 
 # ─── GRAPH BUILDER ───────────────────────────────────────────────────────────
@@ -38,14 +39,13 @@ from graph.nodes.analyze_intent import analyze_intent_node
 def build_operonix_graph():
     """Build the Operonix LangGraph topology.
     
-    Phase 2 topology:
-    START → INTAKE → OBSERVE → ANALYZE_INTENT → FINALIZE → END
+    Phase 3 topology:
+    START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END
     
-    This adds LangChain integration for intent analysis.
+    This adds planning integration with deterministic/AI split.
     
     Later phases will add:
     - retrieve_knowledge (RAG/memory)
-    - create_plan (planning)
     - route (routing engine)
     - safety_check (safety integration)
     - execute_step (executor integration)
@@ -63,20 +63,22 @@ def build_operonix_graph():
         workflow.add_node("intake", intake_node)
         workflow.add_node("observe", observe_node)
         workflow.add_node("analyze_intent", analyze_intent_node)
+        workflow.add_node("create_plan", create_plan_node)
         workflow.add_node("finalize", finalize_node)
         
         # Define edges
         workflow.set_entry_point("intake")
         workflow.add_edge("intake", "observe")
         workflow.add_edge("observe", "analyze_intent")
-        workflow.add_edge("analyze_intent", "finalize")
+        workflow.add_edge("analyze_intent", "create_plan")
+        workflow.add_edge("create_plan", "finalize")
         workflow.add_edge("finalize", END)
         
         # Compile the graph
         compiled_graph = workflow.compile()
         
-        logger.info("Operonix LangGraph topology built successfully (Phase 2)")
-        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → FINALIZE → END")
+        logger.info("Operonix LangGraph topology built successfully (Phase 3)")
+        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END")
         
         return compiled_graph
         
