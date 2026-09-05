@@ -170,12 +170,14 @@ START → INTAKE → OBSERVE → FINALIZE → END
 ### New Files:
 1. `graph/__init__.py` — Graph package initialization
 2. `graph/graph.py` — LangGraph topology and runner (180 lines)
-3. `graph/runtime_adapter.py` — Runtime ↔ Graph adapter (165 lines)
-4. `graph/nodes/__init__.py` — Nodes package initialization
-5. `graph/nodes/intake.py` — Intake node implementation (45 lines)
-6. `graph/nodes/observe.py` — Observe node implementation (55 lines)
-7. `graph/nodes/finalize.py` — Finalize node implementation (50 lines)
+3. `graph/nodes/__init__.py` — Nodes package initialization
+4. `graph/nodes/intake.py` — Intake node implementation (45 lines)
+5. `graph/nodes/observe.py` — Observe node implementation (55 lines)
+6. `graph/nodes/finalize.py` — Finalize node implementation (50 lines)
+7. `graph/runtime_adapter.py` — Runtime ↔ Graph adapter (165 lines)
 8. `tests/test_graph_foundation.py` — Graph foundation tests (230 lines)
+
+**Deferred:** `graph/routing.py` — Routing infrastructure deferred to Phase 10 when route node is implemented
 
 ### Files Modified:
 None (Phase 1 is additive only, no modifications to existing code)
