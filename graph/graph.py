@@ -32,6 +32,11 @@ from graph.nodes.observe import observe_node
 from graph.nodes.finalize import finalize_node
 from graph.nodes.analyze_intent import analyze_intent_node
 from graph.nodes.create_plan import create_plan_node
+from graph.nodes.retrieve_knowledge import retrieve_knowledge_node
+from graph.nodes.route import route_node
+from graph.nodes.safety_check import safety_check_node
+from graph.nodes.execute_step import execute_step_node
+from graph.nodes.verify_step import verify_step_node
 
 
 # ─── GRAPH BUILDER ───────────────────────────────────────────────────────────
