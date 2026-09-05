@@ -13,7 +13,7 @@ Per migration plan §3:
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -231,7 +231,7 @@ class CheckpointState(BaseModel):
     workflow_state: OperonixState
     current_node: Optional[str] = None
     current_step_index: int = 0
-    completed_steps: list[str] = Field(default_factory=list)
+    completed_steps: List[str] = Field(default_factory=list)
     routing_decision: Optional[MethodDecision] = None
     safety_state: Optional[SafetyDecision] = None
     execution_status: Optional[TaskStatus] = None
