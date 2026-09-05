@@ -1,0 +1,59 @@
+{
+  "baseline_commit": "3c5e8ab2baa895e7dc87e961f2f9fac2af3c6a50",
+  "baseline_branch": "main",
+  "established_at": "2026-09-05T16:34:04.554868",
+  "phase": "Phase 0: Baseline, Contracts & Safety",
+  "status": "established",
+  "critical_workflows": [
+    {
+      "name": "simple_file_operation",
+      "description": "Create, read, or delete a file",
+      "priority": "high"
+    },
+    {
+      "name": "application_opening",
+      "description": "Open an application (e.g., Firefox)",
+      "priority": "high"
+    },
+    {
+      "name": "shell_operation",
+      "description": "Execute a shell command",
+      "priority": "high"
+    },
+    {
+      "name": "ui_operation",
+      "description": "Perform UI automation (click, type)",
+      "priority": "high"
+    },
+    {
+      "name": "web_operation",
+      "description": "Perform web browser automation",
+      "priority": "medium"
+    },
+    {
+      "name": "multi_step_workflow",
+      "description": "Open Firefox and search for autonomous agents",
+      "priority": "high"
+    },
+    {
+      "name": "failure_retry",
+      "description": "Handle transient failure with retry",
+      "priority": "high"
+    },
+    {
+      "name": "failure_fallback",
+      "description": "Handle failure with fallback/re-route",
+      "priority": "high"
+    },
+    {
+      "name": "safety_rejection",
+      "description": "Reject unsafe operation",
+      "priority": "high"
+    },
+    {
+      "name": "confirmation_required",
+      "description": "Require user confirmation for risky action",
+      "priority": "high"
+    }
+  ]
+}
