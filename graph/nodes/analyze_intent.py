@@ -207,8 +207,7 @@ def _apply_keyword_fallback(intent_result: IntentResult, state: OperonixState) -
     This preserves the existing keyword-fallback logic on top of
     LangChain interpretation.
     
-    In a full implementation, this would integrate with brain/intent_parser.py.
-    For now, we apply basic keyword overrides.
+    This integrates with brain/intent_parser.py keyword logic.
     
     Args:
         intent_result: IntentResult from LangChain or placeholder
@@ -217,17 +216,51 @@ def _apply_keyword_fallback(intent_result: IntentResult, state: OperonixState) -
     Returns:
         IntentResult with keyword fallback applied
     """
-    # In a full implementation, this would call existing IntentParser keyword logic
-    # For now, we apply basic keyword overrides
-    
-    user_input = state.task.user_input.lower()
-    
-    # Keyword overrides (higher priority than AI interpretation)
-    if "firefox" in user_input:
-        intent_result.name = "open_application"
-        intent_result.parameters["application"] = "firefox"
-    elif "chrome" in user_input:
-        intent_result.name = "open_application"
-        intent_result.parameters["application"] = "chrome"
+    try:
+        from brain.intent_parser import _BRIDGE_KEYWORDS, _PANEL_SUDO_KEYWORDS, _LAB_KEYWORDS
+        
+        user_input = state.task.user_input.lower()
+        
+        # Apply keyword overrides from existing IntentParser
+        # Bridge keywords (must run in user's shell)
+        for keyword in _BRIDGE_KEYWORDS:
+            if keyword in user_input:
+                intent_result.parameters["profile_hint"] = "bridge"
+                logger.info(f"Bridge keyword '{keyword}' detected, setting profile_hint=bridge")
+                break
+        
+        # Panel sudo keywords (require password prompt)
+        for keyword in _PANEL_SUDO_KEYWORDS:
+            if keyword in user_input:
+                intent_result.parameters["profile_hint"] = "panel_sudo"
+                logger.info(f"Panel sudo keyword '{keyword}' detected, setting profile_hint=panel_sudo")
+                break
+        
+        # Lab keywords (benefit from visible terminal)
+        for keyword in _LAB_KEYWORDS:
+            if keyword in user_input:
+                intent_result.parameters["profile_hint"] = "lab"
+                logger.info(f"Lab keyword '{keyword}' detected, setting profile_hint=lab")
+                break
+        
+        # Application-specific keyword overrides
+        if "firefox" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["application"] = "firefox"
+        elif "chrome" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["application"] = "chrome"
+            
+    except ImportError:
+        logger.warning("Could not import IntentParser keywords, using basic keyword overrides")
+        # Fallback to basic keyword overrides
+        user_input = state.task.user_input.lower()
+        
+        if "firefox" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["application"] = "firefox"
+        elif "chrome" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["application"] = "chrome"
     
     return intent_result
