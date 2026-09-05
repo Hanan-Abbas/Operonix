@@ -25,7 +25,11 @@ logger = logging.getLogger("Graph")
 
 # ─── NODE IMPLEMENTATIONS ─────────────────────────────────────────────────────
 
-def intake_node(state: OperonixState) -> Dict[str, Any]:
+# Import nodes from nodes package
+from graph.nodes.intake import intake_node
+from graph.nodes.observe import observe_node
+from graph.nodes.finalize import finalize_node
+from graph.nodes.analyze_intent import analyze_intent_node
     """Intake node: Creates task state from user input.
     
     This is a deterministic node that:
