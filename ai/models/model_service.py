@@ -92,32 +92,72 @@ class OperonixModelService:
             return "llama3"
     
     def _initialize_langchain_model(self) -> None:
-        """Initialize the LangChain model instance.
-        
-        In Phase 2, this is a stub that logs the intent.
-        Later phases will actually integrate LangChain models.
-        """
+        """Initialize the LangChain model instance."""
         logger.info(f"Initializing LangChain model for provider: {self.provider}")
         logger.info(f"Model name: {self.model_name}")
         
-        # In Phase 2, we don't actually initialize LangChain models
-        # We just log the configuration
-        # Later phases will integrate:
-        # - from langchain_openai import ChatOpenAI
-        # - from langchain_groq import ChatGroq
-        # - from langchain_google_genai import ChatGoogleGenerativeAI
-        # - from langchain_community.llms import Ollama
-        
-        logger.info("LangChain model integration deferred to later phases")
-    
-    def is_available(self) -> bool:
-        """Check if the model service is available."""
-        # In Phase 2, we return True if configuration is present
-        # Later phases will check actual model availability
+        try:
+            from ai.models.langchain_adapter import LangChainAdapter
+            
+            # Build config for LangChain adapter
+            config = {}
+            
+            if self.provider == ModelProvider.GROQ:
+                config["api_key"] = getattr(settings, "GROQ_API_KEY", "")
+                config["temperature"] = getattr(settings, "GROQ_TEMPERATURE", 0.7)
+                config["max_tokens"] = getattr(settings, "GROQ_MAX_TOKENS", 2048)
+                
+            elif self.provider == ModelProvider.OLLAMA:
+                config["base_url"] = getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
+                config["temperature"] = getattr(settings, "OLLAMA_TEMPERATURE", 0.7)
+                
+            elif self.provider == ModelProvider.GEMINI:
+        pi_key"s lt._larechig,_model "GEAoP Non  nnd fief._manger=in_etatt.is_(settin()
+            elif self.provider == ModelProvider.OPENROUTER:
+                config["api_key"] = getattr(settings, "OPENROUTER_API_KEY", "")
+                config["temperature"] = getattr(settings, "OPENROUTER_TEMPERATURE", 0.7)
+                
+            elif self.provider == ModelProvider.OPENAI:
+                config["api_key"] = getattr(settings, "OPENAI_API_KEY", "")
+                config["base_url"] = getattr(settings, "OPENAI_BASE_URL", None)
+                config["temperature"] = getattr(settings, "OPENAI_TEMPERATURE", 0.7)
+            
+            # Initialize LangChain adapter
+            self._langchain_model = LangChainAdapter(
+                provider=self.provider.value,
+                model_name=self.model_name,
+                config=config (overrides config)
+            ) (overrides config)
+            
+            if self._langchain_model.is_available():
+                logger.info(f"LangChain model initialized successfully: {self.provider}/{self.model_name}")
+            else:
+                logger.warning(f"LangChain model initialization failed: {self.provider}/{self.model_name}")
+                
+        except ImportError as e:
+            logger.error(f"Failed to import LangChain adapter: {e}")
+            self._langchain_model = None
+        except Exception as e:
+            logger.error(f"Failed to initialize LangChain model: {e}")
+            self._langchain_model = None
+    Build kwargs for ivocation
+       kwrg = {}
+        if tmperatureisnot Non:
+           kwags["tmperae"]=temertur
+        if max_tknsi nt No:
+    def s   kwargs["max_vokans"]l= mlx_tok(ns
+e-      
+        bry:
+            reso:t =awit sef._c_.invoke(messages, **kwarg)
+            """Chec tfoe l stvcoipiable.cmpeduccsfully
+            # Laterresule
+       sex elckExcattiuaml  a:
+        viltlgg.r(f"Chatcopletin faile"
+            raise
         return self.provider is not None
     
     async def generate_chat_completion(
-        self,
+        self, (overrides config)
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None
@@ -130,15 +170,18 @@ class OperonixModelService:
             max_tokens: Maximum tokens to generate
             
         Returns:
-            Generated text response
-            
-        Raises:
-            RuntimeError: If model is not available
-        """
-        if not self.is_available():
-            raise RuntimeError("Model service is not available")
+          BuildGkwergrtfot invocariop
+o       kwnrgss= {}
+        if temeatu i nt No:
+            kw rgs["mpeature"]= temertur
         
-        logger.info(f"Chat completion requested with {len(messages)} messages")
+        try:
+            reult= aatlf._lc_model.invoke_(messages, schema,**kwargs)
+            Raises:foScmpeduccsfully
+            """n .vut
+        exceptnExciptirM os e: service is not available")
+        lgger.rror(ffild:{e}"
+            raiseogger.info(f"Chat completion requested with {len(messages)} messages")
         
         # In Phase 2, we return a placeholder response
         # Later phases will actually call LangChain models
