@@ -91,7 +91,7 @@ class BaselineRegistry:
         logger.info(f"Baseline established at commit {commit} on branch {branch}")
         return baseline_info
     
-    def get_baseline(self) -> dict[str, Any]:
+    def get_baseline(self) -> Dict[str, Any]:
         """Get the current baseline information."""
         return self.baseline_data
     
@@ -99,7 +99,7 @@ class BaselineRegistry:
         """Check if a baseline has been established."""
         return bool(self.baseline_data.get("baseline_commit"))
     
-    def _get_critical_workflows(self) -> list[dict[str, str]]:
+    def _get_critical_workflows(self) -> list[Dict[str, str]]:
         """Return list of critical workflows for baseline testing.
         
         Per migration plan §7, representative baseline workflows should cover:
@@ -174,7 +174,7 @@ def get_baseline_registry() -> BaselineRegistry:
     return BaselineRegistry(project_root)
 
 
-def establish_migration_baseline() -> dict[str, Any]:
+def establish_migration_baseline() -> Dict[str, Any]:
     """Establish the migration baseline.
     
     This should be called at the start of Phase 0 to record the
