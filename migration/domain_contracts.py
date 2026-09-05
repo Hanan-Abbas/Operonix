@@ -10,7 +10,7 @@ All contracts use Pydantic for validation and serialization.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Literal
+from typing import Any, Optional, Literal, Dict, List
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field
