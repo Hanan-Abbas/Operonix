@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 
 # ─── BASELINE REGISTRY TESTS ─────────────────────────────────────────────────
