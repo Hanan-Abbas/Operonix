@@ -13,7 +13,7 @@ from __future__ import annotations
 import subprocess
 import logging
 from pathlib import Path
-from typing import Optional, dict[str, Any]
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger("Baseline")
