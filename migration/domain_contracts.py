@@ -49,7 +49,7 @@ class TaskRequest(BaseModel):
     user_input: str
     source: TaskSource
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     
     class Config:
         json_encoders = {
