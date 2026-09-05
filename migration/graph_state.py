@@ -102,7 +102,7 @@ class OperonixState(BaseModel):
     
     # ─── HISTORY ───────────────────────────────────────────────────────────────
     
-    history: dict[str, Any] = Field(
+    history: Dict[str, Any] = Field(
         default_factory=dict,
         description="Workflow-run history (step_results, tool_calls, errors, events)"
     )
@@ -172,7 +172,7 @@ class OperonixState(BaseModel):
         """Update the updated_at timestamp."""
         self.updated_at = datetime.utcnow()
     
-    def add_history_event(self, event_type: str, data: dict[str, Any]) -> None:
+    def add_history_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Add an event to the history log."""
         if "events" not in self.history:
             self.history["events"] = []
