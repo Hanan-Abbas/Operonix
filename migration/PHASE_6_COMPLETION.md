@@ -284,9 +284,9 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREAT
 
 ## Known Issues / Notes
 
-1. **Postcondition Check:** The `_check_postconditions()` function is a stub in Phase 6. It checks if verification is already VERIFIED but does not implement actual context observation. Later phases will integrate with context services for actual state checking.
+1. **Postcondition Check (STUB):** The `_check_postconditions()` function checks if verification is already VERIFIED but does not implement actual context observation. Later phases will integrate with context services for actual state checking (e.g., file system checks, window state checks). This is a stub implementation.
 
-2. **Context Observation:** Actual context observation (file system checks, window state checks, etc.) is deferred to later phases. Phase 6 focuses on the architecture and decision logic.
+2. **Context Observation (STUB):** Actual context observation (file system checks, window state checks, etc.) is deferred to later phases. Phase 6 focuses on the architecture and decision logic, not the actual observation implementation. This is a stub implementation.
 
 3. **Retry Policy:** Max retry count is hardcoded to 3. Later phases may implement configurable retry policies per failure type or per operation type.
 
