@@ -77,10 +77,10 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
 
 
 def _is_complex_request(user_input: str) -> bool:
-    """Determine if request is simple or complex.
+    """Determine if request is simple or complex using LangChain.
     
-    In Phase 3, we use a simple heuristic based on input length and keywords.
-    Later phases will use more sophisticated detection (e.g., LangChain classification).
+    In Phase 3 real implementation, we use LangChain for sophisticated complexity detection.
+    Falls back to simple heuristic if LangChain unavailable.
     
     Args:
         user_input: The user's natural language request
@@ -88,8 +88,21 @@ def _is_complex_request(user_input: str) -> bool:
     Returns:
         True if complex, False if simple
     """
-    # Simple heuristic: complex if input is long or contains certain keywords
-    complex_keywords = ["and", "then", "after", "before", "while", "search", "navigate"]
+    from migration.feature_flags import flags
+    
+    # Use LangChain for complexity detection if enabled
+    if flags.USE_LANGCHAIN_MODELS:
+        try:
+            from ai.models.model_service import model_service
+            import asyncio
+            
+            if model_service.is_available():
+                return asyncio.run(_detect_complexity_with_langchain(user_input))
+        except Exception as e:
+            logger.warning(f"LangChain complexity detection failed: {e}, falling back to heuristic")
+    
+    # Fallback to simple heuristic
+    complex_keywords = ["and", "then", "after", "before", "while", "search", "navigate", "multiple", "sequence"]
     
     if len(user_input) > 50:
         return True
@@ -98,6 +111,52 @@ def _is_complex_request(user_input: str) -> bool:
         return True
     
     return False
+
+
+async def _detect_complexity_with_langchain(user_input: str) -> bool:
+    """Use LangChain to detect request complexity.
+    
+    Args:
+        user_input: The user's natural language request
+        
+    Returns:
+        True if complex, False if simple
+    """
+    from ai.models.model_service import model_service
+    
+    messages = [
+        {
+            "role": "system",
+            "content": """You are a complexity analyzer for an AI agent. Determine if the user's request is simple or complex.
+
+Simple requests:
+- Single action (e.g., "Open Firefox", "Create file")
+- No conditional logic
+- No sequencing
+
+Complex requests:
+- Multiple actions (e.g., "Open Firefox and search for agents")
+- Conditional logic (e.g., "if file exists, delete it")
+- Sequencing (e.g., "then", "after", "before")
+- Multi-step workflows
+
+Respond in JSON format with key: is_complex (true/false)."""
+        },
+        {
+            "role": "user",
+            "content": user_input
+        }
+    ]
+    
+    schema = {
+        "name": "complexity_analysis",
+        "properties": {
+            "is_complex": {"type": "boolean"}
+        }
+    }
+    
+    result = await model_service.generate_structured_output(messages, schema)
+    return result.get("is_complex", False)
 
 
 def _generate_simple_plan(state: OperonixState) -> Plan:
@@ -137,8 +196,8 @@ def _generate_complex_plan(state: OperonixState) -> Plan:
     Complex plans require AI reasoning to determine the sequence of steps.
     They typically involve multiple actions or conditional logic.
     
-    In Phase 3, this is a stub that creates a placeholder multi-step plan.
-    Later phases will integrate with LangChain for actual plan generation.
+    In Phase 3 real implementation, this uses LangChain for actual plan generation.
+    Falls back to placeholder if LangChain unavailable.
     
     Args:
         state: Current OperonixState
@@ -146,12 +205,105 @@ def _generate_complex_plan(state: OperonixState) -> Plan:
     Returns:
         Plan with AI-generated steps
     """
+    from migration.feature_flags import flags
+    
+    # Use LangChain for plan generation if enabled
+    if flags.USE_LANGCHAIN_MODELS:
+        try:
+            import asyncio
+            plan = asyncio.run(_generate_plan_with_langchain(state))
+            if plan:
+                return plan
+        except Exception as e:
+            logger.warning(f"LangChain plan generation failed: {e}, falling back to placeholder")
+    
+    # Fallback to placeholder multi-step plan
+    logger.info("Using placeholder complex plan (LangChain unavailable)")
+    return _generate_placeholder_complex_plan(state)
+
+
+async def _generate_plan_with_langchain(state: OperonixState) -> Plan:
+    """Use LangChain to generate a plan for complex requests.
+    
+    Args:
+        state: Current OperonixState
+        
+    Returns:
+        Plan with AI-generated steps
+    """
+    from ai.models.model_service import model_service
     import uuid
     
-    logger.info("CREATE_PLAN: LangChain-backed plan generation deferred to later phases")
+    messages = [
+        {
+            "role": "system",
+            "content": """You are a planning agent for an AI assistant. Break down the user's request into a sequence of executable steps.
+
+Each step should have:
+- action: The type of action (e.g., "prepare_environment", "execute_intent", "verify_result")
+- objective: A clear description of what the step achieves
+- arguments: Key parameters needed for the step
+
+Respond in JSON format with key: steps (array of step objects)."""
+        },
+        {
+            "role": "user",
+            "content": f"User request: {state.task.user_input}\nIntent: {state.intent.name if state.intent else 'unknown'}\nParameters: {state.intent.parameters if state.intent else {}}"
+        }
+    ]
+    
+    schema = {
+        "name": "plan_generation",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "objective": {"type": "string"},
+                        "arguments": {"type": "object"}
+                    }
+                }
+            }
+        }
+    }
+    
+    result = await model_service.generate_structured_output(messages, schema)
+    
+    # Convert LangChain response to PlanStep objects
+    steps = []
+    for step_data in result.get("steps", []):
+        step = PlanStep(
+            step_id=str(uuid.uuid4()),
+            action=step_data.get("action", "unknown"),
+            arguments=step_data.get("arguments", {}),
+            objective=step_data.get("objective", ""),
+            idempotency="CONDITIONAL",
+            side_effect="LIMITED_SIDE_EFFECT",
+            reversibility=True
+        )
+        steps.append(step)
+    
+    # Add dependencies (simple sequential for now)
+    for i in range(1, len(steps)):
+        steps[i].dependencies = [steps[i-1].step_id]
+    
+    return Plan(steps=steps)
+
+
+def _generate_placeholder_complex_plan(state: OperonixState) -> Plan:
+    """Generate a placeholder multi-step plan when LangChain is unavailable.
+    
+    Args:
+        state: Current OperonixState
+        
+    Returns:
+        Plan with placeholder steps
+    """
+    import uuid
     
     # Create a placeholder multi-step plan
-    # Later phases will use LangChain to generate actual steps
     step1 = PlanStep(
         step_id=str(uuid.uuid4()),
         action="prepare_environment",
