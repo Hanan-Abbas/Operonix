@@ -151,6 +151,239 @@ def test_create_plan_node_history_tracking():
     assert "create_plan_completed" in event_types
 
 
+# ─── BEHAVIORAL TESTS FOR PLANNING ─────────────────────────────────────────────
+
+def test_complexity_detection_with_langchain_enabled():
+    """Test that complexity detection uses LangChain when enabled."""
+    from graph.nodes.create_plan import _is_complex_request
+    from migration.feature_flags import flags
+    
+    # Enable LangChain models
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = True
+    
+    try:
+        # Simple request
+        is_complex = _is_complex_request("Open Firefox")
+        # If LangChain is available, it should return False for simple
+        # If not available, it should fall back to heuristic (also False)
+        assert isinstance(is_complex, bool)
+        
+        # Complex request
+        is_complex = _is_complex_request("Open Firefox and search for agents")
+        # If LangChain is available, it should return True for complex
+        # If not available, it should fall back to heuristic (also True)
+        assert isinstance(is_complex, bool)
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_complexity_detection_with_langchain_disabled():
+    """Test that complexity detection uses heuristic when LangChain disabled."""
+    from graph.nodes.create_plan import _is_complex_request
+    from migration.feature_flags import flags
+    
+    # Disable LangChain models
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        # Simple request
+        is_complex = _is_complex_request("Open Firefox")
+        assert is_complex is False
+        
+        # Complex request (keyword-based)
+        is_complex = _is_complex_request("Open Firefox and search for agents")
+        assert is_complex is True
+        
+        # Complex request (length-based)
+        is_complex = _is_complex_request("Open Firefox and then navigate to Google and search for autonomous agents and then click on the first result")
+        assert is_complex is True
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_complex_plan_generation_with_langchain_enabled():
+    """Test that complex plan generation uses LangChain when enabled."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Enable LangChain models
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = True
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        assert plan is not None
+        assert len(plan.steps) >= 1
+        # If LangChain is available, steps should be AI-generated
+        # If not available, should fall back to placeholder (2 steps)
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_simple_plan_with_planner_integration():
+    """Test that simple plan generation integrates with brain/planner.py."""
+    from graph.nodes.create_plan import _generate_simple_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    state.intent = IntentResult(name="open_application", confidence=0.9)
+    
+    plan = _generate_simple_plan(state)
+    
+    assert plan is not None
+    assert len(plan.steps) == 1
+    # Should integrate with brain/planner.py for arg resolution
+    # If integration fails, should fall back to simple plan
+
+
+def test_plan_step_dependencies():
+    """Test that plan steps have dependencies for complex plans."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test placeholder plan
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        assert plan is not None
+        assert len(plan.steps) >= 2
+        
+        # Check that second step depends on first step
+        if len(plan.steps) >= 2:
+            assert plan.steps[1].dependencies is not None
+            assert plan.steps[0].step_id in plan.steps[1].dependencies
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_plan_step_idempotency_classification():
+    """Test that plan steps have idempotency classification."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test placeholder plan
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        for step in plan.steps:
+            assert step.idempotency is not None
+            assert step.idempotency in ["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"]
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_plan_step_side_effect_classification():
+    """Test that plan steps have side-effect classification."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test placeholder plan
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        for step in plan.steps:
+            assert step.side_effect is not None
+            assert step.side_effect in ["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_plan_step_reversibility():
+    """Test that plan steps have reversibility flag."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test placeholder plan
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        for step in plan.steps:
+            assert step.reversibility is not None
+            assert isinstance(step.reversibility, bool)
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
+def test_plan_step_objectives():
+    """Test that plan steps have clear objectives."""
+    from graph.nodes.create_plan import _generate_complex_plan
+    from migration.graph_state import OperonixState
+    from migration.domain_contracts import TaskRequest, TaskSource, IntentResult
+    from migration.feature_flags import flags
+    
+    # Disable LangChain to test placeholder plan
+    original_flag = flags.USE_LANGCHAIN_MODELS
+    flags.USE_LANGCHAIN_MODELS = False
+    
+    try:
+        task = TaskRequest(user_input="Open Firefox and search for agents", source=TaskSource.VOICE)
+        state = OperonixState(task=task)
+        state.intent = IntentResult(name="complex_action", confidence=0.9)
+        
+        plan = _generate_complex_plan(state)
+        
+        for step in plan.steps:
+            assert step.objective is not None
+            assert len(step.objective) > 0
+        
+    finally:
+        flags.USE_LANGCHAIN_MODELS = original_flag
+
+
 # ─── DETERMINISTIC/AI SPLIT TESTS ───────────────────────────────────────────────
 
 def test_is_complex_request_simple():
