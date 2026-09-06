@@ -165,6 +165,8 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
     Simple plans are deterministic and don't require AI.
     They typically involve a single action.
     
+    This integrates with brain/planner.py for static step generation.
+    
     Args:
         state: Current OperonixState
         
@@ -173,21 +175,55 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
     """
     import uuid
     
-    # Create a single-step plan
-    step = PlanStep(
-        step_id=str(uuid.uuid4()),
-        action="execute_intent",
-        arguments={
-            "intent": state.intent.name if state.intent else "unknown",
-            "parameters": state.intent.parameters if state.intent else {}
-        },
-        objective=f"Execute intent: {state.task.user_input}",
-        idempotency="CONDITIONAL",
-        side_effect="LIMITED_SIDE_EFFECT",
-        reversibility=True
-    )
-    
-    return Plan(steps=[step])
+    try:
+        from brain.planner import Planner
+        
+        # Try to use existing Planner's static step generation
+        planner = Planner()
+        
+        # Resolve args using existing Planner logic
+        resolved_args = planner._resolve_args_for_intent(
+            state.intent.name if state.intent else "unknown",
+            state.intent.parameters if state.intent else {},
+            state.context if hasattr(state, 'context') else {},
+            {"task_id": state.task.task_id, "user_input": state.task.user_input}
+        )
+        
+        # Generate static steps using existing Planner logic
+        # This is a simplified integration - full integration would need async context
+        # For now, we create a single step with resolved args
+        step = PlanStep(
+            step_id=str(uuid.uuid4()),
+            action="execute_intent",
+            arguments={
+                "intent": state.intent.name if state.intent else "unknown",
+                "parameters": resolved_args
+            },
+            objective=f"Execute intent: {state.task.user_input}",
+            idempotency="CONDITIONAL",
+            side_effect="LIMITED_SIDE_EFFECT",
+            reversibility=True
+        )
+        
+        logger.info(f"Generated simple plan using brain/planner.py integration")
+        return Plan(steps=[step])
+        
+    except ImportError:
+        logger.warning("Could not import brain/planner.py, using fallback simple plan")
+        # Fallback to simple plan without Planner integration
+        step = PlanStep(
+            step_id=str(uuid.uuid4()),
+            action="execute_intent",
+            arguments={
+                "intent": state.intent.name if state.intent else "unknown",
+                "parameters": state.intent.parameters if state.intent else {}
+            },
+            objective=f"Execute intent: {state.task.user_input}",
+            idempotency="CONDITIONAL",
+            side_effect="LIMITED_SIDE_EFFECT",
+            reversibility=True
+        )
+        return Plan(steps=[step])
 
 
 def _generate_complex_plan(state: OperonixState) -> Plan:
