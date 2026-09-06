@@ -77,6 +77,10 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     
     This distinguishes executor success from actual postcondition verification.
     
+    Phase 6 enhancement: Handle UNCERTAIN_OUTCOME for cases where the system
+    cannot determine whether a side effect occurred. This must not be treated as
+    an ordinary failure.
+    
     Args:
         state: Current OperonixState
         
@@ -95,8 +99,19 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     
     current_step = state.plan.steps[state.plan.current_step_index]
     
-    # In Phase 5, we implement basic postcondition verification
-    # Later phases will integrate with actual context observation
+    # Phase 6: Check if step is non-idempotent or has high side-effects
+    # If execution failed for such steps, outcome is uncertain
+    if current_step.idempotency == "NON_IDEMPOTENT" or current_step.side_effect in ["DESTRUCTIVE", "EXTERNAL_COMMIT"]:
+        if state.execution and state.execution.execution_status != "COMPLETED":
+            # Non-idempotent or high side-effect operation failed
+            # We cannot determine if the operation had partial effect
+            return VerificationResult(
+                status="UNCERTAIN_OUTCOME",
+                observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
+                expected_state={},
+                actual_state={},
+                reason=f"Non-idempotent or high side-effect operation failed, outcome uncertain (idempotency={current_step.idempotency}, side_effect={current_step.side_effect})"
+            )
     
     expected_outcome = current_step.expected_outcome if hasattr(current_step, 'expected_outcome') else current_step.objective
     
@@ -122,14 +137,14 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
                 )
         
         # If execution succeeded, verify postconditions
-        # For Phase 5, we assume success if executor reported success
+        # For Phase 5-6, we assume success if executor reported success
         # Later phases will implement actual context comparison
         return VerificationResult(
             status="VERIFIED",
             observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
             expected_state={"outcome": expected_outcome},
             actual_state=execution_result if isinstance(execution_result, dict) else {},
-            reason="Executor reported success and postconditions assumed verified (Phase 5 stub)"
+            reason="Executor reported success and postconditions assumed verified (Phase 5-6 stub)"
         )
     else:
         # No execution result, uncertain outcome
