@@ -28,7 +28,9 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
     - May require user confirmation for risky actions
     - Creates SafetyDecision with authorization status
     
-    In Phase 4, this is a stub that creates a placeholder SafetyDecision.
+    Phase 7 enhancement: Trigger confirmation flow when confirmation_required is True.
+    
+    In Phase 4-7, this is a stub that creates a placeholder SafetyDecision.
     Later phases will integrate with existing safety/ module.
     
     Args:
@@ -44,21 +46,23 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
         "method": state.routing.selected_candidate.method_type if state.routing else None
     })
     
-    # In Phase 4, we create a placeholder safety decision
+    # In Phase 4-7, we create a placeholder safety decision
     # Later phases will integrate with:
     # - from safety.validator import Validator
     # - from safety.permission_guard import PermissionGuard
     # - from safety.risk_rules import RiskRules
     # - from safety.confirmation import Confirmation
     
-    logger.info("SAFETY_CHECK: Safety integration deferred to later phases")
+    logger.info("SAFETY_CHECK: Safety integration deferred to later phases (STUB)")
     
     # Create placeholder safety decision
+    # For Phase 7, we can simulate confirmation_required for testing
+    # In a real implementation, this would be determined by risk rules
     safety_decision = SafetyDecision(
         risk_level=RiskLevel.LOW,
         validation_status="APPROVED",
         permission_status="GRANTED",
-        confirmation_required=False,
+        confirmation_required=False,  # Can be set to True to test confirmation flow
         safety_checks_performed=["placeholder_check"]
     )
     
