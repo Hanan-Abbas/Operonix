@@ -45,15 +45,17 @@ from graph.nodes.recover import recover_node
 def build_operonix_graph():
     """Build the Operonix LangGraph topology.
     
-    Phase 4 topology (First Vertical Slice):
-    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END
+    Phase 5 topology (Verification & Recovery):
+    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → [FINALIZE | RECOVER] → END
     
-    This adds the first vertical slice with retrieve_knowledge, route, safety_check, execute_step, verify_step.
+    This adds verification logic and recovery with conditional routing.
     
-    Later phases will add:
-    - recover (recovery logic)
-    - reflect (reflection)
-    - checkpointing (pause/resume)
+    Recovery paths:
+    - RETRY → execute_step
+    - OBSERVE → observe
+    - ROUTE → route
+    - REPLAN → create_plan
+    - ABORT → finalize
     """
     try:
         from langgraph.graph import StateGraph, END
@@ -71,6 +73,7 @@ def build_operonix_graph():
         workflow.add_node("safety_check", safety_check_node)
         workflow.add_node("execute_step", execute_step_node)
         workflow.add_node("verify_step", verify_step_node)
+        workflow.add_node("recover", recover_node)
         workflow.add_node("finalize", finalize_node)
         
         # Define edges
@@ -83,14 +86,49 @@ def build_operonix_graph():
         workflow.add_edge("route", "safety_check")
         workflow.add_edge("safety_check", "execute_step")
         workflow.add_edge("execute_step", "verify_step")
-        workflow.add_edge("verify_step", "finalize")
+        
+        # Conditional edge from verify_step: finalize on success, recover on failure
+        def should_recover(state: OperonixState) -> str:
+            """Determine if recovery is needed based on verification result."""
+            if state.verification and state.verification.status in ["FAILED", "UNCERTAIN"]:
+                return "recover"
+            return "finalize"
+        
+        workflow.add_conditional_edges(
+            "verify_step",
+            should_recover,
+            {
+                "recover": "recover",
+                "finalize": "finalize"
+            }
+        )
+        
+        # Conditional edge from recover to target stage based on recovery strategy
+        def get_recovery_target(state: OperonixState) -> str:
+            """Get target stage based on recovery decision."""
+            if state.recovery and state.recovery.target_stage:
+                return state.recovery.target_stage
+            return "finalize"
+        
+        workflow.add_conditional_edges(
+            "recover",
+            get_recovery_target,
+            {
+                "execute_step": "execute_step",
+                "observe": "observe",
+                "route": "route",
+                "create_plan": "create_plan",
+                "finalize": "finalize"
+            }
+        )
+        
         workflow.add_edge("finalize", END)
         
         # Compile the graph
         compiled_graph = workflow.compile()
         
-        logger.info("Operonix LangGraph topology built successfully (Phase 4)")
-        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END")
+        logger.info("Operonix LangGraph topology built successfully (Phase 5)")
+        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → [FINALIZE | RECOVER] → END")
         
         return compiled_graph
         
