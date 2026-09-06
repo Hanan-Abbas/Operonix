@@ -2,19 +2,19 @@
 
 **Date:** 2026-09-05  
 **Phase:** Phase 3 — Planning Integration  
-**Status:** ✅ COMPLETE
+**Status:** ✅ COMPLETE (Real Planner Integration)
 
 ---
 
 ## Executive Summary
 
-Phase 3 has been successfully completed. Planning has been integrated into the graph workflow with a deterministic/AI split (simple vs complex requests). The graph owns current step, completed steps, and workflow position, while the planner owns what the steps are. Plan and PlanStep are valid domain objects consumable by existing routing/safety/execution paths.
+Phase 3 has been successfully completed with real LangChain-backed planning. The deterministic/AI split has been implemented with sophisticated complexity detection using LangChain. Simple requests generate deterministic plans via integration with brain/planner.py, while complex requests generate LangChain-backed plans. Plan steps include idempotency, side-effect classification, reversibility, and dependencies.
 
 ---
 
 ## Deliverables Completed
 
-### 1. ✅ Create Plan Node
+### 1. ✅ Create Plan Node (Real Implementation)
 
 **Location:** `graph/nodes/create_plan.py`
 
@@ -23,21 +23,23 @@ Phase 3 has been successfully completed. Planning has been integrated into the g
 **Purpose:** Generate execution plan with deterministic/AI split.
 
 **Behavior:**
-- Determines if request is simple or complex
-- Simple requests → deterministic plan (single step)
-- Complex requests → LangChain-backed plan (multiple steps)
+- Determines if request is simple or complex using LangChain
+- Simple requests → deterministic plan (via brain/planner.py integration)
+- Complex requests → LangChain-backed plan (via ModelService)
 - Creates Plan with PlanStep objects
 - Adds idempotency and side-effect classification to steps
+- Adds step dependencies for complex plans
 
 **Complexity Detection:**
-- Simple heuristic in Phase 3 (length + keywords)
-- Later phases will use LangChain classification
-- Complex keywords: "and", "then", "after", "before", "while", "search", "navigate"
-- Length threshold: > 50 characters
+- LangChain-based complexity detection when USE_LANGCHAIN_MODELS=true
+- Sophisticated analysis of request structure (single action vs multi-step)
+- Fallback to heuristic (length + keywords) if LangChain unavailable
 
 **Plan Generation:**
-- `_generate_simple_plan()` — Single-step deterministic plan
-- `_generate_complex_plan()` — Multi-step LangChain-backed plan (stub in Phase 3)
+- `_generate_simple_plan()` — Single-step deterministic plan with brain/planner.py integration
+- `_generate_complex_plan()` — Multi-step LangChain-backed plan
+- `_generate_plan_with_langchain()` — Actual LangChain plan generation
+- `_generate_placeholder_complex_plan()` — Fallback placeholder plan
 
 **History Events:**
 - `create_plan_started` — Logs task ID and intent
@@ -45,28 +47,34 @@ Phase 3 has been successfully completed. Planning has been integrated into the g
 
 ---
 
-### 2. ✅ Deterministic/AI Split
+### 2. ✅ Deterministic/AI Split (Real Implementation)
 
 **Implementation:** `create_plan_node` with `_is_complex_request()`
 
 **Simple Requests:**
 - Single action
-- Deterministic plan
+- Deterministic plan via brain/planner.py
 - No AI required
 - Example: "Open Firefox", "Create file"
 
 **Complex Requests:**
 - Multiple actions or conditional logic
-- LangChain-backed plan
+- LangChain-backed plan via ModelService
 - AI reasoning required
 - Example: "Open Firefox and search for autonomous agents"
+
+**Complexity Detection:**
+- LangChain-based when USE_LANGCHAIN_MODELS=true
+- System prompt for complexity analysis
+- Structured output (is_complex boolean)
+- Fallback to heuristic (length + keywords) if LangChain unavailable
 
 **Split Logic:**
 ```python
 if is_complex:
     plan = _generate_complex_plan(state)  # LangChain-backed
 else:
-    plan = _generate_simple_plan(state)   # Deterministic
+    plan = _generate_simple_plan(state)   # Deterministic via brain/planner.py
 ```
 
 **Preserves:** Existing planner's deterministic/AI split per migration plan.
@@ -96,24 +104,16 @@ else:
 
 **Location:** `graph/graph.py`
 
-**Phase 2 Topology:**
+**Phase 4 Topology (Current):**
 ```
-START → INTAKE → OBSERVE → ANALYZE_INTENT → FINALIZE → END
-```
-
-**Phase 3 Topology:**
-```
-START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END
+START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END
 ```
 
-**Changes:**
-- Added `create_plan` node to graph
-- Updated edge: `analyze_intent → create_plan → finalize`
-- Updated documentation to reflect Phase 3
+**Note:** Phase 3 topology was updated in Phase 4. The create_plan node is now part of the full vertical slice.
 
 ---
 
-### 5. ✅ Planning Integration Tests
+### 5. ✅ Planning Integration Tests (Enhanced)
 
 **Location:** `tests/test_planning_integration.py`
 
@@ -128,6 +128,17 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE →
 - Idempotency classification
 - Side-effect classification
 - History tracking
+
+**Behavioral Tests (NEW):**
+- Complexity detection with LangChain enabled
+- Complexity detection with LangChain disabled (heuristic)
+- Complex plan generation with LangChain enabled
+- Simple plan with brain/planner.py integration
+- Plan step dependencies
+- Plan step idempotency classification
+- Plan step side-effect classification
+- Plan step reversibility
+- Plan step objectives
 
 **Deterministic/AI Split Tests:**
 - Simple request classification
@@ -148,18 +159,18 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE →
 - Node sequence with create_plan
 - Plan and PlanStep are valid domain objects
 
-**Test Count:** 20 tests
+**Test Count:** 30 tests (10 new behavioral tests added)
 
 ---
 
 ## Files Created
 
 ### New Files:
-1. `graph/nodes/create_plan.py` — Create plan node (145 lines)
-2. `tests/test_planning_integration.py` — Planning integration tests (280 lines)
+1. `graph/nodes/create_plan.py` — Create plan node (330 lines)
+2. `tests/test_planning_integration.py` — Planning integration tests (470 lines)
 
 ### Files Modified:
-1. `graph/graph.py` — Updated topology to include create_plan node
+1. `graph/graph.py` — Updated topology to include create_plan node (done in Phase 4)
 
 ---
 
@@ -175,6 +186,7 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE →
 - PlanStep includes reversibility flag
 - PlanStep includes preconditions and postconditions
 - PlanStep includes retry policy
+- PlanStep includes dependencies for complex plans
 - Plan and PlanStep are serializable (json_encoders configured)
 - Existing routing/safety/execution paths can consume these domain objects
 
@@ -192,6 +204,7 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE →
 - Graph owns current step, completed steps, workflow position
 - Planner owns what the steps are
 - Idempotency and side-effect classification added to steps
+- Step dependencies added for complex plans
 
 ### Per Migration Plan §4.2 — Graph vs Planner Ownership
 
@@ -213,44 +226,37 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE →
 
 ## Known Issues / Notes
 
-1. **Complexity Detection:** The `_is_complex_request()` function uses a simple heuristic (length + keywords) in Phase 3. Later phases will use LangChain for more sophisticated classification.
+1. **LangChain Plan Generation:** The `_generate_plan_with_langchain()` function uses a simple sequential dependency model. Later phases may implement more sophisticated dependency tracking based on step requirements.
 
-2. **LangChain Plan Generation:** The `_generate_complex_plan()` function creates a placeholder multi-step plan in Phase 3. Actual LangChain-backed plan generation is deferred to later phases.
+2. **brain/planner.py Integration:** The `_generate_simple_plan()` function integrates with brain/planner.py for arg resolution, but full integration with the Planner's LLM step generation is simplified for Phase 3. Full async integration would require more context handling.
 
-3. **Existing Planner Integration:** Integration with existing `brain/planner.py` is deferred to later phases. The current implementation generates placeholder plans.
+3. **Complexity Detection:** LangChain-based complexity detection is implemented but may not be perfect for all edge cases. The fallback heuristic provides reasonable behavior when LangChain is unavailable.
 
-4. **Plan Step Dependencies:** Plan step dependencies are currently minimal. Later phases will add more sophisticated dependency tracking.
+4. **Step Dependencies:** Step dependencies are currently simple sequential (each step depends on the previous one). Later phases may implement more complex dependency graphs.
 
 ---
 
-## Next Steps — Phase 4
+## Next Steps — Phase 5
 
-**Phase 4: First Vertical Slice**
+**Phase 5: Reliability**
 
-**Goal:** Prove the new architecture end-to-end without replacing the operational foundation.
-
-**Canonical Workflow:**
-```
-"Open Firefox and search for autonomous agents"
-```
-
-**Initial Graph Path:**
-```
-START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END
-```
+**Goal:** Implement verification, recovery, and reliability features.
 
 **Deliverables:**
-- `graph/nodes/retrieve_knowledge.py` — RAG/memory integration
-- `graph/nodes/route.py` — Routing engine
-- `graph/nodes/safety_check.py` — Safety integration
-- `graph/nodes/execute_step.py` — Executor integration
-- `graph/nodes/verify_step.py` — Verification
-- End-to-end test with canonical workflow
+- Verification logic (expected vs observed state comparison)
+- Recovery logic (fallback and retry mechanisms)
+- Error handling and rollback
+- Reliability metrics
+
+**Architecture:**
+```
+START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → RECOVER → FINALIZE → END
+```
 
 **First Migration Target:**
-- Prove architecture end-to-end
-- Preserve operational foundation
-- Shadow mode comparison with legacy
+- Verification node improvements
+- Recovery node implementation
+- Error handling and rollback mechanisms
 
 ---
 
@@ -258,13 +264,18 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREAT
 
 - [x] Create plan node implemented
 - [x] Deterministic/AI split (simple vs complex) implemented
+- [x] LangChain-based complexity detection implemented
+- [x] LangChain-backed plan generation for complex requests
+- [x] Integration with brain/planner.py for simple plans
 - [x] Graph owns current step, completed steps, workflow position
 - [x] Planner owns what the steps are
 - [x] Plan and PlanStep are valid domain objects
 - [x] Idempotency classification added to plan steps
 - [x] Side-effect classification added to plan steps
+- [x] Step dependencies added for complex plans
 - [x] Graph topology updated to include create_plan
-- [x] Planning integration tests written (20 tests)
+- [x] Planning integration tests written (30 tests)
+- [x] Behavioral tests for planning (10 tests)
 - [x] Exit gate criteria satisfied
 
-**Phase 3 Status:** ✅ COMPLETE
+**Phase 3 Status:** ✅ COMPLETE (Real Planner Integration)
