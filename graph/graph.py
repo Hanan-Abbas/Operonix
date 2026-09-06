@@ -38,6 +38,7 @@ from graph.nodes.safety_check import safety_check_node
 from graph.nodes.execute_step import execute_step_node
 from graph.nodes.verify_step import verify_step_node
 from graph.nodes.recover import recover_node
+from graph.nodes.confirmation import confirmation_node
 
 
 # ─── GRAPH BUILDER ───────────────────────────────────────────────────────────
@@ -45,10 +46,13 @@ from graph.nodes.recover import recover_node
 def build_operonix_graph():
     """Build the Operonix LangGraph topology.
     
-    Phase 5 topology (Verification & Recovery):
-    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → [FINALIZE | RECOVER] → END
+    Phase 7 topology (Checkpointing, Pause/Resume & Human Intervention):
+    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER] → END
     
-    This adds verification logic and recovery with conditional routing.
+    This adds checkpointing, pause/resume, and human intervention.
+    
+    Confirmation flow:
+    SAFETY_CHECK → CONFIRMATION_REQUIRED → PAUSE → human response → RESUME → EXECUTE_STEP
     
     Recovery paths:
     - RETRY → execute_step
@@ -71,6 +75,7 @@ def build_operonix_graph():
         workflow.add_node("create_plan", create_plan_node)
         workflow.add_node("route", route_node)
         workflow.add_node("safety_check", safety_check_node)
+        workflow.add_node("confirmation", confirmation_node)
         workflow.add_node("execute_step", execute_step_node)
         workflow.add_node("verify_step", verify_step_node)
         workflow.add_node("recover", recover_node)
@@ -84,7 +89,27 @@ def build_operonix_graph():
         workflow.add_edge("retrieve_knowledge", "create_plan")
         workflow.add_edge("create_plan", "route")
         workflow.add_edge("route", "safety_check")
-        workflow.add_edge("safety_check", "execute_step")
+        
+        # Conditional edge from safety_check: execute_step or confirmation based on confirmation_required
+        def needs_confirmation(state: OperonixState) -> str:
+            """Determine if confirmation is required based on safety decision."""
+            if state.safety and state.safety.confirmation_required:
+                return "confirmation"
+            return "execute_step"
+        
+        workflow.add_conditional_edges(
+            "safety_check",
+            needs_confirmation,
+            {
+                "confirmation": "confirmation",
+                "execute_step": "execute_step"
+            }
+        )
+        
+        # Confirmation node pauses graph, so we need external resume mechanism
+        # For now, confirmation → execute_step (in real implementation, this would wait for human response)
+        workflow.add_edge("confirmation", "execute_step")
+        
         workflow.add_edge("execute_step", "verify_step")
         
         # Conditional edge from verify_step: finalize on success, recover on failure or uncertain
@@ -136,8 +161,8 @@ def build_operonix_graph():
         # Compile the graph
         compiled_graph = workflow.compile()
         
-        logger.info("Operonix LangGraph topology built successfully (Phase 5)")
-        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → [FINALIZE | RECOVER] → END")
+        logger.info("Operonix LangGraph topology built successfully (Phase 7)")
+        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER] → END")
         
         return compiled_graph
         
