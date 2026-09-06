@@ -59,44 +59,45 @@ Current implementation has completed Phases 0-3 with correct architectural found
 
 ## Phase 2 — LangChain AI Bridge
 
-**Status:** ⏳ PARTIAL (Architecture/adapter integration ✅, Real LangChain intelligence ⏳)
+**Status:** ✅ COMPLETE (Real AI Integration)
 
 **What Was Delivered:**
 - AI package structure
 - Operonix ModelService abstraction (provider-independent)
-- LangChain adapter wrapper
-- Analyze intent node (stub)
-- AI integration tests (20 tests)
+- LangChain adapter with actual model initialization
+- Actual LangChain model invocation
+- Structured output with JsonOutputParser
+- Analyze intent node with real LangChain integration
+- Integration with existing brain/intent_parser.py (deterministic resolution, keyword fallback)
+- AI integration tests (30 tests, including 10 behavioral tests)
 
 **Architecture Compliance:**
 - ✅ Operonix ModelService abstracts over LangChain
 - ✅ Provider independence preserved (Ollama, Groq, Gemini, OpenRouter, OpenAI)
 - ✅ Nothing outside AI layer depends on LangChain model objects directly
+- ✅ Actual LangChain model initialization implemented
+- ✅ Actual model invocation implemented
+- ✅ Structured output implemented
+- ✅ Integration with brain/intent_parser.py preserved
 
-**Deferred (Stubs):**
-- LangChain model initialization and invocation
-- Structured output implementation
-- Actual LangChain integration in analyze_intent node
-- Integration with existing brain/intent_parser.py
-
-**Internal Label:**
-- Architecture/adapter integration ✅
-- Real LangChain intelligence ⏳
-
-**Assessment:** Good staged migration, architectural direction correct
+**Assessment:** Complete with real AI integration
 
 ---
 
 ## Phase 3 — Planning Integration
 
-**Status:** ⏳ PARTIAL (Planning contract and graph integration ✅, Real planner migration ⏳)
+**Status:** ✅ COMPLETE (Real Planner Integration)
 
 **What Was Delivered:**
 - Create plan node with deterministic/AI split
-- Graph topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → CREATE_PLAN → FINALIZE → END
+- Graph topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → EXECUTE_STEP → VERIFY_STEP → FINALIZE → END
 - Deterministic/AI split (simple vs complex requests)
+- LangChain-based complexity detection (sophisticated analysis)
+- LangChain-backed plan generation for complex requests
+- Integration with existing brain/planner.py for simple plans
 - Plan and PlanStep domain objects with idempotency, side-effect classification
-- Planning integration tests (20 tests)
+- Step dependencies for complex plans
+- Planning integration tests (30 tests, including 10 behavioral tests)
 
 **Architecture Compliance:**
 - ✅ Graph owns: current step, completed steps, workflow position
@@ -105,17 +106,9 @@ Current implementation has completed Phases 0-3 with correct architectural found
 - ✅ Idempotency classification (SAFE, CONDITIONAL, NON_IDEMPOTENT)
 - ✅ Side-effect classification (READ_ONLY, REVERSIBLE, LIMITED_SIDE_EFFECT, DESTRUCTIVE, EXTERNAL_COMMIT)
 - ✅ Reversibility, preconditions, postconditions, retry policy
+- ✅ Step dependencies for complex plans
 
-**Deferred (Stubs):**
-- LangChain-backed plan generation for complex requests
-- Integration with existing brain/planner.py
-- Sophisticated complexity detection (currently simple heuristic)
-
-**Internal Label:**
-- Planning contract and graph integration ✅
-- Real planner migration ⏳
-
-**Assessment:** Design is good, incorporates reliability architecture from later plan revisions
+**Assessment:** Complete with real planner integration
 
 ---
 
