@@ -143,6 +143,9 @@ def _determine_recovery_strategy(failure_category: FailureCategory, state: Opero
     - VERIFICATION_FAILURE → observe → recover
     - UNKNOWN / SYSTEM → controlled failure
     
+    Phase 6 enhancement: Check idempotency and side-effect level before retry.
+    Non-idempotent or high side-effect operations may not be safe to retry.
+    
     Args:
         failure_category: Classified failure type
         state: Current OperonixState
@@ -156,9 +159,15 @@ def _determine_recovery_strategy(failure_category: FailureCategory, state: Opero
         logger.warning(f"Max retries ({retry_count}) exceeded, aborting")
         return RecoveryStrategy.ABORT
     
-    # Apply recovery mapping
+    # Phase 6: Check idempotency and side-effect level before retry
     if failure_category == FailureCategory.TRANSIENT:
-        return RecoveryStrategy.RETRY
+        # Check if current step is safe to retry
+        if _is_safe_to_retry(state):
+            return RecoveryStrategy.RETRY
+        else:
+            # Not safe to retry (non-idempotent or high side-effect)
+            # Observe to check if operation already happened
+            return RecoveryStrategy.OBSERVE
     
     elif failure_category == FailureCategory.CONTEXT_MISMATCH:
         return RecoveryStrategy.OBSERVE
@@ -186,6 +195,44 @@ def _determine_recovery_strategy(failure_category: FailureCategory, state: Opero
     
     else:  # UNKNOWN
         return RecoveryStrategy.ABORT
+
+
+def _is_safe_to_retry(state: OperonixState) -> bool:
+    """Check if current step is safe to retry based on idempotency and side-effect level.
+    
+    Per migration plan Phase 6:
+    - Non-idempotent operations may not be safe to retry
+    - High side-effect operations (DESTRUCTIVE, EXTERNAL_COMMIT) may not be safe to retry
+    - Reversible operations are safer to retry
+    
+    Args:
+        state: Current OperonixState
+        
+    Returns:
+        True if safe to retry, False otherwise
+    """
+    # Get current step from plan
+    if not state.plan or state.plan.current_step_index >= len(state.plan.steps):
+        return False  # No plan or invalid step, not safe to retry
+    
+    current_step = state.plan.steps[state.plan.current_step_index]
+    
+    # Check idempotency
+    if current_step.idempotency == "NON_IDEMPOTENT":
+        logger.warning(f"Step {current_step.step_id} is NON_IDEMPOTENT, not safe to retry")
+        return False
+    
+    # Check side-effect level
+    if current_step.side_effect in ["DESTRUCTIVE", "EXTERNAL_COMMIT"]:
+        logger.warning(f"Step {current_step.step_id} has high side-effect ({current_step.side_effect}), not safe to retry")
+        return False
+    
+    # Check reversibility
+    if not current_step.reversibility:
+        logger.warning(f"Step {current_step.step_id} is not reversible, retry may be unsafe")
+        # Still allow retry for transient failures, but with caution
+    
+    return True
 
 
 def _get_retry_count(state: OperonixState) -> int:
