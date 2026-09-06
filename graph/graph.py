@@ -87,10 +87,19 @@ def build_operonix_graph():
         workflow.add_edge("safety_check", "execute_step")
         workflow.add_edge("execute_step", "verify_step")
         
-        # Conditional edge from verify_step: finalize on success, recover on failure
+        # Conditional edge from verify_step: finalize on success, recover on failure or uncertain
         def should_recover(state: OperonixState) -> str:
-            """Determine if recovery is needed based on verification result."""
-            if state.verification and state.verification.status in ["FAILED", "UNCERTAIN"]:
+            """Determine if recovery is needed based on verification result.
+            
+            Phase 6: UNCERTAIN_OUTCOME must not be treated as an ordinary failure.
+            It should trigger observe to check if operation already happened.
+            """
+            if state.verification and state.verification.status == "VERIFIED":
+                return "finalize"
+            elif state.verification and state.verification.status == "UNCERTAIN_OUTCOME":
+                # Uncertain outcome: observe to check if operation already happened
+                return "recover"  # Will route to observe
+            elif state.verification and state.verification.status in ["FAILED", "UNCERTAIN"]:
                 return "recover"
             return "finalize"
         
