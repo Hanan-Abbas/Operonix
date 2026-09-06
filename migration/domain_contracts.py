@@ -261,7 +261,7 @@ class ExecutionResult(BaseModel):
 
 class VerificationResult(BaseModel):
     """Result of verifying that an execution produced the expected outcome."""
-    status: Literal["VERIFIED", "FAILED", "UNCERTAIN"]
+    status: Literal["VERIFIED", "FAILED", "UNCERTAIN", "UNCERTAIN_OUTCOME"]
     observed_context: ContextSnapshot
     expected_state: Dict[str, Any] = Field(default_factory=dict)
     actual_state: Dict[str, Any] = Field(default_factory=dict)
