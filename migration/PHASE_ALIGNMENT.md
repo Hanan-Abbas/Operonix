@@ -139,9 +139,9 @@ To establish consistency, we align current implementation with master plan:
 |-------|------------------|----------------|-------|
 | 0 | Baseline, Contracts & Safety | ✅ COMPLETE | No code modified, infrastructure established |
 | 1 | Graph Foundation & Runtime Boundary | ✅ COMPLETE | Linear flow, no AI, no executor |
-| 2 | LangChain AI Bridge | ⏳ PARTIAL | Architecture ✅, Real AI ⏳ |
-| 3 | Planning Integration | ⏳ PARTIAL | Contract ✅, Real planner ⏳ |
-| 4 | First Vertical Slice | ⏳ NOT STARTED | retrieve_knowledge, route, safety_check, execute_step, verify_step |
+| 2 | LangChain AI Bridge | ✅ COMPLETE | Real AI integration with LangChain |
+| 3 | Planning Integration | ✅ COMPLETE | Real planner integration with LangChain |
+| 4 | First Vertical Slice | ✅ COMPLETE | retrieve_knowledge, route, safety_check, execute_step, verify_step (stubs) |
 | 5 | Reliability | ⏳ NOT STARTED | verification, recovery |
 | 6 | Idempotency & Side-Effect Safety | ⏳ NOT STARTED | retry policies, side-effect awareness |
 | 7 | Checkpointing & Human Intervention | ⏳ NOT STARTED | pause/resume, confirmation flow |
@@ -213,7 +213,8 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREAT
 ## Summary
 
 - Phases 0-1: ✅ Complete and correct
-- Phases 2-3: ⏳ Partial (architecture complete, AI integration deferred)
-- Phase 4-15: ⏳ Not started
+- Phases 2-3: ✅ Complete with real LangChain integration
+- Phase 4: ✅ Complete (vertical slice with stub nodes)
+- Phase 5-15: ⏳ Not started
 
-**Key Decision:** Establish canonical phase numbering now to prevent further drift. Use master plan phase boundaries going forward.
+**Key Decision:** Canonical phase numbering established. Phases 0-4 complete with real AI integration in Phases 2-3.
