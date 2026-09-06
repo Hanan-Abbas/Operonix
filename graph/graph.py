@@ -37,6 +37,7 @@ from graph.nodes.route import route_node
 from graph.nodes.safety_check import safety_check_node
 from graph.nodes.execute_step import execute_step_node
 from graph.nodes.verify_step import verify_step_node
+from graph.nodes.recover import recover_node
 
 
 # ─── GRAPH BUILDER ───────────────────────────────────────────────────────────
