@@ -360,5 +360,80 @@ class FinalResult(BaseModel):
         }
 
 
+# ─── CHECKPOINTING ───────────────────────────────────────────────────────────
+
+class CheckpointState(BaseModel):
+    """Persisted state for checkpointing and resume.
+    
+    Per migration plan Phase 7: Persist enough information to resume:
+    - task identity
+    - workflow state
+    - current node
+    - current plan step
+    - completed steps
+    - routing decision
+    - safety/confirmation state
+    - execution status
+    - recovery data
+    - relevant context
+    - state version
+    - timestamp
+    """
+    checkpoint_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    workflow_state: Dict[str, Any] = Field(default_factory=dict)
+    current_node: Optional[str] = None
+    current_plan_step_index: int = 0
+    completed_steps: list = Field(default_factory=list)
+    routing_decision: Optional[Dict[str, Any]] = None
+    safety_state: Optional[Dict[str, Any]] = None
+    confirmation_state: Optional[Dict[str, Any]] = None
+    execution_status: Optional[str] = None
+    recovery_data: Optional[Dict[str, Any]] = None
+    relevant_context: Dict[str, Any] = Field(default_factory=dict)
+    state_version: str = "1.0"
+    checkpoint_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class HumanInterventionType(str, Enum):
+    """Type of human intervention required."""
+    CONFIRM = "confirm"
+    DENY = "deny"
+    CLARIFY = "clarify"
+    CHOOSE = "choose"
+    PROVIDE_INFORMATION = "provide_information"
+    TAKE_OVER = "take_over"
+    ABORT = "abort"
+
+
+class HumanIntervention(BaseModel):
+    """Human intervention request and response.
+    
+    Per migration plan Phase 7:
+    Initial implementation: CONFIRM, DENY
+    Future-capable: CLARIFY, CHOOSE, PROVIDE_INFORMATION, TAKE_OVER, ABORT
+    """
+    intervention_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    intervention_type: HumanInterventionType
+    reason: str
+    context: Dict[str, Any] = Field(default_factory=dict)
+    options: Optional[list] = None  # For CHOOSE type
+    response: Optional[HumanInterventionType] = None
+    response_data: Optional[Dict[str, Any]] = None
+    requested_at: datetime = Field(default_factory=datetime.utcnow)
+    responded_at: Optional[datetime] = None
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
 # Import uuid for default factories
 import uuid
