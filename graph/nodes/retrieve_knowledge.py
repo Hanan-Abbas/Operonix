@@ -14,6 +14,7 @@ from typing import Dict, Any
 
 from migration.graph_state import OperonixState
 from migration.domain_contracts import KnowledgeContext
+from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.RetrieveKnowledge")
 
@@ -60,6 +61,18 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     )
     
     state.knowledge = knowledge_context
+    
+    # Phase 9: Collect trace event for retrieved knowledge
+    trace_collector = get_trace_collector()
+    trace_collector.collect_retrieved_knowledge(
+        task_id=state.task.task_id,
+        knowledge_data={
+            "num_memories": len(knowledge_context.retrieved_memories),
+            "num_documents": len(knowledge_context.retrieved_documents),
+            "num_patterns": len(knowledge_context.learned_patterns),
+            "provenance": knowledge_context.provenance
+        }
+    )
     
     state.add_history_event("retrieve_knowledge_completed", {
         "task_id": state.task.task_id,
