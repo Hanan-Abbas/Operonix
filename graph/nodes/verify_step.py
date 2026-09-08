@@ -62,6 +62,19 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.verification = verification_result
     
+    # Phase 9: Collect trace event for verification
+    trace_collector = get_trace_collector()
+    trace_collector.collect_verification(
+        task_id=state.task.task_id,
+        verification_data={
+            "status": verification_result.status,
+            "executor_success": executor_success,
+            "reason": verification_result.reason,
+            "expected_state": verification_result.expected_state,
+            "actual_state": verification_result.actual_state
+        }
+    )
+    
     state.add_history_event("verify_step_completed", {
         "task_id": state.task.task_id,
         "verification_status": verification_result.status,
