@@ -12,6 +12,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
+from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.Intake")
 
@@ -24,6 +25,8 @@ def intake_node(state: OperonixState) -> Dict[str, Any]:
     - Creates the initial OperonixState
     - No LLM calls, no AI reasoning
     
+    Phase 9 enhancement: Collect trace event for request.
+    
     Args:
         state: Current OperonixState
         
@@ -31,6 +34,14 @@ def intake_node(state: OperonixState) -> Dict[str, Any]:
         Dict with updated state
     """
     logger.info(f"INTAKE: Processing task {state.task.task_id}")
+    
+    # Phase 9: Collect trace event for request
+    trace_collector = get_trace_collector()
+    trace_collector.collect_request(
+        task_id=state.task.task_id,
+        user_input=state.task.user_input,
+        source=state.task.source.value
+    )
     
     # Add history event
     state.add_history_event("intake_started", {
