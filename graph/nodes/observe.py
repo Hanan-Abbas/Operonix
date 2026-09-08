@@ -84,6 +84,16 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         
         logger.info("OBSERVE: Context services integration deferred to later phases")
     
+    # Phase 9: Collect trace event for observation
+    trace_collector = get_trace_collector()
+    trace_collector.collect_observation(
+        task_id=state.task.task_id,
+        observation_data={
+            "is_recovery_observation": is_recovery_observation,
+            "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None
+        }
+    )
+    
     state.add_history_event("observe_completed", {
         "task_id": state.task.task_id,
         "is_recovery_observation": is_recovery_observation,
