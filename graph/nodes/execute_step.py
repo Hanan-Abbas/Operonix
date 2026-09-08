@@ -65,6 +65,20 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.execution = execution_result
     
+    # Phase 9: Collect trace event for execution attempt
+    trace_collector = get_trace_collector()
+    trace_collector.collect_execution_attempt(
+        task_id=state.task.task_id,
+        execution_data={
+            "execution_id": execution_result.execution_id,
+            "step_id": execution_result.step_id,
+            "method_used": execution_result.method_used,
+            "success": execution_result.success,
+            "execution_status": execution_result.execution_status.value,
+            "result_data": execution_result.result_data
+        }
+    )
+    
     # Update plan progress
     if state.plan and state.plan.current_step:
         state.plan.current_step_index += 1
