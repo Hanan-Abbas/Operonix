@@ -437,3 +437,109 @@ class HumanIntervention(BaseModel):
 
 # Import uuid for default factories
 import uuid
+
+
+# ─── TIMEOUT & CANCELLATION ───────────────────────────────────────────────────
+
+class TimeoutConfig(BaseModel):
+    """Timeout configuration for operations, steps, tasks, and system/watchdog.
+    
+    Per migration plan Phase 8: Cancellation, Timeout & Resource Control
+    """
+    operation_timeout_seconds: int = Field(default=30, description="Timeout for individual operations")
+    step_timeout_seconds: int = Field(default=120, description="Timeout for graph steps")
+    task_timeout_seconds: int = Field(default=300, description="Timeout for entire task")
+    system_watchdog_timeout_seconds: int = Field(default=600, description="System/watchdog timeout")
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class CancellationReason(str, Enum):
+    """Reason for workflow cancellation."""
+    USER_REQUESTED = "user_requested"
+    TIMEOUT = "timeout"
+    SAFE_ABORT = "safe_abort"
+    RESOURCE_CONTENTION = "resource_contention"
+    SYSTEM_ERROR = "system_error"
+    UNKNOWN = "unknown"
+
+
+class CancellationRequest(BaseModel):
+    """Request to cancel a workflow.
+    
+    Per migration plan Phase 8: Cancellation, Timeout & Resource Control
+    """
+    cancellation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    reason: CancellationReason
+    requested_by: str = Field(default="system", description="Who requested cancellation (user, system, watchdog)")
+    context: Dict[str, Any] = Field(default_factory=dict)
+    requested_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class ResourceType(str, Enum):
+    """Type of physical resource that may require serialization."""
+    KEYBOARD = "keyboard"
+    MOUSE = "mouse"
+    ACTIVE_WINDOW = "active_window"
+    FOCUS = "focus"
+    SCREEN = "screen"
+    AUDIO = "audio"
+    NETWORK = "network"
+    FILESYSTEM = "filesystem"
+
+
+class ResourceOwnership(BaseModel):
+    """Resource ownership tracking for physical desktop resources.
+    
+    Per migration plan Phase 8: Resource rule
+    "logical workflow concurrency ≠ physical desktop concurrency"
+    Graph instances may coexist, but physical resources such as keyboard, mouse,
+    active window, and focus may require serialization.
+    """
+    ownership_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    resource_type: ResourceType
+    resource_identifier: Optional[str] = None  # e.g., window title, file path
+    acquired_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None
+    is_active: bool = True
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class AbortSemantics(str, Enum):
+    """Type of abort semantics."""
+    IMMEDIATE = "immediate"
+    GRACEFUL = "graceful"
+    SAFE = "safe"
+
+
+class AbortDecision(BaseModel):
+    """Decision for safe abort.
+    
+    Per migration plan Phase 8: Safe abort semantics
+    """
+    abort_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    semantics: AbortSemantics
+    reason: str
+    cleanup_required: bool = True
+    rollback_required: bool = False
+    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
