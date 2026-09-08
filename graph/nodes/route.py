@@ -75,6 +75,32 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     
     state.routing = method_decision
     
+    # Phase 9: Collect trace events for routing candidates and decision
+    trace_collector = get_trace_collector()
+    trace_collector.collect_routing_candidates(
+        task_id=state.task.task_id,
+        candidates=[
+            {
+                "method_type": c.method_type,
+                "tool_id": c.tool_id,
+                "capability_fit": c.capability_fit,
+                "context_fit": c.context_fit,
+                "availability": c.availability,
+                "reliability": c.reliability,
+                "overall_score": c.overall_score
+            }
+            for c in method_decision.candidates_considered
+        ]
+    )
+    trace_collector.collect_routing_decision(
+        task_id=state.task.task_id,
+        decision={
+            "selected_method": method_decision.selected_candidate.method_type,
+            "confidence": method_decision.confidence,
+            "explanation": method_decision.routing_explanation
+        }
+    )
+    
     state.add_history_event("route_completed", {
         "task_id": state.task.task_id,
         "selected_method": candidate.method_type,
