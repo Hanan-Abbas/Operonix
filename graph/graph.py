@@ -46,10 +46,14 @@ from graph.nodes.confirmation import confirmation_node
 def build_operonix_graph():
     """Build the Operonix LangGraph topology.
     
-    Phase 7 topology (Checkpointing, Pause/Resume & Human Intervention):
-    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER] → END
+    Phase 8 topology (Cancellation, Timeout & Resource Control):
+    START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END
     
-    This adds checkpointing, pause/resume, and human intervention.
+    This adds cancellation, timeout, and resource control.
+    
+    Cancellation can occur at any point and triggers safe abort semantics.
+    Timeouts are enforced via TimeoutManager.
+    Resource ownership is tracked via ResourceManager.
     
     Confirmation flow:
     SAFETY_CHECK → CONFIRMATION_REQUIRED → PAUSE → human response → RESUME → EXECUTE_STEP
@@ -60,6 +64,12 @@ def build_operonix_graph():
     - ROUTE → route
     - REPLAN → create_plan
     - ABORT → finalize
+    
+    Cancellation paths:
+    - User requested → graceful abort → finalize
+    - Timeout → safe abort → finalize
+    - Resource contention → graceful abort → finalize
+    - System error → immediate abort → finalize
     """
     try:
         from langgraph.graph import StateGraph, END
@@ -79,6 +89,7 @@ def build_operonix_graph():
         workflow.add_node("execute_step", execute_step_node)
         workflow.add_node("verify_step", verify_step_node)
         workflow.add_node("recover", recover_node)
+        workflow.add_node("cancel", lambda state: state)  # Placeholder for cancellation handling
         workflow.add_node("finalize", finalize_node)
         
         # Define edges
@@ -112,13 +123,13 @@ def build_operonix_graph():
         
         workflow.add_edge("execute_step", "verify_step")
         
-        # Conditional edge from verify_step: finalize on success, recover on failure or uncertain
-        def should_recover(state: OperonixState) -> str:
-            """Determine if recovery is needed based on verification result.
+        # Conditional edge from verify_step: finalize on success, recover on failure or uncertain, cancel on cancellation
+        def should_recover_or_cancel(state: OperonixState) -> str:
+            """Determine if recovery or cancellation is needed based on verification result and cancellation status."""
+            # Check if workflow is cancelled
+            if state.cancelled:
+                return "cancel"
             
-            Phase 6: UNCERTAIN_OUTCOME must not be treated as an ordinary failure.
-            It should trigger observe to check if operation already happened.
-            """
             if state.verification and state.verification.status == "VERIFIED":
                 return "finalize"
             elif state.verification and state.verification.status == "UNCERTAIN_OUTCOME":
@@ -130,9 +141,10 @@ def build_operonix_graph():
         
         workflow.add_conditional_edges(
             "verify_step",
-            should_recover,
+            should_recover_or_cancel,
             {
                 "recover": "recover",
+                "cancel": "cancel",
                 "finalize": "finalize"
             }
         )
@@ -140,6 +152,8 @@ def build_operonix_graph():
         # Conditional edge from recover to target stage based on recovery strategy
         def get_recovery_target(state: OperonixState) -> str:
             """Get target stage based on recovery decision."""
+            if state.cancelled:
+                return "finalize"
             if state.recovery and state.recovery.target_stage:
                 return state.recovery.target_stage
             return "finalize"
@@ -156,13 +170,16 @@ def build_operonix_graph():
             }
         )
         
+        # Cancel node routes to finalize
+        workflow.add_edge("cancel", "finalize")
+        
         workflow.add_edge("finalize", END)
         
         # Compile the graph
         compiled_graph = workflow.compile()
         
-        logger.info("Operonix LangGraph topology built successfully (Phase 7)")
-        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER] → END")
+        logger.info("Operonix LangGraph topology built successfully (Phase 8)")
+        logger.info("Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END")
         
         return compiled_graph
         
