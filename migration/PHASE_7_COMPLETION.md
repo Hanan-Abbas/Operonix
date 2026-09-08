@@ -132,6 +132,13 @@ RESUME
 
 **Note:** Can set `confirmation_required=True` to test confirmation flow.
 
+**Stub Implementation:**
+- Creates placeholder SafetyDecision with LOW risk, APPROVED status, GRANTED permission
+- Does not call actual safety validator
+- Does not check actual permissions via permission guard
+- Does not apply actual risk rules
+- confirmation_required is False by default (can be set to True for testing)
+
 ---
 
 ### 5. ✅ Graph Topology Update
@@ -269,6 +276,14 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREAT
 1. **Safety Check Integration (STUB):** The safety_check node is still a stub that creates a placeholder SafetyDecision. Later phases will integrate with existing safety/ module (Validator, PermissionGuard, RiskRules, Confirmation). This is a stub implementation.
 
 2. **External Resume Mechanism (STUB):** The confirmation node pauses the graph (state.paused = True), but the external resume mechanism (via dashboard/API) is not fully implemented. For now, confirmation → execute_step is a direct edge. In a real implementation, this would wait for human response via dashboard/API before resuming. This is a stub implementation.
+
+**Stub Implementation:**
+- confirmation_node sets state.paused = True
+- Checkpoint is created before pausing
+- Graph edge is confirmation → execute_step (direct, no waiting)
+- No actual dashboard/API integration for human response
+- No external event listener for resume signals
+- resume_from_confirmation() function exists but not triggered by external mechanism
 
 3. **Process Interruption Survival:** Not yet tested. Requires actual process restart and checkpoint loading to verify that workflows can survive process interruption.
 
