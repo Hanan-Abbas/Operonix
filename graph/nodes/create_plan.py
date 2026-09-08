@@ -65,6 +65,26 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
     
     state.plan = plan
     
+    # Phase 9: Collect trace event for plan
+    trace_collector = get_trace_collector()
+    trace_collector.collect_plan(
+        task_id=state.task.task_id,
+        plan_data={
+            "plan_id": plan.plan_id,
+            "num_steps": len(plan.steps),
+            "complexity": "complex" if is_complex else "simple",
+            "steps": [
+                {
+                    "step_id": step.step_id,
+                    "objective": step.objective,
+                    "idempotency": step.idempotency,
+                    "side_effect": step.side_effect
+                }
+                for step in plan.steps
+            ]
+        }
+    )
+    
     state.add_history_event("create_plan_completed", {
         "task_id": state.task.task_id,
         "plan_id": plan.plan_id,
