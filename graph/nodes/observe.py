@@ -13,6 +13,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
+from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.Observe")
 
