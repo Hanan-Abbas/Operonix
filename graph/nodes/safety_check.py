@@ -69,6 +69,19 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
     
     state.safety = safety_decision
     
+    # Phase 9: Collect trace event for safety decision
+    trace_collector = get_trace_collector()
+    trace_collector.collect_safety_decision(
+        task_id=state.task.task_id,
+        safety_data={
+            "risk_level": safety_decision.risk_level.value,
+            "validation_status": safety_decision.validation_status,
+            "permission_status": safety_decision.permission_status,
+            "confirmation_required": safety_decision.confirmation_required,
+            "safety_checks_performed": safety_decision.safety_checks_performed
+        }
+    )
+    
     state.add_history_event("safety_check_completed", {
         "task_id": state.task.task_id,
         "risk_level": safety_decision.risk_level.value,
