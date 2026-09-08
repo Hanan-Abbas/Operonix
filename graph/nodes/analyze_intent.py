@@ -58,6 +58,14 @@ def analyze_intent_node(state: OperonixState) -> Dict[str, Any]:
     
     state.intent = intent_result
     
+    # Phase 9: Collect trace event for intent
+    trace_collector = get_trace_collector()
+    trace_collector.collect_intent(
+        task_id=state.task.task_id,
+        intent_name=intent_result.name,
+        intent_parameters=intent_result.parameters
+    )
+    
     state.add_history_event("analyze_intent_completed", {
         "task_id": state.task.task_id,
         "intent_name": intent_result.name,
