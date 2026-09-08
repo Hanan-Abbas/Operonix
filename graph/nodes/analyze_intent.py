@@ -16,6 +16,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import IntentResult
 from migration.feature_flags import flags
+from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.AnalyzeIntent")
 
