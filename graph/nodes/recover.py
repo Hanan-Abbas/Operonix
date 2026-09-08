@@ -56,6 +56,19 @@ def recover_node(state: OperonixState) -> Dict[str, Any]:
     
     state.recovery = recovery_decision
     
+    # Phase 9: Collect trace event for recovery
+    trace_collector = get_trace_collector()
+    trace_collector.collect_recovery(
+        task_id=state.task.task_id,
+        recovery_data={
+            "failure_category": failure_category.value,
+            "recovery_strategy": recovery_strategy.value,
+            "target_stage": recovery_decision.target_stage,
+            "retry_count": recovery_decision.retry_count,
+            "reason": recovery_decision.reason
+        }
+    )
+    
     state.add_history_event("recover_completed", {
         "task_id": state.task.task_id,
         "failure_category": failure_category.value,
