@@ -543,3 +543,125 @@ class AbortDecision(BaseModel):
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+
+
+# ─── OBSERVABILITY & EXECUTION TRACE ───────────────────────────────────────────
+
+class TraceEventType(str, Enum):
+    """Type of trace event."""
+    REQUEST = "request"
+    INTENT = "intent"
+    CONTEXT = "context"
+    RETRIEVED_KNOWLEDGE = "retrieved_knowledge"
+    PLAN = "plan"
+    ROUTING_CANDIDATES = "routing_candidates"
+    ROUTING_DECISION = "routing_decision"
+    SAFETY_DECISION = "safety_decision"
+    EXECUTION_ATTEMPT = "execution_attempt"
+    OBSERVATION = "observation"
+    VERIFICATION = "verification"
+    RECOVERY = "recovery"
+    REFLECTION = "reflection"
+    FINAL_OUTCOME = "final_outcome"
+
+
+class TraceEvent(BaseModel):
+    """Single event in execution trace.
+    
+    Per migration plan Phase 9: Observability & Execution Trace
+    The trace should expose: request, intent, context, retrieved knowledge, plan,
+    routing candidates, routing decision, safety decision, execution attempts,
+    observations, verification, recovery, reflection, final outcome.
+    """
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    event_type: TraceEventType
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    data: Dict[str, Any] = Field(default_factory=dict)
+    node_name: Optional[str] = None  # Graph node that generated this event
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class ObservabilityEvent(BaseModel):
+    """High-level observability event published to EventBus.
+    
+    Per migration plan Phase 9: EventBus publishes observability events;
+    it does not become the task state machine again.
+    """
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    event_type: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    data: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class ExecutionTrace(BaseModel):
+    """Complete execution trace for a task.
+    
+    Per migration plan Phase 9: For a failed task, a developer can reconstruct:
+    - what happened
+    - why it happened
+    - what was selected
+    - why alternatives were rejected
+    - what failed
+    - why recovery occurred
+    - what final result was produced
+    """
+    trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    task_id: str
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    events: List[TraceEvent] = Field(default_factory=list)
+    final_outcome: Optional[str] = None
+    success: bool = False
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+    
+    def add_event(self, event: TraceEvent) -> None:
+        """Add an event to the trace.
+        
+        Args:
+            event: TraceEvent to add
+        """
+        self.events.append(event)
+    
+    def get_events_by_type(self, event_type: TraceEventType) -> List[TraceEvent]:
+        """Get all events of a specific type.
+        
+        Args:
+            event_type: TraceEventType to filter by
+            
+        Returns:
+            List of TraceEvent of the specified type
+        """
+        return [e for e in self.events if e.event_type == event_type]
+    
+    def reconstruct_timeline(self) -> List[Dict[str, Any]]:
+        """Reconstruct timeline of events for debugging.
+        
+        Returns:
+            List of event data in chronological order
+        """
+        sorted_events = sorted(self.events, key=lambda e: e.timestamp)
+        return [
+            {
+                "event_type": e.event_type.value,
+                "timestamp": e.timestamp.isoformat(),
+                "node_name": e.node_name,
+                "data": e.data
+            }
+            for e in sorted_events
+        ]
