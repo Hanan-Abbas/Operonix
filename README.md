@@ -1,10 +1,12 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png"/>
-  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png"/>
-  <img alt="Operonix" src="assets/banner-dark.png" width="700"/>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png" width="700">
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png" width="700">
+  <img alt="Operonix" src="assets/banner-dark.png" width="700">
 </picture>
+
+<br/>
 
 **AI-Powered Desktop Automation & Orchestration Platform**
 
