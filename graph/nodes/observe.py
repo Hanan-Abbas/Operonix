@@ -109,6 +109,78 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
     return {"state": state}
 
 
+def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
+    """Gather context snapshot using actual context services.
+    
+    This integrates with:
+    - WindowDetector (for window title, app name, cwd)
+    - AppClassifier (for app type classification)
+    - StateExtractor (for deep UI state)
+    
+    Args:
+        state: Current OperonixState
+        
+    Returns:
+        Dict with context snapshot data
+    """
+    context_data = {
+        "window_title": "Unknown",
+        "app_name": "Unknown",
+        "app_type": "unknown",
+        "cwd": None,
+        "state": {}
+    }
+    
+    try:
+        # Try to get context from WindowDetector
+        # The WindowDetector is an async service that publishes to event bus
+        # For the graph node, we'll try to import and use it synchronously
+        try:
+            from context.window_detector import window_detector
+            
+            # WindowDetector is async, but we can try to get the last snapshot
+            if hasattr(window_detector, '_last_external_snapshot') and window_detector._last_external_snapshot:
+                snapshot = window_detector._last_external_snapshot
+                context_data["window_title"] = snapshot.get("window_title", "Unknown")
+                context_data["app_name"] = snapshot.get("app_name", "Unknown")
+                context_data["app_type"] = snapshot.get("app_type", "unknown")
+                context_data["cwd"] = snapshot.get("cwd")
+                context_data["window_pid"] = snapshot.get("window_pid")
+                context_data["confidence"] = snapshot.get("confidence")
+                context_data["sub_context"] = snapshot.get("sub_context")
+                
+                logger.info(f"Context snapshot from WindowDetector: {context_data['window_title']}")
+            else:
+                logger.warning("WindowDetector has no snapshot available")
+        except ImportError:
+            logger.warning("Could not import WindowDetector")
+        except Exception as e:
+            logger.error(f"Error getting context from WindowDetector: {e}")
+        
+        # Try to get deep state from StateExtractor
+        try:
+            from context.state_extractor import state_extractor
+            
+            # StateExtractor is async, but we can try to get heuristics
+            if context_data.get("window_title"):
+                heuristics = state_extractor._get_heuristics(
+                    context_data["window_title"],
+                    context_data.get("app_type")
+                )
+                context_data["state"].update(heuristics)
+                
+                logger.debug(f"State heuristics: {heuristics}")
+        except ImportError:
+            logger.warning("Could not import StateExtractor")
+        except Exception as e:
+            logger.error(f"Error getting state from StateExtractor: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error gathering context snapshot: {e}")
+    
+    return context_data
+
+
 def _check_postconditions(state: OperonixState) -> bool:
     """Check if postconditions are already met (operation already happened).
     
