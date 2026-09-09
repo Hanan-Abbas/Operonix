@@ -665,3 +665,115 @@ class ExecutionTrace(BaseModel):
             }
             for e in sorted_events
         ]
+
+
+# ─── PHASE 10: CANDIDATE-BASED ROUTING ENGINE ────────────────────────────────────
+
+class CandidateType(str, Enum):
+    """Types of execution method candidates."""
+    PLUGIN = "plugin"
+    API = "api"
+    SHELL = "shell"
+    UI = "ui"
+    BROWSER_AUTOMATION = "browser_automation"
+    VISION = "vision"
+    REMOTE = "remote"
+    LOCAL = "local"
+
+
+class Candidate(BaseModel):
+    """A candidate execution method for a plan step.
+    
+    Per migration plan Phase 10: Candidate-Based Routing Engine
+    """
+    candidate_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    candidate_type: CandidateType
+    tool_id: Optional[str] = None
+    capability_id: Optional[str] = None
+    plugin_id: Optional[str] = None
+    
+    # Evaluation metrics
+    capability_fit: float = Field(default=0.0, ge=0.0, le=1.0)
+    context_fit: float = Field(default=0.0, ge=0.0, le=1.0)
+    availability: float = Field(default=0.0, ge=0.0, le=1.0)
+    reliability: float = Field(default=0.0, ge=0.0, le=1.0)
+    historical_success: float = Field(default=0.0, ge=0.0, le=1.0)
+    risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    permissions: float = Field(default=0.0, ge=0.0, le=1.0)
+    latency: float = Field(default=0.0, ge=0.0, le=1.0)
+    reversibility: float = Field(default=0.0, ge=0.0, le=1.0)
+    
+    # Overall score
+    overall_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class CandidateEvaluation(BaseModel):
+    """Evaluation of a candidate for a specific plan step.
+    
+    Per migration plan Phase 10: Candidate-Based Routing Engine
+    """
+    candidate: Candidate
+    evaluation_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    evaluation_reason: Optional[str] = None
+    constraints_satisfied: bool = True
+    constraint_violations: List[str] = Field(default_factory=list)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class RankingPolicy(BaseModel):
+    """Policy for ranking candidates.
+    
+    Per migration plan Phase 10: Candidate-Based Routing Engine
+    """
+    policy_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    policy_name: str
+    weights: Dict[str, float] = Field(default_factory=lambda: {
+        "capability_fit": 0.25,
+        "context_fit": 0.20,
+        "availability": 0.15,
+        "reliability": 0.15,
+        "historical_success": 0.10,
+        "risk": 0.05,
+        "permissions": 0.05,
+        "latency": 0.03,
+        "reversibility": 0.02
+    })
+    min_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    require_all_constraints: bool = True
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class RoutingDecision(BaseModel):
+    """Decision on which execution method to use.
+    
+    Per migration plan Phase 10: Candidate-Based Routing Engine
+    """
+    decision_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    selected_candidate: Candidate
+    candidates_considered: List[Candidate] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    routing_explanation: str
+    ranking_policy_id: Optional[str] = None
+    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
