@@ -510,7 +510,7 @@ class CandidateEvaluationService:
             Reversibility score (0.0 to 1.0, higher is better)
         """
         # Shell operations can be reversible depending on the command
-        if计划步骤.idempotency == "IDEMPOTENT":
+        if plan_step.idempotency == "IDEMPOTENT":
             return 0.9
         else:
             return 0.4
