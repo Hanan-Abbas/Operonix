@@ -273,9 +273,9 @@ START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREAT
 
 ## Known Issues / Notes
 
-1. **Postcondition Verification (STUB):** The `_verify_postconditions()` function assumes success if executor reports success. Later phases will implement actual context snapshot comparison and expected state validation. This is a stub implementation.
+1. ~~**Postcondition Verification (STUB):** The `_verify_postconditions()` function assumes success if executor reports success. Later phases will implement actual context snapshot comparison and expected state validation.~~ **RESOLVED (Phase 9/10):** Postcondition verification now integrates with actual context services (WindowDetector, StateExtractor) to verify file existence, application state, and directory conditions based on step objectives.
 
-2. **Context Observation (STUB):** The observe strategy routes to the observe node, but actual context observation logic is not fully implemented. Later phases will integrate with context services. This is a stub implementation.
+2. ~~**Context Observation (STUB):** The observe strategy routes to the observe node, but actual context observation logic is not fully implemented. Later phases will integrate with context services.~~ **RESOLVED (Phase 9/10):** The observe node now integrates with actual context services (WindowDetector, StateExtractor) to gather real context snapshots including window title, app name, app type, cwd, and deep UI state.
 
 3. **Retry Policy:** Max retry count is hardcoded to 3. Later phases may implement configurable retry policies per failure type.
 
