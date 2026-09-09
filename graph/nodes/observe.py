@@ -47,6 +47,8 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
       └── no  → retry / recover
     ```
     
+    Phase 9/10 enhancement: Integrate actual context services for real observation.
+    
     Args:
         state: Current OperonixState
         
@@ -72,19 +74,16 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         
         logger.info(f"OBSERVE: Postcondition check result: {postcondition_check}")
     else:
-        # Initial observation (not recovery)
-        logger.info("OBSERVE: Initial observation (not recovery)")
+        # Initial observation (not recovery) - integrate actual context services
+        logger.info("OBSERVE: Initial observation with actual context services")
         
-        # In Phase 1 foundation, we don't actually call context services
-        # We just log that observation would happen
-        # Later phases will integrate:
-        # - from context.window_detector import WindowDetector
-        # - from context.app_classifier import AppClassifier
-        # - from context.state_extractor import StateExtractor
-        # - from context.focus_tracker import FocusTracker
-        # - from context.context_validator import ContextValidator
+        # Integrate with actual context services
+        context_snapshot = _gather_context_snapshot(state)
         
-        logger.info("OBSERVE: Context services integration deferred to later phases")
+        # Store context snapshot in state
+        state.context = context_snapshot
+        
+        logger.info(f"OBSERVE: Context snapshot gathered: window={context_snapshot.get('window_title')}, app={context_snapshot.get('app_name')}")
     
     # Phase 9: Collect trace event for observation
     trace_collector = get_trace_collector()
@@ -92,7 +91,10 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         task_id=state.task.task_id,
         observation_data={
             "is_recovery_observation": is_recovery_observation,
-            "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None
+            "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None,
+            "window_title": state.context.get("window_title") if not is_recovery_observation else None,
+            "app_name": state.context.get("app_name") if not is_recovery_observation else None,
+            "cwd": state.context.get("cwd") if not is_recovery_observation else None
         }
     )
     
