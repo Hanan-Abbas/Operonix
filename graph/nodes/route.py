@@ -6,6 +6,8 @@ Route node: Routing engine for execution method selection.
 Per migration plan §4.2, node 7:
 "route — candidate discovery, evaluation, ranking. Replaces tools/method_router.py
 with candidate-based routing engine."
+
+Phase 10 enhancement: Integrate actual candidate-based routing engine.
 """
 from __future__ import annotations
 
@@ -13,8 +15,11 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import MethodDecision, RoutingCandidate
+from migration.domain_contracts import MethodDecision, RoutingCandidate, RoutingDecision
 from graph.trace_collector import get_trace_collector
+from graph.candidate_discovery import get_candidate_discovery_service
+from graph.candidate_evaluation import get_candidate_evaluation_service
+from graph.ranking_policy import get_ranking_policy_service
 
 logger = logging.getLogger("Graph.Route")
 
