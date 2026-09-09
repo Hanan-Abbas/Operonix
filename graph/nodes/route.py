@@ -33,8 +33,7 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     - Ranks candidates and selects best method
     - Creates MethodDecision with routing information
     
-    In Phase 4, this is a stub that creates a placeholder MethodDecision.
-    Later phases will integrate candidate-based routing engine.
+    Phase 10 enhancement: Integrate actual candidate-based routing engine.
     
     Args:
         state: Current OperonixState
@@ -49,34 +48,56 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
         "current_step": state.plan.current_step.step_id if state.plan and state.plan.current_step else None
     })
     
-    # In Phase 4, we create a placeholder routing decision
-    # Later phases will integrate with:
-    # - from tools.method_router import MethodRouter
-    # - from tools.routing_decision import RoutingDecision
-    # - Candidate discovery from capabilities, plugins, tools
-    
-    logger.info("ROUTE: Candidate-based routing engine deferred to later phases")
-    
-    # Create placeholder routing candidate
-    candidate = RoutingCandidate(
-        method_type="SHELL",
-        tool_id=None,
-        capability_id="execute_intent",
-        plugin_id=None,
-        capability_fit=0.8,
-        context_fit=0.7,
-        availability=1.0,
-        reliability=0.9,
-        overall_score=0.8
-    )
-    
-    # Create placeholder method decision
-    method_decision = MethodDecision(
-        selected_candidate=candidate,
-        confidence=0.8,
-        candidates_considered=[candidate],
-        routing_explanation="Placeholder routing (Phase 4 stub)"
-    )
+    # Phase 10: Integrate actual candidate-based routing engine
+    try:
+        # Get services
+        discovery_service = get_candidate_discovery_service()
+        evaluation_service = get_candidate_evaluation_service()
+        ranking_service = get_ranking_policy_service()
+        
+        # Get current step
+        if not state.plan or not state.plan.current_step:
+            logger.warning("No plan or current step, using fallback routing")
+            method_decision = _create_fallback_decision(state)
+        else:
+            # Discover candidates
+            candidates = discovery_service.discover_candidates(
+                plan_step=state.plan.current_step,
+                intent=state.intent,
+                context=state.context if isinstance(state.context, dict) else None
+            )
+            
+            logger.info(f"Discovered {len(candidates)} candidates")
+            
+            # Evaluate candidates
+            evaluations = evaluation_service.evaluate_candidates(
+                candidates=candidates,
+                plan_step=state.plan.current_step,
+                intent=state.intent,
+                context=state.context if isinstance(state.context, dict) else None
+            )
+            
+            logger.info(f"Evaluated {len(evaluations)} candidates")
+            
+            # Rank candidates
+            ranked_evaluations = ranking_service.rank_candidates(evaluations)
+            
+            logger.info(f"Ranked {len(ranked_evaluations)} candidates")
+            
+            # Make routing decision
+            routing_decision = ranking_service.make_routing_decision(ranked_evaluations)
+            
+            if routing_decision:
+                # Convert RoutingDecision to MethodDecision for compatibility
+                method_decision = _convert_to_method_decision(routing_decision)
+                logger.info(f"Routing decision: {method_decision.selected_candidate.method_type} (confidence: {method_decision.confidence})")
+            else:
+                logger.warning("No valid routing decision, using fallback")
+                method_decision = _create_fallback_decision(state)
+        
+    except Exception as e:
+        logger.error(f"Error in candidate-based routing: {e}, using fallback")
+        method_decision = _create_fallback_decision(state)
     
     state.routing = method_decision
     
@@ -108,10 +129,85 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("route_completed", {
         "task_id": state.task.task_id,
-        "selected_method": candidate.method_type,
+        "selected_method": method_decision.selected_candidate.method_type,
         "confidence": method_decision.confidence
     })
     
     state.update_timestamp()
     
     return {"state": state}
+
+
+def _convert_to_method_decision(routing_decision: RoutingDecision) -> MethodDecision:
+    """Convert RoutingDecision to MethodDecision for compatibility.
+    
+    Args:
+        routing_decision: RoutingDecision from candidate-based routing
+        
+    Returns:
+        MethodDecision for compatibility with existing code
+    """
+    # Convert Candidate to RoutingCandidate
+    selected_routing_candidate = RoutingCandidate(
+        method_type=routing_decision.selected_candidate.candidate_type.value.upper(),
+        tool_id=routing_decision.selected_candidate.tool_id,
+        capability_id=routing_decision.selected_candidate.capability_id,
+        plugin_id=routing_decision.selected_candidate.plugin_id,
+        capability_fit=routing_decision.selected_candidate.capability_fit,
+        context_fit=routing_decision.selected_candidate.context_fit,
+        availability=routing_decision.selected_candidate.availability,
+        reliability=routing_decision.selected_candidate.reliability,
+        overall_score=routing_decision.selected_candidate.overall_score
+    )
+    
+    # Convert all candidates
+    candidates_considered = [
+        RoutingCandidate(
+            method_type=c.candidate_type.value.upper(),
+            tool_id=c.tool_id,
+            capability_id=c.capability_id,
+            plugin_id=c.plugin_id,
+            capability_fit=c.capability_fit,
+            context_fit=c.context_fit,
+            availability=c.availability,
+            reliability=c.reliability,
+            overall_score=c.overall_score
+        )
+        for c in routing_decision.candidates_considered
+    ]
+    
+    return MethodDecision(
+        selected_candidate=selected_routing_candidate,
+        confidence=routing_decision.confidence,
+        candidates_considered=candidates_considered,
+        routing_explanation=routing_decision.routing_explanation
+    )
+
+
+def _create_fallback_decision(state: OperonixState) -> MethodDecision:
+    """Create fallback routing decision.
+    
+    Args:
+        state: Current OperonixState
+        
+    Returns:
+        Fallback MethodDecision
+    """
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
+        capability_id="execute_intent",
+        plugin_id=None,
+        capability_fit=0.8,
+        context_fit=0.7,
+        availability=1.0,
+        reliability=0.9,
+        overall_score=0.8
+    )
+    
+    return MethodDecision(
+        selected_candidate=candidate,
+        confidence=0.8,
+        candidates_considered=[candidate],
+        routing_explanation="Fallback routing (candidate-based routing failed or unavailable)"
+    )
