@@ -187,6 +187,8 @@ def _check_postconditions(state: OperonixState) -> bool:
     This is used during recovery to determine if a failed operation may have
     already succeeded. If postconditions are met, we can continue instead of retrying.
     
+    Phase 9/10 enhancement: Integrate actual context services for postcondition checking.
+    
     Args:
         state: Current OperonixState
         
@@ -199,9 +201,6 @@ def _check_postconditions(state: OperonixState) -> bool:
     
     current_step = state.plan.steps[state.plan.current_step_index]
     
-    # In Phase 6, we implement basic postcondition checking
-    # Later phases will integrate with actual context observation
-    
     expected_outcome = current_step.expected_outcome if hasattr(current_step, 'expected_outcome') else current_step.objective
     
     # Basic postcondition check: if we have a verification result, check its status
@@ -209,11 +208,53 @@ def _check_postconditions(state: OperonixState) -> bool:
         logger.info(f"Postconditions already verified for step {current_step.step_id}")
         return True
     
-    # If verification failed or uncertain, check if we can observe the expected state
-    # For Phase 6, this is a stub - later phases will implement actual context checking
-    # Example: if step is "create file /tmp/test.txt", check if file exists
+    # Integrate actual context checking for postconditions
+    # Gather current context to check if expected state is already present
+    try:
+        context_snapshot = _gather_context_snapshot(state)
+        
+        # Check postconditions based on step objective
+        # This is a simplified implementation - a full implementation would parse
+        # the objective and check specific conditions (file exists, window open, etc.)
+        
+        objective_lower = expected_outcome.lower()
+        
+        # Check for file existence
+        if "file" in objective_lower and ("create" in objective_lower or "write" in objective_lower):
+            # Extract file path from objective (simplified)
+            import os
+            import re
+            
+            # Try to find a path in the objective
+            path_match = re.search(r'[~/]?[\w/\\]+[\w/\\]*\.\w+', expected_outcome)
+            if path_match:
+                file_path = path_match.group(0)
+                if os.path.exists(file_path):
+                    logger.info(f"Postcondition met: file {file_path} exists")
+                    return True
+        
+        # Check for application/window
+        if "open" in objective_lower and ("app" in objective_lower or "application" in objective_lower):
+            # Check if the app is already in the current window
+            if context_snapshot.get("app_name") and context_snapshot["app_name"].lower() in objective_lower:
+                logger.info(f"Postcondition met: app {context_snapshot['app_name']} is already open")
+                return True
+        
+        # Check for directory
+        if "directory" in objective_lower or "folder" in objective_lower:
+            import os
+            import re
+            
+            path_match = re.search(r'[~/]?[\w/\\]+', expected_outcome)
+            if path_match:
+                dir_path = path_match.group(0)
+                if os.path.isdir(dir_path):
+                    logger.info(f"Postcondition met: directory {dir_path} exists")
+                    return True
+        
+    except Exception as e:
+        logger.error(f"Error checking postconditions with context: {e}")
     
     # Placeholder: assume postconditions not met (safe default)
-    # Later phases will implement actual context observation
-    logger.info(f"Postcondition check for step {current_step.step_id}: cannot determine (Phase 6 stub)")
+    logger.info(f"Postcondition check for step {current_step.step_id}: postconditions not met")
     return False
