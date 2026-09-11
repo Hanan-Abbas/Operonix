@@ -6,6 +6,8 @@ Retrieve knowledge node: RAG/memory integration.
 Per migration plan §4.2, node 5:
 "retrieve_knowledge — may be a no-op initially. Calls memory/vector_store to
 retrieve relevant context for the current task."
+
+Phase 11 enhancement: Full integration with RAG/memory services.
 """
 from __future__ import annotations
 
