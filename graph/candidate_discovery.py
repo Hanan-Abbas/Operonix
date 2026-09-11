@@ -46,7 +46,43 @@ class CandidateDiscoveryService:
         self.available_apis: Dict[str, Dict[str, Any]] = {}
         self.available_tools: Dict[str, Dict[str, Any]] = {}
         
+        # Phase 12: Integrate with plugin manifest registry
+        self._sync_from_plugin_manifest_registry()
+        
         logger.info("CandidateDiscoveryService initialized")
+    
+    def _sync_from_plugin_manifest_registry(self) -> None:
+        """Sync available plugins from plugin manifest registry.
+        
+        Phase 12 enhancement: Automatically register plugins from the plugin manifest registry.
+        """
+        try:
+            from plugins.plugin_manifest import get_plugin_manifest_registry
+            
+            registry = get_plugin_manifest_registry()
+            manifests = registry.get_all_manifests()
+            
+            for plugin_id, manifest in manifests.items():
+                # Convert manifest to plugin info format
+                plugin_info = {
+                    "plugin_id": manifest.plugin_id,
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "description": manifest.description,
+                    "category": manifest.category.value,
+                    "capabilities": [c.capability_id for c in manifest.capabilities],
+                    "permissions": [p.value for p in manifest.permissions],
+                    "dependencies": manifest.dependencies,
+                    "metadata": manifest.metadata
+                }
+                
+                self.available_plugins[plugin_id] = plugin_info
+                
+            logger.info(f"Synced {len(manifests)} plugins from plugin manifest registry")
+        except ImportError:
+            logger.warning("Could not import plugin manifest registry")
+        except Exception as e:
+            logger.error(f"Error syncing from plugin manifest registry: {e}")
     
     def register_plugin(self, plugin_id: str, plugin_info: Dict[str, Any]) -> None:
         """Register a plugin as available.
