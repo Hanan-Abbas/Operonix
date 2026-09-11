@@ -27,10 +27,9 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     This node:
     - Calls memory/vector_store to retrieve relevant context
     - Retrieves episodic memories, documents, learned patterns
-    - May be a no-op initially if RAG/memory not yet integrated
+    - Integrates with LongTermMemory, SessionMemory, VectorStore, Retriever
     
-    In Phase 4, this is a stub that creates a placeholder KnowledgeContext.
-    Later phases will integrate with existing memory/ and vector_store.
+    Phase 11 enhancement: Full integration with RAG/memory services.
     
     Args:
         state: Current OperonixState
@@ -45,21 +44,91 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         "intent": state.intent.name if state.intent else None
     })
     
-    # In Phase 4, we create a placeholder knowledge context
-    # Later phases will integrate with:
-    # - from memory.episodic import EpisodicMemory
-    # - from memory.long_term_memory import LongTermMemory
-    # - from memory.vector_store import VectorStore
-    # - from learning.retriever import Retriever
+    # Phase 11: Integrate with actual RAG/memory services
+    retrieved_memories = []
+    retrieved_documents = []
+    learned_patterns = []
+    provenance = {}
     
-    logger.info("RETRIEVE_KNOWLEDGE: RAG/memory integration deferred to later phases")
+    try:
+        # Try to retrieve from LongTermMemory
+        try:
+            from memory.long_term_memory import long_term_memory
+            
+            if state.intent:
+                past_tasks = long_term_memory.search_past_tasks(
+                    intent=state.intent.name,
+                    limit=5
+                )
+                retrieved_memories.extend(past_tasks)
+                provenance["long_term_memory"] = len(past_tasks)
+                
+                logger.info(f"Retrieved {len(past_tasks)} memories from LongTermMemory")
+        except ImportError:
+            logger.warning("Could not import LongTermMemory")
+        except Exception as e:
+            logger.error(f"Error retrieving from LongTermMemory: {e}")
+        
+        # Try to retrieve from SessionMemory
+        try:
+            from memory.session_memory import session_memory
+            
+            if hasattr(session_memory, 'get_recent_tasks'):
+                recent_tasks = session_memory.get_recent_tasks(limit=5)
+                retrieved_memories.extend(recent_tasks)
+                provenance["session_memory"] = len(recent_tasks)
+                
+                logger.info(f"Retrieved {len(recent_tasks)} memories from SessionMemory")
+        except ImportError:
+            logger.warning("Could not import SessionMemory")
+        except Exception as e:
+            logger.error(f"Error retrieving from SessionMemory: {e}")
+        
+        # Try to retrieve from VectorStore (if available)
+        try:
+            from memory.vector_store import vector_store
+            
+            if state.intent:
+                similar_docs = vector_store.search(
+                    query=state.intent.name,
+                    limit=5
+                )
+                retrieved_documents.extend(similar_docs)
+                provenance["vector_store"] = len(similar_docs)
+                
+                logger.info(f"Retrieved {len(similar_docs)} documents from VectorStore")
+        except ImportError:
+            logger.warning("Could not import VectorStore")
+        except Exception as e:
+            logger.error(f"Error retrieving from VectorStore: {e}")
+        
+        # Try to retrieve learned patterns from Retriever (if available)
+        try:
+            from learning.retriever import retriever
+            
+            if state.intent:
+                patterns = retriever.retrieve_patterns(
+                    intent=state.intent.name,
+                    context=state.context if isinstance(state.context, dict) else None
+                )
+                learned_patterns.extend(patterns)
+                provenance["retriever"] = len(patterns)
+                
+                logger.info(f"Retrieved {len(patterns)} patterns from Retriever")
+        except ImportError:
+            logger.warning("Could not import Retriever")
+        except Exception as e:
+            logger.error(f"Error retrieving from Retriever: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error in knowledge retrieval: {e}")
     
-    # Create placeholder knowledge context
+    # Create knowledge context
     knowledge_context = KnowledgeContext(
-        retrieved_memories=[],
-        retrieved_documents=[],
-        learned_patterns=[],
-        provenance={"note": "RAG/memory integration deferred to later phases"}
+        retrieved_memories=retrieved_memories,
+        retrieved_documents=retrieved_documents,
+        learned_patterns=learned_patterns,
+        provenance=provenance if provenance else {"note": "No knowledge services available"}
     )
     
     state.knowledge = knowledge_context
@@ -79,7 +148,8 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     state.add_history_event("retrieve_knowledge_completed", {
         "task_id": state.task.task_id,
         "num_memories": len(knowledge_context.retrieved_memories),
-        "num_documents": len(knowledge_context.retrieved_documents)
+        "num_documents": len(knowledge_context.retrieved_documents),
+        "num_patterns": len(knowledge_context.learned_patterns)
     })
     
     state.update_timestamp()
