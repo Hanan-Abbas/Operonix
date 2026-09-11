@@ -6,6 +6,8 @@ Execute step node: Executor integration.
 Per migration plan §4.2, node 9:
 "execute_step — calls executor/executor.py with method_decision. Writes
 state.execution. Handles retries and fallbacks."
+
+Executor Integration Phase: Integrate actual executor module.
 """
 from __future__ import annotations
 
