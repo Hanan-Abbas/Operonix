@@ -112,10 +112,13 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
 def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
     """Gather context snapshot using actual context services.
     
+    Phase 11 enhancement: Full integration with all context services.
     This integrates with:
     - WindowDetector (for window title, app name, cwd)
     - AppClassifier (for app type classification)
     - StateExtractor (for deep UI state)
+    - FocusTracker (for focus tracking)
+    - ContextValidator (for context validation)
     
     Args:
         state: Current OperonixState
@@ -128,17 +131,19 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         "app_name": "Unknown",
         "app_type": "unknown",
         "cwd": None,
-        "state": {}
+        "window_pid": None,
+        "confidence": 0.0,
+        "sub_context": {},
+        "state": {},
+        "focus": {},
+        "validation": {}
     }
     
     try:
         # Try to get context from WindowDetector
-        # The WindowDetector is an async service that publishes to event bus
-        # For the graph node, we'll try to import and use it synchronously
         try:
             from context.window_detector import window_detector
             
-            # WindowDetector is async, but we can try to get the last snapshot
             if hasattr(window_detector, '_last_external_snapshot') and window_detector._last_external_snapshot:
                 snapshot = window_detector._last_external_snapshot
                 context_data["window_title"] = snapshot.get("window_title", "Unknown")
@@ -146,8 +151,8 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
                 context_data["app_type"] = snapshot.get("app_type", "unknown")
                 context_data["cwd"] = snapshot.get("cwd")
                 context_data["window_pid"] = snapshot.get("window_pid")
-                context_data["confidence"] = snapshot.get("confidence")
-                context_data["sub_context"] = snapshot.get("sub_context")
+                context_data["confidence"] = snapshot.get("confidence", 0.0)
+                context_data["sub_context"] = snapshot.get("sub_context", {})
                 
                 logger.info(f"Context snapshot from WindowDetector: {context_data['window_title']}")
             else:
@@ -157,11 +162,30 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error getting context from WindowDetector: {e}")
         
+        # Phase 11: Try to get app classification from AppClassifier
+        try:
+            from context.app_classifier import app_classifier
+            
+            if context_data.get("window_title"):
+                classification = app_classifier.classify_app(
+                    context_data["window_title"],
+                    context_data.get("app_name")
+                )
+                if classification:
+                    context_data["app_type"] = classification.get("app_type", context_data["app_type"])
+                    context_data["app_category"] = classification.get("category")
+                    context_data["app_confidence"] = classification.get("confidence", 0.0)
+                    
+                    logger.debug(f"App classification: {context_data['app_type']}")
+        except ImportError:
+            logger.warning("Could not import AppClassifier")
+        except Exception as e:
+            logger.error(f"Error getting app classification: {e}")
+        
         # Try to get deep state from StateExtractor
         try:
             from context.state_extractor import state_extractor
             
-            # StateExtractor is async, but we can try to get heuristics
             if context_data.get("window_title"):
                 heuristics = state_extractor._get_heuristics(
                     context_data["window_title"],
@@ -174,6 +198,42 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
             logger.warning("Could not import StateExtractor")
         except Exception as e:
             logger.error(f"Error getting state from StateExtractor: {e}")
+        
+        # Phase 11: Try to get focus information from FocusTracker
+        try:
+            from context.focus_tracker import focus_tracker
+            
+            focus_info = focus_tracker.get_current_focus()
+            if focus_info:
+                context_data["focus"] = {
+                    "focused_element": focus_info.get("element"),
+                    "focused_window": focus_info.get("window"),
+                    "focus_timestamp": focus_info.get("timestamp")
+                }
+                
+                logger.debug(f"Focus info: {context_data['focus']}")
+        except ImportError:
+            logger.warning("Could not import FocusTracker")
+        except Exception as e:
+            logger.error(f"Error getting focus info: {e}")
+        
+        # Phase 11: Try to validate context with ContextValidator
+        try:
+            from context.context_validator import context_validator
+            
+            validation_result = context_validator.validate_context(context_data)
+            if validation_result:
+                context_data["validation"] = {
+                    "is_valid": validation_result.get("is_valid", True),
+                    "validation_errors": validation_result.get("errors", []),
+                    "validation_warnings": validation_result.get("warnings", [])
+                }
+                
+                logger.debug(f"Context validation: {context_data['validation']}")
+        except ImportError:
+            logger.warning("Could not import ContextValidator")
+        except Exception as e:
+            logger.error(f"Error validating context: {e}")
         
     except Exception as e:
         logger.error(f"Error gathering context snapshot: {e}")
