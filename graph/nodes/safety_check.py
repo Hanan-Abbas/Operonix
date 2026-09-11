@@ -6,6 +6,8 @@ Safety check node: Safety authorization and validation.
 Per migration plan §4.2, node 8:
 "safety_check — calls safety/validator, permission_guard, risk_rules. Writes
 state.safety. May require confirmation."
+
+Safety Check Integration Phase: Integrate actual safety modules.
 """
 from __future__ import annotations
 
