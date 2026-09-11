@@ -48,7 +48,7 @@ def test_observe_node_integrates_state_extractor():
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource
     
-    task = Request(user_input="Test", source=TaskSource.VOICE)
+    task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     result = observe_node(state)
