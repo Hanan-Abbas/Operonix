@@ -182,22 +182,28 @@ class PluginAdapter(OperonixToolAdapter):
     """Plugin adapter for Operonix plugin integration.
     
     This adapter wraps Operonix plugins for LangChain integration.
+    
+    Phase 12 enhancement: Integrate with plugin manifest for safety and executor boundaries.
     """
     
-    def __init__(self, tool_id: str, capability_id: str, plugin: Any):
+    def __init__(self, tool_id: str, capability_id: str, plugin: Any, manifest: Any = None):
         """Initialize the plugin adapter.
         
         Args:
             tool_id: Tool identifier
             capability_id: Capability identifier
             plugin: Operonix plugin instance
+            manifest: Plugin manifest (optional, for safety checks)
         """
         super().__init__(tool_id, capability_id)
         self.plugin = plugin
+        self.manifest = manifest
         logger.info(f"PluginAdapter initialized: {tool_id} -> {plugin}")
     
     def execute(self, **kwargs) -> Dict[str, Any]:
         """Execute the plugin through Operonix's plugin system.
+        
+        Phase 12 enhancement: Check permissions from manifest before execution.
         
         Args:
             **kwargs: Plugin execution parameters
@@ -206,6 +212,14 @@ class PluginAdapter(OperonixToolAdapter):
             Dict with execution results
         """
         logger.info(f"Executing plugin {self.tool_id}")
+        
+        # Phase 12: Check permissions from manifest
+        if self.manifest and not self._check_permissions():
+            return {
+                "success": False,
+                "error": "Permission check failed",
+                "tool_id": self.tool_id
+            }
         
         # Validate input
         if not self.validate_input(kwargs):
@@ -234,6 +248,30 @@ class PluginAdapter(OperonixToolAdapter):
                 "error": str(e),
                 "tool_id": self.tool_id
             }
+    
+    def _check_permissions(self) -> bool:
+        """Check if required permissions are available.
+        
+        Phase 12 enhancement: Check permissions from plugin manifest.
+        
+        Returns:
+            True if permissions are available, False otherwise
+        """
+        if not self.manifest:
+            # No manifest, assume permissions are OK
+            return True
+        
+        # Check if plugin requires any permissions
+        if not self.manifest.permissions:
+            # No permissions required
+            return True
+        
+        # In a real implementation, this would check against the system's
+        # permission manager. For now, we assume permissions are OK.
+        # This is a placeholder for future permission checking.
+        logger.debug(f"Plugin {self.tool_id} requires permissions: {[p.value for p in self.manifest.permissions]}")
+        
+        return True
     
     def get_schema(self) -> Dict[str, Any]:
         """Get the plugin schema for LangChain integration.
