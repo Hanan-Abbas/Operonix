@@ -144,7 +144,7 @@ def test_safety_check_node_forbidden_pattern_rejection():
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
-    task = Request(user_input="Test", source=TaskSource.VOICE)
+    task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
     step = PlanStep(
         step_id="step_1",
