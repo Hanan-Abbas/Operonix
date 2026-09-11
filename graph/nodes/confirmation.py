@@ -4,6 +4,8 @@ Confirmation Node — Operonix Graph
 
 Confirmation node: Handles human intervention for safety checks.
 Per migration plan Phase 7: Checkpointing, Pause/Resume & Human Intervention
+
+Safety Check Integration Phase: Confirmation flow is already integrated via graph conditional edges.
 """
 from __future__ import annotations
 
