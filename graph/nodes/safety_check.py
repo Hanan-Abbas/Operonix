@@ -65,7 +65,7 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
             
             if current_step:
                 step_action = getattr(current_step, 'action', None) or getattr(current_step, 'objective', '')
-                step_args = getattr(current_step, 'parameters', {}) or {}
+                step_args = getattr(current_step, 'arguments', {}) or {}
                 
                 # Assess risk based on step action
                 if 'command' in step_action.lower() or 'shell' in step_action.lower():
@@ -119,7 +119,7 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
         try:
             if current_step and state.context:
                 step_action = getattr(current_step, 'action', None) or getattr(current_step, 'objective', '')
-                step_args = getattr(current_step, 'parameters', {}) or {}
+                step_args = getattr(current_step, 'arguments', {}) or {}
                 
                 # Check for forbidden patterns
                 forbidden_patterns = [r"node_modules", r"\.env$", r"\.git"]
