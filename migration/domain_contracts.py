@@ -10,6 +10,7 @@ All contracts use Pydantic for validation and serialization.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any, Optional, Literal, Dict, List
 from datetime import datetime
 from enum import Enum
@@ -140,8 +141,8 @@ class PlanStep(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
     # Idempotency and side-effect classification
-    idempotency: Literal["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"] = "CONDITIONAL"
-    side_effect: Literal["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"] = "LIMITED_SIDE_EFFECT"
+    idempotency: PlanStepIdempotency = PlanStepIdempotency.CONDITIONAL
+    side_effect: PlanStepSideEffect = PlanStepSideEffect.LOCAL
     reversibility: bool = False
     preconditions: List[str] = Field(default_factory=list)
     postconditions: List[str] = Field(default_factory=list)
