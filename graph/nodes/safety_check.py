@@ -61,7 +61,7 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
         
         # 1. Risk assessment using risk_rules
         try:
-            from safety.risk_rules import get_command_risk, get_file_op_risk, get_web_op_risk
+            from safety.risk_rules import get_command_risk, get_file_op_risk, get_web_op_risk, RiskLevel as SafetyRiskLevel
             
             if current_step:
                 step_action = getattr(current_step, 'action', None) or getattr(current_step, 'objective', '')
@@ -70,19 +70,31 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
                 # Assess risk based on step action
                 if 'command' in step_action.lower() or 'shell' in step_action.lower():
                     command = step_args.get('command', '')
-                    risk_level = get_command_risk(command)
+                    safety_risk = get_command_risk(command)
                     safety_checks_performed.append("command_risk_assessment")
                 elif 'file' in step_action.lower():
                     path = step_args.get('path', '')
-                    risk_level = get_file_op_risk(step_action, path)
+                    safety_risk = get_file_op_risk(step_action, path)
                     safety_checks_performed.append("file_risk_assessment")
                 elif 'web' in step_action.lower() or 'api' in step_action.lower():
                     url = step_args.get('url', '')
-                    risk_level = get_web_op_risk(url)
+                    safety_risk = get_web_op_risk(url)
                     safety_checks_performed.append("web_risk_assessment")
                 else:
-                    risk_level = RiskLevel.LOW
+                    safety_risk = SafetyRiskLevel.LOW
                     safety_checks_performed.append("default_risk_assessment")
+                
+                # Convert safety.risk_rules.RiskLevel to migration.domain_contracts.RiskLevel
+                if safety_risk == SafetyRiskLevel.SAFE:
+                    risk_level = RiskLevel.SAFE
+                elif safety_risk == SafetyRiskLevel.LOW:
+                    risk_level = RiskLevel.LOW
+                elif safety_risk == SafetyRiskLevel.HIGH:
+                    risk_level = RiskLevel.HIGH
+                elif safety_risk == SafetyRiskLevel.FORBIDDEN:
+                    risk_level = RiskLevel.FORBIDDEN
+                else:
+                    risk_level = RiskLevel.LOW
                 
                 logger.info(f"Risk assessment: {risk_level.value}")
         except ImportError:
