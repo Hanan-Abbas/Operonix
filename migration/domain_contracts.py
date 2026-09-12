@@ -246,6 +246,7 @@ class SafetyDecision(BaseModel):
     policy_constraints: List[str] = Field(default_factory=list)
     safety_checks_performed: List[str] = Field(default_factory=list)
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    additional_info: Dict[str, Any] = Field(default_factory=dict)
     
     class Config:
         json_encoders = {
