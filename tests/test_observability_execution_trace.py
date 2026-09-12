@@ -167,7 +167,7 @@ def test_execution_trace_end_trace():
     trace = ExecutionTrace(task_id="test_task")
     trace.end_trace(task_id="test_task", success=True, final_outcome="Task completed")
     
-    (assert trace.completed_at is not None)
+    assert trace.completed_at is not None
     assert trace.success is True
     assert trace.final_outcome == "Task completed"
 
