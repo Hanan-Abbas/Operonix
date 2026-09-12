@@ -59,6 +59,15 @@ class TaskRequest(BaseModel):
 
 # ─── INTENT ───────────────────────────────────────────────────────────────────
 
+class IntentType(str, Enum):
+    """Type of intent."""
+    ACTION = "action"
+    QUERY = "query"
+    NAVIGATION = "navigation"
+    INFORMATION = "information"
+    CONFIRMATION = "confirmation"
+
+
 class IntentResult(BaseModel):
     """Result of intent parsing/analysis."""
     name: str
