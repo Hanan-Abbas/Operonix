@@ -105,6 +105,33 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         }
     )
     
+    # Phase 14: Collect performance feedback for learning
+    try:
+        from graph.learning_integration import get_learning_integration
+        
+        learning_integration = get_learning_integration()
+        
+        # Extract execution time from result data
+        execution_time = state.execution.result_data.get("execution_time", 0.0)
+        
+        # Get intent from state
+        intent = state.intent.name if state.intent else "unknown"
+        
+        # Collect performance feedback
+        learning_integration.collect_performance_feedback(
+            task_id=state.task.task_id,
+            intent=intent,
+            method_type=state.execution.method_used,
+            success=state.execution.success,
+            execution_time=execution_time,
+            retry_count=state.execution.result_data.get("retry_count", 0),
+            fallback_used=state.execution.result_data.get("fallback_used", False)
+        )
+    except ImportError:
+        logger.warning("Could not import learning_integration, skipping performance feedback")
+    except Exception as e:
+        logger.error(f"Error collecting performance feedback: {e}")
+    
     # Update plan progress if execution succeeded
     if state.execution.success and state.plan and state.plan.current_step:
         state.plan.current_step_index += 1
