@@ -112,6 +112,23 @@ class KnowledgeContext(BaseModel):
 
 # ─── PLANNING ─────────────────────────────────────────────────────────────────
 
+class PlanStepIdempotency(str, Enum):
+    """Idempotency classification for plan steps."""
+    IDEMPOTENT = "idempotent"
+    CONDITIONAL = "conditional"
+    NON_IDEMPOTENT = "non_idempotent"
+
+
+class PlanStepSideEffect(str, Enum):
+    """Side-effect classification for plan steps."""
+    NONE = "none"
+    READ_ONLY = "read_only"
+    REVERSIBLE = "reversible"
+    LOCAL = "local"
+    DESTRUCTIVE = "destructive"
+    EXTERNAL_COMMIT = "external_commit"
+
+
 class PlanStep(BaseModel):
     """A single step in an execution plan."""
     step_id: str
