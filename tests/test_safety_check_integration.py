@@ -26,7 +26,7 @@ def test_safety_check_node_integrates_risk_rules():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "ls -la"}
+        arguments={"command": "ls -la"}
     )
     
     plan = Plan(
@@ -88,7 +88,7 @@ def test_safety_check_node_integrates_validator():
         objective="Write file",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.LOCAL,
-        parameters={"path": "/home/user/test.txt"}
+        arguments={"path": "/home/user/test.txt"}
     )
     
     plan = Plan(
@@ -119,7 +119,7 @@ def test_safety_check_node_high_risk_requires_confirmation():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "rm -rf /"}  # High risk command
+        arguments={"command": "rm -rf /"}  # High risk command
     )
     
     plan = Plan(
@@ -152,7 +152,7 @@ def test_safety_check_node_forbidden_pattern_rejection():
         objective="Write file",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.LOCAL,
-        parameters={"path": "/home/user/.env"}  # Forbidden pattern
+        arguments={"path": "/home/user/.env"}  # Forbidden pattern
     )
     
     plan = Plan(
@@ -201,7 +201,7 @@ def test_safety_check_node_trace_event_collection():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "ls -la"}
+        arguments={"command": "ls -la"}
     )
     
     plan = Plan(
@@ -233,7 +233,7 @@ def test_safety_check_node_file_operation_risk():
         objective="Delete file",
         idempotency=PlanStepIdempotency.NON_IDEMPOTENT,
         side_effect=PlanStepSideEffect.DESTRUCTIVE,
-        parameters={"path": "/home/user/test.txt"}
+        arguments={"path": "/home/user/test.txt"}
     )
     
     plan = Plan(
@@ -264,7 +264,7 @@ def test_safety_check_node_web_operation_risk():
         objective="Make web request",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.EXTERNAL_COMMIT,
-        parameters={"url": "https://example.com"}
+        arguments={"url": "https://example.com"}
     )
     
     plan = Plan(
@@ -295,7 +295,7 @@ def test_safety_check_node_graceful_degradation():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "ls -la"}
+        arguments={"command": "ls -la"}
     )
     
     plan = Plan(
@@ -328,7 +328,7 @@ def test_safety_check_node_safety_checks_performed_tracking():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "ls -la"}
+        arguments={"command": "ls -la"}
     )
     
     plan = Plan(
@@ -361,7 +361,7 @@ def test_safety_check_node_additional_info():
         objective="Write file",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.LOCAL,
-        parameters={"path": "/home/user/.env"}  # Forbidden pattern
+        arguments={"path": "/home/user/.env"}  # Forbidden pattern
     )
     
     plan = Plan(
