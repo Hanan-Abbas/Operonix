@@ -231,9 +231,8 @@ class RiskLevel(str, Enum):
     """Risk level classification."""
     SAFE = "safe"
     LOW = "low"
-    MEDIUM = "medium"
     HIGH = "high"
-    CRITICAL = "critical"
+    FORBIDDEN = "forbidden"
 
 
 class SafetyDecision(BaseModel):
