@@ -158,6 +158,9 @@ class CandidateDiscoveryService:
         vision_candidates = self._discover_vision_candidates(plan_step, intent, context)
         candidates.extend(vision_candidates)
         
+        # Phase 14: Apply learning-driven ranking adjustments
+        candidates = self._apply_learning_adjustments(candidates, intent, context)
+        
         logger.info(f"Discovered {len(candidates)} candidates for step {plan_step.step_id}")
         
         return candidates
@@ -401,6 +404,57 @@ class CandidateDiscoveryService:
                 return True
         
         return False
+    
+    def _apply_learning_adjustments(
+        self,
+        candidates: List[Candidate],
+        intent: Optional[IntentResult],
+        context: Optional[Dict[str, Any]]
+    ) -> List[Candidate]:
+        """Apply learning-driven ranking adjustments to candidates.
+        
+        Phase 14: Integrate historical signals into candidate ranking.
+        
+        Args:
+            candidates: List of discovered candidates
+            intent: Intent result
+            context: Current context
+            
+        Returns:
+            List of candidates with adjusted scores
+        """
+        try:
+            from graph.learning_integration import get_learning_integration
+            
+            learning_integration = get_learning_integration()
+            
+            # Get app context for historical ranking
+            app = context.get("app_name", "") if context else ""
+            intent_name = intent.name if intent else "unknown"
+            
+            # Apply learning adjustments to each candidate
+            for candidate in candidates:
+                # Get current score (default to 0.5 if not set)
+                current_score = getattr(candidate, 'score', 0.5)
+                
+                # Apply learning adjustment
+                adjusted_score = learning_integration.apply_learning_adjustment(
+                    candidate_score=current_score,
+                    intent=intent_name,
+                    method_type=candidate.candidate_type.value,
+                    app=app
+                )
+                
+                # Update candidate score
+                candidate.score = adjusted_score
+            
+            logger.debug(f"Applied learning adjustments to {len(candidates)} candidates")
+        except ImportError:
+            logger.warning("Could not import learning_integration, skipping learning adjustments")
+        except Exception as e:
+            logger.error(f"Error applying learning adjustments: {e}")
+        
+        return candidates
 
 
 # Global candidate discovery service instance
