@@ -93,6 +93,23 @@ class OperonixState(BaseModel):
         description="Safety authorization decision and constraints"
     )
     
+    # ─── CONFIRMATION ─────────────────────────────────────────────────────────
+    
+    confirmation: Optional[Any] = Field(
+        default=None,
+        description="Human intervention request for confirmation"
+    )
+    
+    paused: bool = Field(
+        default=False,
+        description="Whether the graph is paused for human intervention"
+    )
+    
+    checkpoint_id: Optional[str] = Field(
+        default=None,
+        description="Checkpoint ID for resume after pause"
+    )
+    
     # ─── EXECUTION ────────────────────────────────────────────────────────────
     
     execution: Optional[ExecutionResult] = Field(
