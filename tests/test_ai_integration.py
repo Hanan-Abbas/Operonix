@@ -166,7 +166,7 @@ def test_analyze_intent_node_with_state():
     
     assert "state" in result
     assert result["state"].intent is not None
-    assert result["state"].intent.name == "placeholder_intent"
+    assert result["state"].intent.name == "open_application"  # Placeholder logic detects "open" and "firefox"
     assert len(result["state"].history.get("events", [])) > 0
 
 
