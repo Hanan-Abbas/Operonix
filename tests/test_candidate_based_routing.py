@@ -189,10 +189,10 @@ def test_ranking_policy_custom_weights():
 
 def test_routing_decision_domain_object():
     """Test that MethodDecision is a valid domain object."""
-    from migration.domain_contracts import MethodDecision, Candidate, CandidateType
+    from migration.domain_contracts import MethodDecision, RoutingCandidate
     
-    candidate = Candidate(
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
         tool_id="shell",
         capability_id="execute_command",
         overall_score=0.9
@@ -211,17 +211,17 @@ def test_routing_decision_domain_object():
 
 def test_routing_decision_with_candidates_considered():
     """Test that MethodDecision can include all candidates considered."""
-    from migration.domain_contracts import MethodDecision, Candidate, CandidateType
+    from migration.domain_contracts import MethodDecision, RoutingCandidate
     
-    candidate1 = Candidate(
-        candidate_type=CandidateType.SHELL,
+    candidate1 = RoutingCandidate(
+        method_type="SHELL",
         tool_id="shell",
         capability_id="execute_command",
         overall_score=0.9
     )
     
-    candidate2 = Candidate(
-        candidate_type=CandidateType.API,
+    candidate2 = RoutingCandidate(
+        method_type="API",
         tool_id="api",
         capability_id="api_execute",
         overall_score=0.7
@@ -656,9 +656,9 @@ def test_route_node_fallback_on_error():
 
 
 def test_convert_to_method_decision():
-    """Test that MethodDecision can be converted from Candidate."""
+    """Test that MethodDecision can be converted from RoutingDecision."""
     from graph.nodes.route import _convert_to_method_decision
-    from migration.domain_contracts import Candidate, CandidateType
+    from migration.domain_contracts import RoutingDecision, Candidate, CandidateType
     
     candidate = Candidate(
         candidate_type=CandidateType.SHELL,
@@ -667,7 +667,14 @@ def test_convert_to_method_decision():
         overall_score=0.9
     )
     
-    method_decision = _convert_to_method_decision(candidate)
+    routing_decision = RoutingDecision(
+        selected_candidate=candidate,
+        confidence=0.9,
+        routing_explanation="Test conversion"
+    )
     
+    method_decision = _convert_to_method_decision(routing_decision)
+    
+    assert method_decision is not None
     assert method_decision.selected_candidate.method_type == "SHELL"
     assert method_decision.confidence == 0.9
