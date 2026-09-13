@@ -128,7 +128,7 @@ def test_create_plan_node_side_effect_classification():
     
     for step in result["state"].plan.steps:
         assert step.side_effect is not None
-        assert step.side_effect in ["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+        assert step.side_effect in ["none", "read_only", "reversible", "local", "destructive", "external_commit"]
 
 
 def test_create_plan_node_history_tracking():
