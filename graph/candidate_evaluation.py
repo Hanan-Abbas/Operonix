@@ -100,6 +100,10 @@ class CandidateEvaluationService:
         Returns:
             Candidate evaluation
         """
+        # Store original values for constraint checking
+        original_availability = candidate.availability
+        original_permissions = candidate.permissions
+        
         # Evaluate each metric
         candidate.capability_fit = self._evaluate_capability_fit(candidate, plan_step, intent)
         candidate.context_fit = self._evaluate_context_fit(candidate, context)
@@ -114,7 +118,12 @@ class CandidateEvaluationService:
         # Calculate overall score
         candidate.overall_score = self._calculate_overall_score(candidate)
         
-        # Check constraints
+        # Restore original values for constraint checking if they were explicitly set
+        if original_availability > 0:
+            candidate.availability = original_availability
+        if original_permissions > 0:
+            candidate.permissions = original_permissions
+        
         constraints_satisfied, constraint_violations = self._check_constraints(candidate, plan_step)
         
         evaluation = CandidateEvaluation(
