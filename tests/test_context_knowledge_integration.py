@@ -8,6 +8,7 @@ Per migration plan Phase 11: Context & Knowledge Integration
 from __future__ import annotations
 
 import pytest
+from migration.domain_contracts import FailureCategory
 
 
 # ─── OBSERVE NODE CONTEXT INTEGRATION TESTS ───────────────────────────────────
