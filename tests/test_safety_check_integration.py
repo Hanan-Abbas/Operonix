@@ -215,8 +215,8 @@ def test_safety_check_node_trace_event_collection():
     result = safety_check_node(state)
     
     # Check that history events were added
-    assert "safety_check_started" in result["state"].history
-    assert "safety_check_completed" in result["state"].history
+    assert "safety_check_started" in [event["type"] for event in result["state"].history.get("events", [])]
+    assert "safety_check_completed" in [event["type"] for event in result["state"].history.get("events", [])]
 
 
 def test_safety_check_node_file_operation_risk():
