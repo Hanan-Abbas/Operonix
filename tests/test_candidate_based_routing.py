@@ -647,7 +647,7 @@ def test_route_node_fallback_on_error():
     result = route_node(state)
     
     assert result["state"].routing is not None
-    assert "fallback" in result["state"].routing.routing_explanation.lower()
+    assert "fallback" in result["state"].routing.reasoning.lower()
 
 
 def test_convert_to_method_decision():
