@@ -288,15 +288,14 @@ def test_execute_step_node_collects_performance_feedback():
     """Test that execute_step_node collects performance feedback."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, IntentResult, IntentType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, RoutingCandidate, IntentResult
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
     intent = IntentResult(
         name="execute_command",
-        intent_type=IntentType.ACTION,
         confidence=0.9,
-        entities={}
+        parameters={}
     )
     
     step = PlanStep(
@@ -305,7 +304,7 @@ def test_execute_step_node_collects_performance_feedback():
         objective="Execute command",
         idempotency=PlanStepIdempotency.IDEMPOTENT,
         side_effect=PlanStepSideEffect.NONE,
-        parameters={"command": "ls -la"}
+        arguments={"command": "ls -la"}
     )
     
     plan = Plan(
@@ -314,18 +313,19 @@ def test_execute_step_node_collects_performance_feedback():
         current_step_index=0
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        confidence=0.9,
+        candidates_considered=[candidate],
+        rejected_candidates=[],
+        fallback_candidates=[]
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing, intent=intent)
