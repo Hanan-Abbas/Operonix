@@ -554,7 +554,7 @@ def test_plan_domain_object_consumable():
     step = PlanStep(
         step_id=str(uuid.uuid4()),
         action="test_action",
-        arguments={"key": "value"},
+        parameters={"key": "value"},
         objective="Test objective"
     )
     
