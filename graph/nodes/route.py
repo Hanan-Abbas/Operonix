@@ -12,10 +12,10 @@ Phase 10 enhancement: Integrate actual candidate-based routing engine.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import MethodDecision, RoutingCandidate, RoutingDecision
+from migration.domain_contracts import MethodDecision, RoutingCandidate, RoutingDecision, Candidate
 from graph.trace_collector import get_trace_collector
 from graph.candidate_discovery import get_candidate_discovery_service
 from graph.candidate_evaluation import get_candidate_evaluation_service
@@ -138,15 +138,35 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     return {"state": state}
 
 
-def _convert_to_method_decision(routing_decision: RoutingDecision) -> MethodDecision:
-    """Convert RoutingDecision to MethodDecision for compatibility.
+def _convert_to_method_decision(routing_decision: Union[RoutingDecision, Candidate]) -> MethodDecision:
+    """Convert RoutingDecision or Candidate to MethodDecision for compatibility.
     
     Args:
-        routing_decision: RoutingDecision from candidate-based routing
+        routing_decision: RoutingDecision from candidate-based routing or Candidate directly
         
     Returns:
         MethodDecision for compatibility with existing code
     """
+    # Handle Candidate directly
+    if isinstance(routing_decision, Candidate):
+        selected_routing_candidate = RoutingCandidate(
+            method_type=routing_decision.candidate_type.value.upper(),
+            tool_id=routing_decision.tool_id,
+            capability_id=routing_decision.capability_id,
+            plugin_id=routing_decision.plugin_id,
+            capability_fit=routing_decision.capability_fit,
+            context_fit=routing_decision.context_fit,
+            availability=routing_decision.availability,
+            reliability=routing_decision.reliability,
+            overall_score=routing_decision.overall_score
+        )
+        return MethodDecision(
+            selected_candidate=selected_routing_candidate,
+            confidence=routing_decision.overall_score,
+            routing_explanation="Direct candidate conversion"
+        )
+    
+    # Convert RoutingDecision to MethodDecision
     # Convert Candidate to RoutingCandidate
     selected_routing_candidate = RoutingCandidate(
         method_type=routing_decision.selected_candidate.candidate_type.value.upper(),
