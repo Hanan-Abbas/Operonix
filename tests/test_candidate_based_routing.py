@@ -201,12 +201,12 @@ def test_routing_decision_domain_object():
     decision = MethodDecision(
         selected_candidate=candidate,
         confidence=0.9,
-        reasoning="Best candidate"
+        routing_explanation="Best candidate"
     )
     
     assert decision.selected_candidate == candidate
     assert decision.confidence == 0.9
-    assert decision.reasoning == "Best candidate"
+    assert decision.routing_explanation == "Best candidate"
 
 
 def test_routing_decision_with_candidates_considered():
