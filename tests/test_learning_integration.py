@@ -288,7 +288,7 @@ def test_execute_step_node_collects_performance_feedback():
     """Test that execute_step_node collects performance feedback."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType, IntentResult, IntentType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, IntentResult, IntentType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
