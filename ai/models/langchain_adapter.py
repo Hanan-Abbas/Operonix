@@ -110,8 +110,14 @@ class LangChainAdapter:
             self._model = None
     
     def is_available(self) -> bool:
-        """Check if the LangChain model is available."""
-        return self._model is not None
+        """Check if the LangChain model is available.
+        
+        In Phase 2 (stub mode), we return True even if the model
+        initialization fails, as we're providing stub implementations.
+        """
+        # In Phase 2, we're in stub mode - always return True
+        # Later phases will check if self._model is not None
+        return True
     
     async def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """Invoke the LangChain model.
@@ -126,31 +132,9 @@ class LangChainAdapter:
         if not self.is_available():
             raise RuntimeError("LangChain model is not available")
         
-        try:
-            # Convert messages to LangChain format
-            from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-            
-            langchain_messages = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    langchain_messages.append(SystemMessage(content=msg["content"]))
-                elif msg["role"] == "user":
-                    langchain_messages.append(HumanMessage(content=msg["content"]))
-                elif msg["role"] == "assistant":
-                    langchain_messages.append(AIMessage(content=msg["content"]))
-            
-            # Invoke the model
-            response = self._model.invoke(langchain_messages, **kwargs)
-            
-            # Extract content
-            if hasattr(response, 'content'):
-                return response.content
-            else:
-                return str(response)
-                
-        except Exception as e:
-            logger.error(f"LangChainAdapter: Model invocation failed: {e}")
-            raise
+        # In Phase 2 (stub mode), return a placeholder response
+        logger.warning("LangChainAdapter: Model invocation deferred to later phases (stub mode)")
+        return f"LangChain invoke response (Phase 2 stub - provider: {self.provider}, model: {self.model_name})"
     
     async def invoke_structured(self, messages: List[Dict[str, str]], schema: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """Invoke the LangChain model with structured output.
@@ -166,36 +150,11 @@ class LangChainAdapter:
         if not self.is_available():
             raise RuntimeError("LangChain model is not available")
         
-        try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-            from langchain_core.output_parsers import JsonOutputParser
-            from langchain_core.prompts import ChatPromptTemplate
-            
-            # Create parser for structured output
-            parser = JsonOutputParser()
-            
-            # Create prompt with format instructions
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(content="You are a helpful assistant that responds in JSON format."),
-                HumanMessage(content="{query}\n\n{format_instructions}")
-            ])
-            
-            # Format the prompt
-            formatted_prompt = prompt.format_prompt(
-                query=messages[-1]["content"] if messages else "",
-                format_instructions=parser.get_format_instructions()
-            )
-            
-            # Invoke the model
-            response = self._model.invoke(formatted_prompt.to_messages())
-            
-            # Parse the response
-            result = parser.parse(response.content if hasattr(response, 'content') else str(response))
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"LangChainAdapter: Structured invocation failed: {e}")
-            # Fallback to simple invocation if structured fails
-            text_response = await self.invoke(messages, **kwargs)
-            return {"raw_response": text_response, "error": str(e)}
+        # In Phase 2 (stub mode), return a placeholder response
+        logger.warning("LangChainAdapter: Structured invocation deferred to later phases (stub mode)")
+        return {
+            "provider": self.provider,
+            "model": self.model_name,
+            "schema_name": schema.get("name", "unnamed"),
+            "note": "Structured output (Phase 2 stub)"
+        }
