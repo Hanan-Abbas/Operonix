@@ -280,6 +280,16 @@ def get_recovery_target(state: OperonixState) -> str:
     return "finalize"
 
 
+def needs_confirmation(state: OperonixState) -> str:
+    """Determine if confirmation is required based on safety decision.
+    
+    Exported for testing purposes.
+    """
+    if state.safety and state.safety.confirmation_required:
+        return "confirmation"
+    return "execute_step"
+
+
 # ─── GLOBAL GRAPH INSTANCE ─────────────────────────────────────────────────
 
 # Global graph runner instance
