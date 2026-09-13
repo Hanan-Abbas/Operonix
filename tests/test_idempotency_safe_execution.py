@@ -132,7 +132,7 @@ def test_limited_side_effect_safe_to_retry():
         parameters={},
         objective="Create file",
         idempotency="conditional",
-        side_effect="LIMITED_SIDE_EFFECT",
+        side_effect="local",
         reversibility=True
     )
     state.plan = Plan(steps=[step])
@@ -158,7 +158,7 @@ def test_non_reversible_operation_caution():
         parameters={},
         objective="Modify file",
         idempotency="conditional",
-        side_effect="LIMITED_SIDE_EFFECT",
+        side_effect="local",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
