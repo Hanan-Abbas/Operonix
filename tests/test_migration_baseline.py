@@ -451,8 +451,8 @@ def test_plan_step_idempotency_validation():
     from pydantic import ValidationError
     
     # Valid idempotency
-    step = PlanStep(step_id="test", action="test", idempotency="SAFE")
-    assert step.idempotency == "SAFE"
+    step = PlanStep(step_id="test", action="test", idempotency="idempotent")
+    assert step.idempotency == "idempotent"
     
     # Invalid idempotency
     with pytest.raises(ValidationError):
