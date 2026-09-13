@@ -16,7 +16,7 @@ def test_execute_step_node_integrates_tool_registry():
     """Test that execute_step_node integrates with tool_registry."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -43,7 +43,7 @@ def test_execute_step_node_integrates_tool_registry():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -96,7 +96,7 @@ def test_execute_step_node_retry_logic():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -130,7 +130,7 @@ def test_execute_step_node_fallback_logic():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[MethodType.UI, MethodType.API],
         reasoning="Test"
@@ -174,7 +174,7 @@ def test_execute_step_node_trace_event_collection():
     """Test that execute_step_node collects trace events."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -201,7 +201,7 @@ def test_execute_step_node_trace_event_collection():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -220,7 +220,7 @@ def test_execute_step_node_plan_progress_update():
     """Test that execute_step_node updates plan progress on success."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -247,7 +247,7 @@ def test_execute_step_node_plan_progress_update():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -267,7 +267,7 @@ def test_execute_step_node_error_handling():
     """Test that execute_step_node handles execution errors properly."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -294,7 +294,7 @@ def test_execute_step_node_error_handling():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -331,7 +331,7 @@ def test_execute_single_attempt():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -366,7 +366,7 @@ def test_execute_placeholder():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
@@ -384,7 +384,7 @@ def test_execute_step_node_graceful_degradation():
     """Test that execute_step_node degrades gracefully when tool_registry unavailable."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -411,7 +411,7 @@ def test_execute_step_node_graceful_degradation():
         score=0.9
     )
     
-    routing = RoutingDecision(
+    routing = MethodDecision(
         selected_candidate=candidate,
         fallback_chain=[],
         reasoning="Test"
