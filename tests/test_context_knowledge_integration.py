@@ -132,7 +132,7 @@ def test_observe_node_recovery_observation():
     
     recovery = RecoveryDecision(
         recovery_strategy=RecoveryStrategy.OBSERVE,
-        failure_category="TRANSIENT",
+        failure_category=FailureCategory.TRANSIENT,
         target_stage="execute_step"
     )
     
