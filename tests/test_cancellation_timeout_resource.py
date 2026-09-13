@@ -519,7 +519,9 @@ def test_get_active_ownerships():
     
     manager.acquire_resource(task_id="task_1", resource_type=ResourceType.KEYBOARD)
     manager.acquire_resource(task_id="task_1", resource_type=ResourceType.MOUSE)
-    manager.acquire_resource(task_id="task_2", resource_type=ResourceType.KEYBOARD)
+    # task_2 cannot acquire KEYBOARD because it's already locked by task_1
+    # This is correct behavior for physical resources
+    manager.acquire_resource(task_id="task_2", resource_type=ResourceType.DISPLAY)
     
     # Get all ownerships
     all_ownerships = manager.get_active_ownerships()
