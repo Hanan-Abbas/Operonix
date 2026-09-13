@@ -208,11 +208,11 @@ class RoutingCandidate(BaseModel):
 
 class MethodDecision(BaseModel):
     """Decision on which execution method to use."""
-    selected_candidate: Union[RoutingCandidate, Candidate]
+    selected_candidate: Union["RoutingCandidate", "Candidate"]
     confidence: float = Field(ge=0.0, le=1.0)
-    candidates_considered: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
-    rejected_candidates: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
-    fallback_candidates: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
+    candidates_considered: List[Union["RoutingCandidate", "Candidate"]] = Field(default_factory=list)
+    rejected_candidates: List[Union["RoutingCandidate", "Candidate"]] = Field(default_factory=list)
+    fallback_candidates: List[Union["RoutingCandidate", "Candidate"]] = Field(default_factory=list)
     policy_decision: Optional[str] = None
     safety_constraints: List[str] = Field(default_factory=list)
     routing_explanation: Optional[str] = None
@@ -776,6 +776,10 @@ class Candidate(BaseModel):
         
         self.overall_score = score
         return score
+
+
+# Rebuild MethodDecision now that Candidate is defined
+MethodDecision.model_rebuild()
 
 
 class CandidateEvaluation(BaseModel):
