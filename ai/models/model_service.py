@@ -112,7 +112,9 @@ class OperonixModelService:
                 config["temperature"] = getattr(settings, "OLLAMA_TEMPERATURE", 0.7)
                 
             elif self.provider == ModelProvider.GEMINI:
-        pi_key"s lt._larechig,_model "GEAoP Non  nnd fief._manger=in_etatt.is_(settin()
+                config["api_key"] = getattr(settings, "GEMINI_API_KEY", "")
+                config["temperature"] = getattr(settings, "GEMINI_TEMPERATURE", 0.7)
+                
             elif self.provider == ModelProvider.OPENROUTER:
                 config["api_key"] = getattr(settings, "OPENROUTER_API_KEY", "")
                 config["temperature"] = getattr(settings, "OPENROUTER_TEMPERATURE", 0.7)
@@ -126,8 +128,8 @@ class OperonixModelService:
             self._langchain_model = LangChainAdapter(
                 provider=self.provider.value,
                 model_name=self.model_name,
-                config=config (overrides config)
-            ) (overrides config)
+                config=config
+            )
             
             if self._langchain_model.is_available():
                 logger.info(f"LangChain model initialized successfully: {self.provider}/{self.model_name}")
@@ -140,24 +142,13 @@ class OperonixModelService:
         except Exception as e:
             logger.error(f"Failed to initialize LangChain model: {e}")
             self._langchain_model = None
-    Build kwargs for ivocation
-       kwrg = {}
-        if tmperatureisnot Non:
-           kwags["tmperae"]=temertur
-        if max_tknsi nt No:
-    def s   kwargs["max_vokans"]l= mlx_tok(ns
-e-      
-        bry:
-            reso:t =awit sef._c_.invoke(messages, **kwarg)
-            """Chec tfoe l stvcoipiable.cmpeduccsfully
-            # Laterresule
-       sex elckExcattiuaml  a:
-        viltlgg.r(f"Chatcopletin faile"
-            raise
+    
+    def is_available(self) -> bool:
+        """Check if the model service is available."""
         return self.provider is not None
     
     async def generate_chat_completion(
-        self, (overrides config)
+        self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None
@@ -170,18 +161,15 @@ e-
             max_tokens: Maximum tokens to generate
             
         Returns:
-          BuildGkwergrtfot invocariop
-o       kwnrgss= {}
-        if temeatu i nt No:
-            kw rgs["mpeature"]= temertur
+            Generated text response
+            
+        Raises:
+            RuntimeError: If model service is not available
+        """
+        if not self.is_available():
+            raise RuntimeError("Model service is not available")
         
-        try:
-            reult= aatlf._lc_model.invoke_(messages, schema,**kwargs)
-            Raises:foScmpeduccsfully
-            """n .vut
-        exceptnExciptirM os e: service is not available")
-        lgger.rror(ffild:{e}"
-            raiseogger.info(f"Chat completion requested with {len(messages)} messages")
+        logger.info(f"Chat completion requested with {len(messages)} messages")
         
         # In Phase 2, we return a placeholder response
         # Later phases will actually call LangChain models
