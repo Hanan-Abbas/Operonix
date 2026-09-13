@@ -94,20 +94,37 @@ class OperonixState(BaseModel):
     )
     
     # ─── CONFIRMATION ─────────────────────────────────────────────────────────
-    
+
     confirmation: Optional[Any] = Field(
         default=None,
         description="Human intervention request for confirmation"
     )
-    
+
     paused: bool = Field(
         default=False,
         description="Whether the graph is paused for human intervention"
     )
-    
+
     checkpoint_id: Optional[str] = Field(
         default=None,
         description="Checkpoint ID for resume after pause"
+    )
+
+    # ─── CANCELLATION ─────────────────────────────────────────────────────────
+
+    cancelled: bool = Field(
+        default=False,
+        description="Whether the workflow has been cancelled"
+    )
+
+    cancellation: Optional[Any] = Field(
+        default=None,
+        description="Cancellation request details"
+    )
+
+    abort_decision: Optional[Any] = Field(
+        default=None,
+        description="Abort decision for safe cancellation"
     )
     
     # ─── EXECUTION ────────────────────────────────────────────────────────────
