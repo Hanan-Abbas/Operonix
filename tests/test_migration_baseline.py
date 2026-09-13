@@ -204,7 +204,7 @@ def test_plan_and_plan_step_contracts():
     step = PlanStep(
         step_id="step_1",
         action="open_application",
-        arguments={"app": "firefox"},
+        parameters={"app": "firefox"},
         objective="Open Firefox browser"
     )
     
