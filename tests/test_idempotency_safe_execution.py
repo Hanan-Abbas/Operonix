@@ -106,7 +106,7 @@ def test_external_commit_side_effect_not_safe_to_retry():
         parameters={},
         objective="Send email",
         idempotency="conditional",
-        side_effect="EXTERNAL_COMMIT",
+        side_effect="external_commit",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -309,7 +309,7 @@ def test_external_commit_failure_triggers_uncertain_outcome():
         parameters={},
         objective="Send email",
         idempotency="conditional",
-        side_effect="EXTERNAL_COMMIT",
+        side_effect="external_commit",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -561,7 +561,7 @@ def test_transient_failure_with_external_commit_observes():
         parameters={},
         objective="Send email",
         idempotency="conditional",
-        side_effect="EXTERNAL_COMMIT",
+        side_effect="external_commit",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
