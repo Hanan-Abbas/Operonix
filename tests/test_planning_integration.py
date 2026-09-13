@@ -93,8 +93,8 @@ def test_create_plan_node_creates_valid_plan_steps():
         assert isinstance(step, PlanStep)
         assert step.step_id is not None
         assert step.action is not None
-        assert step.idempotency in ["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"]
-        assert step.side_effect in ["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+        assert step.idempotency in ["idempotent", "conditional", "non_idempotent"]
+        assert step.side_effect in ["none", "read_only", "reversible", "local", "destructive", "external_commit"]
 
 
 def test_create_plan_node_idempotency_classification():
@@ -111,7 +111,7 @@ def test_create_plan_node_idempotency_classification():
     
     for step in result["state"].plan.steps:
         assert step.idempotency is not None
-        assert step.idempotency in ["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"]
+        assert step.idempotency in ["idempotent", "conditional", "non_idempotent"]
 
 
 def test_create_plan_node_side_effect_classification():
