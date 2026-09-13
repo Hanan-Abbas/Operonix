@@ -740,6 +740,43 @@ class Candidate(BaseModel):
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+    
+    def calculate_overall_score(self, weights: Optional[Dict[str, float]] = None) -> float:
+        """Calculate overall score using provided weights or default weights.
+        
+        Args:
+            weights: Optional custom weights dictionary
+            
+        Returns:
+            Calculated overall score
+        """
+        if weights is None:
+            weights = {
+                "capability_fit": 0.25,
+                "context_fit": 0.20,
+                "availability": 0.15,
+                "reliability": 0.15,
+                "historical_success": 0.10,
+                "risk": 0.05,
+                "permissions": 0.05,
+                "latency": 0.03,
+                "reversibility": 0.02
+            }
+        
+        score = (
+            self.capability_fit * weights.get("capability_fit", 0.25) +
+            self.context_fit * weights.get("context_fit", 0.20) +
+            self.availability * weights.get("availability", 0.15) +
+            self.reliability * weights.get("reliability", 0.15) +
+            self.historical_success * weights.get("historical_success", 0.10) +
+            self.risk * weights.get("risk", 0.05) +
+            self.permissions * weights.get("permissions", 0.05) +
+            self.latency * weights.get("latency", 0.03) +
+            self.reversibility * weights.get("reversibility", 0.02)
+        )
+        
+        self.overall_score = score
+        return score
 
 
 class CandidateEvaluation(BaseModel):
