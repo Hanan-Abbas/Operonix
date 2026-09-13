@@ -247,6 +247,39 @@ class OperonixGraphRunner:
             raise
 
 
+# ─── EXPORTED FUNCTIONS FOR TESTING ─────────────────────────────────────────
+
+def should_recover_or_cancel(state: OperonixState) -> str:
+    """Determine if recovery or cancellation is needed based on verification result and cancellation status.
+    
+    Exported for testing purposes.
+    """
+    # Check if workflow is cancelled
+    if state.cancelled:
+        return "cancel"
+    
+    if state.verification and state.verification.status == "VERIFIED":
+        return "finalize"
+    elif state.verification and state.verification.status == "UNCERTAIN_OUTCOME":
+        # Uncertain outcome: observe to check if operation already happened
+        return "recover"  # Will route to observe
+    elif state.verification and state.verification.status in ["FAILED", "UNCERTAIN"]:
+        return "recover"
+    return "finalize"
+
+
+def get_recovery_target(state: OperonixState) -> str:
+    """Get target stage based on recovery decision.
+    
+    Exported for testing purposes.
+    """
+    if state.cancelled:
+        return "finalize"
+    if state.recovery and state.recovery.target_stage:
+        return state.recovery.target_stage
+    return "finalize"
+
+
 # ─── GLOBAL GRAPH INSTANCE ─────────────────────────────────────────────────
 
 # Global graph runner instance
