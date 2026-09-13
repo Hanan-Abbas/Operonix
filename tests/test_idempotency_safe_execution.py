@@ -25,7 +25,7 @@ def test_idempotent_operation_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Open Firefox",
         idempotency="SAFE",
         side_effect="READ_ONLY",
@@ -51,7 +51,7 @@ def test_non_idempotent_operation_not_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="NON_IDEMPOTENT",
         side_effect="DESTRUCTIVE",
@@ -77,7 +77,7 @@ def test_destructive_side_effect_not_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="CONDITIONAL",
         side_effect="DESTRUCTIVE",
@@ -103,7 +103,7 @@ def test_external_commit_side_effect_not_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Send email",
         idempotency="CONDITIONAL",
         side_effect="EXTERNAL_COMMIT",
@@ -129,7 +129,7 @@ def test_limited_side_effect_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Create file",
         idempotency="CONDITIONAL",
         side_effect="LIMITED_SIDE_EFFECT",
@@ -155,7 +155,7 @@ def test_non_reversible_operation_caution():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Modify file",
         idempotency="CONDITIONAL",
         side_effect="LIMITED_SIDE_EFFECT",
@@ -195,7 +195,7 @@ def test_invalid_step_index_not_safe_to_retry():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Open Firefox",
         idempotency="SAFE",
         side_effect="READ_ONLY",
@@ -238,7 +238,7 @@ def test_non_idempotent_failure_triggers_uncertain_outcome():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="NON_IDEMPOTENT",
         side_effect="DESTRUCTIVE",
@@ -272,7 +272,7 @@ def test_destructive_side_effect_failure_triggers_uncertain_outcome():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="CONDITIONAL",
         side_effect="DESTRUCTIVE",
@@ -306,7 +306,7 @@ def test_external_commit_failure_triggers_uncertain_outcome():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Send email",
         idempotency="CONDITIONAL",
         side_effect="EXTERNAL_COMMIT",
@@ -340,7 +340,7 @@ def test_idempotent_operation_failure_does_not_trigger_uncertain_outcome():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Open Firefox",
         idempotency="SAFE",
         side_effect="READ_ONLY",
@@ -389,7 +389,7 @@ def test_postcondition_check_with_verified_verification():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Open Firefox",
         idempotency="SAFE",
         side_effect="READ_ONLY",
@@ -480,7 +480,7 @@ def test_transient_failure_with_idempotent_step_retries():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Open Firefox",
         idempotency="SAFE",
         side_effect="READ_ONLY",
@@ -506,7 +506,7 @@ def test_transient_failure_with_non_idempotent_step_observes():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="NON_IDEMPOTENT",
         side_effect="DESTRUCTIVE",
@@ -532,7 +532,7 @@ def test_transient_failure_with_destructive_side_effect_observes():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Delete file",
         idempotency="CONDITIONAL",
         side_effect="DESTRUCTIVE",
@@ -558,7 +558,7 @@ def test_transient_failure_with_external_commit_observes():
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
-        arguments={},
+        parameters={},
         objective="Send email",
         idempotency="CONDITIONAL",
         side_effect="EXTERNAL_COMMIT",
