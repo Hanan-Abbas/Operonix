@@ -185,8 +185,8 @@ def test_ranking_policy_custom_weights():
 # ─── ROUTING DECISION TESTS ─────────────────────────────────────────────────
 
 def test_routing_decision_domain_object():
-    """Test that RoutingDecision is a valid domain object."""
-    from migration.domain_contracts import RoutingDecision, Candidate, CandidateType
+    """Test that MethodDecision is a valid domain object."""
+    from migration.domain_contracts import MethodDecision, Candidate, CandidateType
     
     candidate = Candidate(
         candidate_type=CandidateType.SHELL,
@@ -195,20 +195,20 @@ def test_routing_decision_domain_object():
         overall_score=0.9
     )
     
-    decision = RoutingDecision(
+    decision = MethodDecision(
         selected_candidate=candidate,
         confidence=0.9,
-        routing_explanation="Best candidate"
+        reasoning="Best candidate"
     )
     
     assert decision.selected_candidate == candidate
     assert decision.confidence == 0.9
-    assert decision.routing_explanation == "Best candidate"
+    assert decision.reasoning == "Best candidate"
 
 
 def test_routing_decision_with_candidates_considered():
-    """Test that RoutingDecision can include all candidates considered."""
-    from migration.domain_contracts import RoutingDecision, Candidate, CandidateType
+    """Test that MethodDecision can include all candidates considered."""
+    from migration.domain_contracts import MethodDecision, Candidate, CandidateType
     
     candidate1 = Candidate(
         candidate_type=CandidateType.SHELL,
@@ -224,14 +224,14 @@ def test_routing_decision_with_candidates_considered():
         overall_score=0.7
     )
     
-    decision = RoutingDecision(
+    decision = MethodDecision(
         selected_candidate=candidate1,
-        candidates_considered=[candidate1, candidate2],
+        fallback_chain=[candidate1, candidate2],
         confidence=0.9,
-        routing_explanation="Best candidate"
+        reasoning="Best candidate"
     )
     
-    assert len(decision.candidates_considered) == 2
+    assert len(decision.fallback_chain) == 2
 
 
 # ─── CANDIDATE DISCOVERY SERVICE TESTS ─────────────────────────────────────
@@ -651,9 +651,9 @@ def test_route_node_fallback_on_error():
 
 
 def test_convert_to_method_decision():
-    """Test that RoutingDecision can be converted to MethodDecision."""
+    """Test that MethodDecision can be converted from Candidate."""
     from graph.nodes.route import _convert_to_method_decision
-    from migration.domain_contracts import RoutingDecision, Candidate, CandidateType
+    from migration.domain_contracts import Candidate, CandidateType
     
     candidate = Candidate(
         candidate_type=CandidateType.SHELL,
@@ -662,13 +662,7 @@ def test_convert_to_method_decision():
         overall_score=0.9
     )
     
-    routing_decision = RoutingDecision(
-        selected_candidate=candidate,
-        confidence=0.9,
-        routing_explanation="Best candidate"
-    )
-    
-    method_decision = _convert_to_method_decision(routing_decision)
+    method_decision = _convert_to_method_decision(candidate)
     
     assert method_decision.selected_candidate.method_type == "SHELL"
     assert method_decision.confidence == 0.9
