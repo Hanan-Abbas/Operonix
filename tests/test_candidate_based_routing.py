@@ -87,6 +87,9 @@ def test_candidate_overall_score_calculation():
         reversibility=0.7
     )
     
+    # Calculate overall score
+    candidate.calculate_overall_score()
+    
     # Calculate expected score using default weights
     expected_score = (
         0.9 * 0.25 +  # capability_fit
