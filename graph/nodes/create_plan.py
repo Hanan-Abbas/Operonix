@@ -221,8 +221,8 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
                 "parameters": resolved_args
             },
             objective=f"Execute intent: {state.task.user_input}",
-            idempotency="CONDITIONAL",
-            side_effect="LIMITED_SIDE_EFFECT",
+            idempotency="conditional",
+            side_effect="local",
             reversibility=True
         )
         
@@ -240,8 +240,8 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
                 "parameters": state.intent.parameters if state.intent else {}
             },
             objective=f"Execute intent: {state.task.user_input}",
-            idempotency="CONDITIONAL",
-            side_effect="LIMITED_SIDE_EFFECT",
+            idempotency="conditional",
+            side_effect="local",
             reversibility=True
         )
         return Plan(steps=[step])
