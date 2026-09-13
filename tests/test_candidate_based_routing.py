@@ -229,12 +229,14 @@ def test_routing_decision_with_candidates_considered():
     
     decision = MethodDecision(
         selected_candidate=candidate1,
-        fallback_chain=[candidate1, candidate2],
+        candidates_considered=[candidate1, candidate2],
+        fallback_candidates=[candidate1, candidate2],
         confidence=0.9,
-        reasoning="Best candidate"
+        routing_explanation="Best candidate"
     )
     
-    assert len(decision.fallback_chain) == 2
+    assert decision.selected_candidate == candidate1
+    assert len(decision.candidates_considered) == 2
 
 
 # ─── CANDIDATE DISCOVERY SERVICE TESTS ─────────────────────────────────────
@@ -650,7 +652,7 @@ def test_route_node_fallback_on_error():
     result = route_node(state)
     
     assert result["state"].routing is not None
-    assert "fallback" in result["state"].routing.reasoning.lower()
+    assert "fallback" in result["state"].routing.routing_explanation.lower()
 
 
 def test_convert_to_method_decision():
