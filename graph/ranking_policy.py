@@ -139,6 +139,10 @@ class RankingPolicyService:
         top_evaluation = ranked_evaluations[0]
         top_candidate = top_evaluation.candidate
         
+        # Calculate overall score if not already calculated
+        if top_candidate.overall_score == 0.0:
+            top_candidate.calculate_overall_score(policy.weights)
+        
         # Check if top candidate meets minimum threshold
         if top_candidate.overall_score < policy.min_threshold:
             logger.warning(f"Top candidate score {top_candidate.overall_score} below threshold {policy.min_threshold}")
