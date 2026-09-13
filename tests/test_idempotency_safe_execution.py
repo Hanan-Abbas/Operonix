@@ -54,7 +54,7 @@ def test_non_idempotent_operation_not_safe_to_retry():
         parameters={},
         objective="Delete file",
         idempotency="non_idempotent",
-        side_effect="DESTRUCTIVE",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -79,8 +79,8 @@ def test_destructive_side_effect_not_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="CONDITIONAL",
-        side_effect="DESTRUCTIVE",
+        idempotency="conditional",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -105,7 +105,7 @@ def test_external_commit_side_effect_not_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="CONDITIONAL",
+        idempotency="conditional",
         side_effect="EXTERNAL_COMMIT",
         reversibility=False
     )
@@ -131,7 +131,7 @@ def test_limited_side_effect_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Create file",
-        idempotency="CONDITIONAL",
+        idempotency="conditional",
         side_effect="LIMITED_SIDE_EFFECT",
         reversibility=True
     )
@@ -157,7 +157,7 @@ def test_non_reversible_operation_caution():
         action="execute_intent",
         parameters={},
         objective="Modify file",
-        idempotency="CONDITIONAL",
+        idempotency="conditional",
         side_effect="LIMITED_SIDE_EFFECT",
         reversibility=False
     )
@@ -241,7 +241,7 @@ def test_non_idempotent_failure_triggers_uncertain_outcome():
         parameters={},
         objective="Delete file",
         idempotency="non_idempotent",
-        side_effect="DESTRUCTIVE",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -274,8 +274,8 @@ def test_destructive_side_effect_failure_triggers_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="CONDITIONAL",
-        side_effect="DESTRUCTIVE",
+        idempotency="conditional",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -308,7 +308,7 @@ def test_external_commit_failure_triggers_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="CONDITIONAL",
+        idempotency="conditional",
         side_effect="EXTERNAL_COMMIT",
         reversibility=False
     )
@@ -509,7 +509,7 @@ def test_transient_failure_with_non_idempotent_step_observes():
         parameters={},
         objective="Delete file",
         idempotency="non_idempotent",
-        side_effect="DESTRUCTIVE",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -534,8 +534,8 @@ def test_transient_failure_with_destructive_side_effect_observes():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="CONDITIONAL",
-        side_effect="DESTRUCTIVE",
+        idempotency="conditional",
+        side_effect="destructive",
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -560,7 +560,7 @@ def test_transient_failure_with_external_commit_observes():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="CONDITIONAL",
+        idempotency="conditional",
         side_effect="EXTERNAL_COMMIT",
         reversibility=False
     )
