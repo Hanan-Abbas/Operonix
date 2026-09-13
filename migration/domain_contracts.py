@@ -131,12 +131,11 @@ class PlanStepSideEffect(str, Enum):
 
 
 class PlanStep(BaseModel):
-    """A single step in an execution plan."""
+    """A single step in the execution plan."""
     step_id: str
-    action: str
-    arguments: Dict[str, Any] = Field(default_factory=dict)
-    objective: Optional[str] = None
-    expected_outcome: Optional[str] = None
+    objective: str
+    action: Optional[str] = None  # The actual action to perform (e.g., "open firefox", "create file /tmp/test")
+    parameters: Dict[str, Any] = Field(default_factory=dict)
     dependencies: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
@@ -209,11 +208,11 @@ class RoutingCandidate(BaseModel):
 
 class MethodDecision(BaseModel):
     """Decision on which execution method to use."""
-    selected_candidate: RoutingCandidate
+    selected_candidate: Union[RoutingCandidate, Candidate]
     confidence: float = Field(ge=0.0, le=1.0)
-    candidates_considered: List[RoutingCandidate] = Field(default_factory=list)
-    rejected_candidates: List[RoutingCandidate] = Field(default_factory=list)
-    fallback_candidates: List[RoutingCandidate] = Field(default_factory=list)
+    candidates_considered: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
+    rejected_candidates: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
+    fallback_candidates: List[Union[RoutingCandidate, Candidate]] = Field(default_factory=list)
     policy_decision: Optional[str] = None
     safety_constraints: List[str] = Field(default_factory=list)
     routing_explanation: Optional[str] = None
