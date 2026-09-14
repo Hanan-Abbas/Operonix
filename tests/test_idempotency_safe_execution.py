@@ -314,8 +314,8 @@ def test_external_commit_failure_triggers_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="conditional",
-        side_effect="external_commit",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.EXTERNAL_COMMIT,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -572,8 +572,8 @@ def test_transient_failure_with_external_commit_observes():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="conditional",
-        side_effect="external_commit",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.EXTERNAL_COMMIT,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
