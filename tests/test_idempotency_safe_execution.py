@@ -549,7 +549,7 @@ def test_transient_failure_with_destructive_side_effect_observes():
     """Test that transient failure with DESTRUCTIVE side-effect triggers observe."""
     from graph.nodes.recover import _determine_recovery_strategy
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, FailureCategory
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, FailureCategory, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Delete file", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -575,7 +575,7 @@ def test_transient_failure_with_external_commit_observes():
     """Test that transient failure with EXTERNAL_COMMIT triggers observe."""
     from graph.nodes.recover import _determine_recovery_strategy
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, FailureCategory
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, FailureCategory, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Send email", source=TaskSource.VOICE)
     state = OperonixState(task=task)
