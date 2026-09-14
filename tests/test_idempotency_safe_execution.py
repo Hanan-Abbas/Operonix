@@ -637,13 +637,13 @@ def test_graph_conditional_routing_verified():
         reason="Postconditions verified"
     )
     
-    result = should_recover(state)
+    result = should_recover_or_cancel(state)
     assert result == "finalize"
 
 
 def test_graph_conditional_routing_failed():
     """Test that FAILED status triggers recovery."""
-    from graph.graph import should_recover
+    from graph.graph import should_recover_or_cancel
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot
     
