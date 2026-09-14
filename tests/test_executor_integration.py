@@ -133,8 +133,9 @@ def test_execute_step_node_fallback_logic():
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[MethodType.UI, MethodType.API],
-        reasoning="Test"
+        fallback_candidates=[],
+        confidence=0.9,
+        routing_explanation="Test"
     )
     
     result = _execute_with_fallback(step, routing, None)
@@ -289,10 +290,10 @@ def test_execute_step_node_error_handling():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="invalid",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
