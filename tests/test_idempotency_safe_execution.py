@@ -240,8 +240,8 @@ def test_non_idempotent_failure_triggers_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="non_idempotent",
-        side_effect="destructive",
+        idempotency=PlanStepIdempotency.NON_IDEMPOTENT,
+        side_effect=PlanStepSideEffect.DESTRUCTIVE,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -277,8 +277,8 @@ def test_destructive_side_effect_failure_triggers_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="conditional",
-        side_effect="destructive",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.DESTRUCTIVE,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -520,8 +520,8 @@ def test_transient_failure_with_non_idempotent_step_observes():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="non_idempotent",
-        side_effect="destructive",
+        idempotency=PlanStepIdempotency.NON_IDEMPOTENT,
+        side_effect=PlanStepSideEffect.DESTRUCTIVE,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
@@ -546,8 +546,8 @@ def test_transient_failure_with_destructive_side_effect_observes():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="conditional",
-        side_effect="destructive",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.DESTRUCTIVE,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
