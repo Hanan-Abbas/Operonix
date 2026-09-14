@@ -78,7 +78,7 @@ def test_execute_step_node_handles_missing_step():
 def test_execute_step_node_retry_logic():
     """Test that execute_step_node implements retry logic."""
     from graph.nodes.execute_step import _execute_with_retry_fallback
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType, MethodDecision
     
     step = PlanStep(
         step_id="step_1",
@@ -100,6 +100,7 @@ def test_execute_step_node_retry_logic():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
@@ -112,7 +113,7 @@ def test_execute_step_node_retry_logic():
 def test_execute_step_node_fallback_logic():
     """Test that execute_step_node implements fallback logic."""
     from graph.nodes.execute_step import _execute_with_fallback
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType, MethodDecision
     
     step = PlanStep(
         step_id="step_1",
@@ -252,6 +253,7 @@ def test_execute_step_node_plan_progress_update():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
@@ -314,7 +316,7 @@ def test_execute_step_node_error_handling():
 def test_execute_single_attempt():
     """Test that _execute_single_attempt executes a single attempt."""
     from graph.nodes.execute_step import _execute_single_attempt
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType, MethodDecision
     
     step = PlanStep(
         step_id="step_1",
@@ -336,6 +338,7 @@ def test_execute_single_attempt():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
@@ -349,7 +352,7 @@ def test_execute_single_attempt():
 def test_execute_placeholder():
     """Test that _execute_placeholder provides placeholder execution."""
     from graph.nodes.execute_step import _execute_placeholder
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType, MethodDecision
     
     step = PlanStep(
         step_id="step_1",
@@ -371,6 +374,7 @@ def test_execute_placeholder():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
@@ -416,6 +420,7 @@ def test_execute_step_node_graceful_degradation():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
