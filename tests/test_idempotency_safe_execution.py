@@ -340,7 +340,7 @@ def test_idempotent_operation_failure_does_not_trigger_uncertain_outcome():
     """Test that idempotent operation failure does not trigger UNCERTAIN_OUTCOME."""
     from graph.nodes.verify_step import _verify_postconditions
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
