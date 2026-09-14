@@ -406,9 +406,10 @@ def test_check_postconditions_file_existence():
     import os
     import tempfile
     
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(delete=False) as f:
+    # Create a temporary file with a specific extension for regex matching
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         temp_file = f.name
+        f.write("test content")
     
     try:
         task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
@@ -434,7 +435,8 @@ def test_check_postconditions_file_existence():
         assert result is True
     finally:
         # Clean up
-        os.unlink(temp_file)
+        if os.path.exists(temp_file):
+            os.unlink(temp_file)
 
 
 def test_check_postconditions_directory_existence():
