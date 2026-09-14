@@ -197,8 +197,8 @@ def test_invalid_step_index_not_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Open Firefox",
-        idempotency="idempotent",
-        side_effect="read_only",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
         reversibility=True
     )
     state.plan = Plan(steps=[step])
@@ -351,8 +351,8 @@ def test_idempotent_operation_failure_does_not_trigger_uncertain_outcome():
         action="execute_intent",
         parameters={},
         objective="Open Firefox",
-        idempotency="idempotent",
-        side_effect="read_only",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
         reversibility=True
     )
     state.plan = Plan(steps=[step])
@@ -403,8 +403,8 @@ def test_postcondition_check_with_verified_verification():
         action="execute_intent",
         parameters={},
         objective="Open Firefox",
-        idempotency="idempotent",
-        side_effect="read_only",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
         reversibility=True
     )
     state.plan = Plan(steps=[step])
@@ -494,8 +494,8 @@ def test_transient_failure_with_idempotent_step_retries():
         action="execute_intent",
         parameters={},
         objective="Open Firefox",
-        idempotency="idempotent",
-        side_effect="read_only",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
         reversibility=True
     )
     state.plan = Plan(steps=[step])
