@@ -143,10 +143,10 @@ def test_limited_side_effect_safe_to_retry():
 
 
 def test_non_reversible_operation_caution():
-    """Test that non-reversible operations are logged with caution but may still retry."""
+    """Test that non-reversible operations are allowed with caution."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Modify file", source=TaskSource.VOICE)
     state = OperonixState(task=task)
