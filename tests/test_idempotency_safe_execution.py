@@ -266,7 +266,7 @@ def test_destructive_side_effect_failure_triggers_uncertain_outcome():
     """Test that DESTRUCTIVE side-effect operation failure triggers UNCERTAIN_OUTCOME."""
     from graph.nodes.verify_step import _verify_postconditions
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Delete file", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -303,7 +303,7 @@ def test_external_commit_failure_triggers_uncertain_outcome():
     """Test that EXTERNAL_COMMIT side-effect operation failure triggers UNCERTAIN_OUTCOME."""
     from graph.nodes.verify_step import _verify_postconditions
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, ExecutionResult, TaskStatus, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Send email", source=TaskSource.VOICE)
     state = OperonixState(task=task)
