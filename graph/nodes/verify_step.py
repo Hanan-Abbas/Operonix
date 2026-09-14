@@ -195,11 +195,11 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         
         else:
             # Generic verification - check if execution result indicates success
+            verification_status = "VERIFIED"
             if state.execution and state.execution.result_data:
                 execution_result = state.execution.result_data
                 if isinstance(execution_result, dict):
                     if execution_result.get("success") is False:
-                        verification_passed = False
                         verification_reason = f"Execution result indicates failure: {execution_result.get('error', 'Unknown error')}"
                         
                         # Check if operation is non-idempotent or has destructive side-effects
@@ -207,20 +207,24 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
                         current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
                         if current_step:
                             if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
-                                verification_passed = True  # Override to trigger UNCERTAIN_OUTCOME
+                                verification_status = "UNCERTAIN_OUTCOME"
                                 verification_reason = "Non-idempotent operation failed, outcome uncertain"
                             elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
-                                verification_passed = True  # Override to trigger UNCERTAIN_OUTCOME
+                                verification_status = "UNCERTAIN_OUTCOME"
                                 verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
+                            else:
+                                verification_status = "FAILED"
+                        else:
+                            verification_status = "FAILED"
                     else:
-                        verification_passed = True
+                        verification_status = "VERIFIED"
                         verification_reason = "Executor reported success and no specific postconditions to verify"
             else:
-                verification_passed = True
+                verification_status = "VERIFIED"
                 verification_reason = "No specific postconditions to verify, assuming success"
         
         return VerificationResult(
-            status="VERIFIED" if verification_passed else "FAILED",
+            status=verification_status,
             observed_context=observed_context,
             expected_state={"outcome": expected_outcome},
             actual_state=context_snapshot,
@@ -231,22 +235,34 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         logger.error(f"Error verifying postconditions with context: {e}")
         
         # Fallback to basic verification
+        verification_status = "VERIFIED"
         if state.execution and state.execution.result_data:
             execution_result = state.execution.result_data
             if isinstance(execution_result, dict):
                 if execution_result.get("success") is False:
-                    return VerificationResult(
-                        status="FAILED",
-                        observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
-                        expected_state={"outcome": expected_outcome},
-                        actual_state=execution_result,
-                        reason=f"Execution result indicates failure: {execution_result.get('error', 'Unknown error')}"
-                    )
+                    verification_reason = f"Execution result indicates failure: {execution_result.get('error', 'Unknown error')}"
+                    
+                    # Check if operation is non-idempotent or has destructive side-effects
+                    current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
+                    if current_step:
+                        if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
+                            verification_status = "UNCERTAIN_OUTCOME"
+                            verification_reason = "Non-idempotent operation failed, outcome uncertain"
+                        elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+                            verification_status = "UNCERTAIN_OUTCOME"
+                            verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
+                        else:
+                            verification_status = "FAILED"
+                    else:
+                        verification_status = "FAILED"
+                else:
+                    verification_status = "VERIFIED"
+                    verification_reason = "Executor reported success"
         
         return VerificationResult(
-            status="VERIFIED",
+            status=verification_status,
             observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
             expected_state={"outcome": expected_outcome},
             actual_state=state.execution.result_data if state.execution and isinstance(state.execution.result_data, dict) else {},
-            reason="Executor reported success and context verification failed, assuming success"
+            reason=verification_reason if verification_status != "VERIFIED" else "Executor reported success and context verification failed, assuming success"
         )
