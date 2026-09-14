@@ -232,12 +232,12 @@ def _is_safe_to_retry(state: OperonixState) -> bool:
     current_step = state.plan.steps[state.plan.current_step_index]
     
     # Check idempotency
-    if current_step.idempotency == "NON_IDEMPOTENT":
+    if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
         logger.warning(f"Step {current_step.step_id} is NON_IDEMPOTENT, not safe to retry")
         return False
     
     # Check side-effect level
-    if current_step.side_effect in ["DESTRUCTIVE", "EXTERNAL_COMMIT"]:
+    if current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
         logger.warning(f"Step {current_step.step_id} has high side-effect ({current_step.side_effect}), not safe to retry")
         return False
     
