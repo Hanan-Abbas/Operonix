@@ -16,7 +16,7 @@ def test_idempotent_operation_safe_to_retry():
     """Test that idempotent operations are safe to retry."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -27,8 +27,8 @@ def test_idempotent_operation_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Open Firefox",
-        idempotency="idempotent",
-        side_effect="read_only",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
         reversibility=True
     )
     state.plan = Plan(steps=[step])
