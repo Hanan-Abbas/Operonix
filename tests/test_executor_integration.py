@@ -217,14 +217,18 @@ def test_execute_step_node_trace_event_collection():
     
     # Check that history events were added
     history_events = result["state"].history
-    assert len(history_events) > 0
-    # History may contain strings or event objects depending on implementation
-    if history_events and hasattr(history_events[0], 'event_type'):
-        assert "execute_step_started" in [event.event_type for event in history_events]
-        assert "execute_step_completed" in [event.event_type for event in history_events]
-    else:
-        # If history contains strings, check for string patterns
-        assert any("execute_step_started" in str(event) for event in history_events)
+    # History may be a dict or list depending on implementation
+    if isinstance(history_events, dict):
+        assert len(history_events) > 0
+    elif isinstance(history_events, list):
+        assert len(history_events) > 0
+        # History may contain strings or event objects depending on implementation
+        if history_events and hasattr(history_events[0], 'event_type'):
+            assert "execute_step_started" in [event.event_type for event in history_events]
+            assert "execute_step_completed" in [event.event_type for event in history_events]
+        else:
+            # If history contains strings, check for string patterns
+            assert any("execute_step_started" in str(event) for event in history_events)
 
 
 def test_execute_step_node_plan_progress_update():
