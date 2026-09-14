@@ -560,6 +560,9 @@ def test_ranking_policy_make_routing_decision():
         overall_score=0.9
     )
     
+    # Ensure the score is calculated
+    candidate.calculate_overall_score()
+    
     evaluation = CandidateEvaluation(candidate=candidate)
     
     ranked = service.rank_candidates([evaluation])
