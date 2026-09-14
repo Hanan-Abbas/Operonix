@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import VerificationResult, ContextSnapshot
+from migration.domain_contracts import VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect
 from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.VerifyStep")
@@ -201,6 +201,17 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
                     if execution_result.get("success") is False:
                         verification_passed = False
                         verification_reason = f"Execution result indicates failure: {execution_result.get('error', 'Unknown error')}"
+                        
+                        # Check if operation is non-idempotent or has destructive side-effects
+                        # If so, return UNCERTAIN_OUTCOME instead of FAILED
+                        current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
+                        if current_step:
+                            if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
+                                verification_passed = True  # Override to trigger UNCERTAIN_OUTCOME
+                                verification_reason = "Non-idempotent operation failed, outcome uncertain"
+                            elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+                                verification_passed = True  # Override to trigger UNCERTAIN_OUTCOME
+                                verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
                     else:
                         verification_passed = True
                         verification_reason = "Executor reported success and no specific postconditions to verify"
