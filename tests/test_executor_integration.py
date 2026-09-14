@@ -78,7 +78,7 @@ def test_execute_step_node_handles_missing_step():
 def test_execute_step_node_retry_logic():
     """Test that execute_step_node implements retry logic."""
     from graph.nodes.execute_step import _execute_with_retry_fallback
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType, MethodDecision
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, RoutingCandidate, MethodDecision
     
     step = PlanStep(
         step_id="step_1",
@@ -89,9 +89,9 @@ def test_execute_step_node_retry_logic():
         parameters={"command": "ls -la"}
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
