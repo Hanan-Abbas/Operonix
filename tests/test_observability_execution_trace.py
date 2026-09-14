@@ -660,9 +660,12 @@ def test_analyze_intent_node_collects_trace():
         task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
         state = OperonixState(task=task)
         
+        # Start trace before analyze_intent node
+        trace_collector = get_trace_collector()
+        trace_collector.start_trace(task.task_id)
+        
         result = analyze_intent_node(state)
         
-        trace_collector = get_trace_collector()
         trace = trace_collector.get_trace(task.task_id)
         
         assert trace is not None
