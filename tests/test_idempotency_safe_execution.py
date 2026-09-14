@@ -249,9 +249,12 @@ def test_non_idempotent_failure_triggers_uncertain_outcome():
     
     # Execution failed
     state.execution = ExecutionResult(
+        execution_id="exec_1",
         step_id="step_1",
+        success=False,
+        method_used="shell",
         execution_status=TaskStatus.FAILED,
-        result={"error": "Command failed"}
+        result_data={"error": "Command failed"}
     )
     
     verification_result = _verify_postconditions(state)
@@ -283,9 +286,12 @@ def test_destructive_side_effect_failure_triggers_uncertain_outcome():
     
     # Execution failed
     state.execution = ExecutionResult(
+        execution_id="exec_1",
         step_id="step_1",
+        success=False,
+        method_used="shell",
         execution_status=TaskStatus.FAILED,
-        result={"error": "Command failed"}
+        result_data={"error": "Command failed"}
     )
     
     verification_result = _verify_postconditions(state)
@@ -354,9 +360,12 @@ def test_idempotent_operation_failure_does_not_trigger_uncertain_outcome():
     
     # Execution failed
     state.execution = ExecutionResult(
+        execution_id="exec_1",
         step_id="step_1",
+        success=False,
+        method_used="shell",
         execution_status=TaskStatus.FAILED,
-        result={"error": "Command failed"}
+        result_data={"error": "Command failed"}
     )
     
     verification_result = _verify_postconditions(state)
