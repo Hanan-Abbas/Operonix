@@ -380,6 +380,27 @@ def test_postcondition_check_function():
     from graph.nodes.observe import _check_postconditions
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
+    
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    # Create plan
+    step = PlanStep(
+        step_id="step_1",
+        action="execute_intent",
+        parameters={},
+        objective="Open Firefox",
+        idempotency=PlanStepIdempotency.IDEMPOTENT,
+        side_effect=PlanStepSideEffect.READ_ONLY,
+        reversibility=True
+    )
+    state.plan = Plan(steps=[step])
+    state.plan.current_step_index = 0
+    
+    # Check postconditions
+    result = _check_postconditions(state)
+    # Should return False since no verification result exists
+    assert result is False
 
 def test_postcondition_check_with_verified_verification():
     """Test that postcondition check returns True if verification is VERIFIED."""
