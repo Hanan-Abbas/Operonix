@@ -94,7 +94,7 @@ def test_external_commit_side_effect_not_safe_to_retry():
     """Test that EXTERNAL_COMMIT side-effect operations are not safe to retry."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Send email", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -105,8 +105,8 @@ def test_external_commit_side_effect_not_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Send email",
-        idempotency="conditional",
-        side_effect="external_commit",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.EXTERNAL_COMMIT,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
