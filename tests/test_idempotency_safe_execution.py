@@ -616,7 +616,7 @@ def test_graph_conditional_routing_uncertain_outcome():
         reason="Non-idempotent operation failed, outcome uncertain"
     )
     
-    result = should_recover(state)
+    result = should_recover_or_cancel(state)
     assert result == "recover"
 
 
@@ -658,13 +658,13 @@ def test_graph_conditional_routing_failed():
         reason="Execution failed"
     )
     
-    result = should_recover(state)
+    result = should_recover_or_cancel(state)
     assert result == "recover"
 
 
 def test_graph_conditional_routing_uncertain():
     """Test that UNCERTAIN status triggers recovery."""
-    from graph.graph import should_recover
+    from graph.graph import should_recover_or_cancel
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot
     
@@ -679,5 +679,5 @@ def test_graph_conditional_routing_uncertain():
         reason="No execution result"
     )
     
-    result = should_recover(state)
+    result = should_recover_or_cancel(state)
     assert result == "recover"
