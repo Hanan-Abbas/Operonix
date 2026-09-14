@@ -78,7 +78,7 @@ def test_execute_step_node_handles_missing_step():
 def test_execute_step_node_retry_logic():
     """Test that execute_step_node implements retry logic."""
     from graph.nodes.execute_step import _execute_with_retry_fallback
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
     
     step = PlanStep(
         step_id="step_1",
@@ -91,16 +91,16 @@ def test_execute_step_node_retry_logic():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     result = _execute_with_retry_fallback(step, routing, None)
@@ -112,7 +112,7 @@ def test_execute_step_node_retry_logic():
 def test_execute_step_node_fallback_logic():
     """Test that execute_step_node implements fallback logic."""
     from graph.nodes.execute_step import _execute_with_fallback
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
     
     step = PlanStep(
         step_id="step_1",
@@ -125,10 +125,10 @@ def test_execute_step_node_fallback_logic():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
@@ -196,16 +196,16 @@ def test_execute_step_node_trace_event_collection():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing)
@@ -242,16 +242,16 @@ def test_execute_step_node_plan_progress_update():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing)
@@ -297,8 +297,8 @@ def test_execute_step_node_error_handling():
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing)
@@ -313,7 +313,7 @@ def test_execute_step_node_error_handling():
 def test_execute_single_attempt():
     """Test that _execute_single_attempt executes a single attempt."""
     from graph.nodes.execute_step import _execute_single_attempt
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
     
     step = PlanStep(
         step_id="step_1",
@@ -326,16 +326,16 @@ def test_execute_single_attempt():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     result = _execute_single_attempt(step, routing, None)
@@ -348,7 +348,7 @@ def test_execute_single_attempt():
 def test_execute_placeholder():
     """Test that _execute_placeholder provides placeholder execution."""
     from graph.nodes.execute_step import _execute_placeholder
-    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, MethodType
+    from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, RoutingDecision, Candidate, CandidateType
     
     step = PlanStep(
         step_id="step_1",
@@ -361,16 +361,16 @@ def test_execute_placeholder():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     result = _execute_placeholder(step, routing, None, "test_exec_id")
@@ -406,16 +406,16 @@ def test_execute_step_node_graceful_degradation():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing)
