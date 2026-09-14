@@ -463,7 +463,7 @@ def test_check_postconditions_directory_existence():
         
         step = PlanStep(
             step_id="step_1",
-            objective=f"Create directory {temp_dir}",
+            objective=f"Create directory /tmp/testdir",
             idempotency=PlanStepIdempotency.IDEMPOTENT,
             side_effect=PlanStepSideEffect.NONE
         )
