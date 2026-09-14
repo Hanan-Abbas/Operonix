@@ -12,7 +12,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import RecoveryDecision, FailureCategory, RecoveryStrategy
+from migration.domain_contracts import RecoveryDecision, FailureCategory, RecoveryStrategy, PlanStepIdempotency, PlanStepSideEffect
 from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.Recover")
