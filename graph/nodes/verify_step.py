@@ -195,8 +195,8 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         
         else:
             # Generic verification - check if execution result indicates success
-            if state.execution and state.execution.result:
-                execution_result = state.execution.result
+            if state.execution and state.execution.result_data:
+                execution_result = state.execution.result_data
                 if isinstance(execution_result, dict):
                     if execution_result.get("success") is False:
                         verification_passed = False
