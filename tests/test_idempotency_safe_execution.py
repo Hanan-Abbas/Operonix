@@ -117,15 +117,15 @@ def test_external_commit_side_effect_not_safe_to_retry():
 
 
 def test_limited_side_effect_safe_to_retry():
-    """Test that LIMITED_SIDE_EFFECT operations are safe to retry."""
+    """Test that LIMITED side-effect operations are safe to retry."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Create file", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
-    # Create plan with LIMITED_SIDE_EFFECT
+    # Create plan with LIMITED side-effect
     step = PlanStep(
         step_id="step_1",
         action="execute_intent",
