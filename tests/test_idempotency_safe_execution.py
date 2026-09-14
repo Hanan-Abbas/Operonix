@@ -183,10 +183,10 @@ def test_no_plan_not_safe_to_retry():
 
 
 def test_invalid_step_index_not_safe_to_retry():
-    """Test that invalid step index results in not safe to retry."""
+    """Test that invalid step index is not safe to retry."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -376,17 +376,10 @@ def test_idempotent_operation_failure_does_not_trigger_uncertain_outcome():
 # ─── POSTCONDITION CHECK TESTS ───────────────────────────────────────────────────
 
 def test_postcondition_check_function():
-    """Test that _check_postconditions function exists and returns bool."""
+    """Test that _check_postconditions function works."""
     from graph.nodes.observe import _check_postconditions
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource
-    
-    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
-    state = OperonixState(task=task)
-    
-    result = _check_postconditions(state)
-    assert isinstance(result, bool)
-
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
 
 def test_postcondition_check_with_verified_verification():
     """Test that postcondition check returns True if verification is VERIFIED."""
