@@ -406,7 +406,7 @@ def test_postcondition_check_with_verified_verification():
     """Test that postcondition check returns True if verification is VERIFIED."""
     from graph.nodes.observe import _check_postconditions
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, VerificationResult, ContextSnapshot
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
