@@ -196,32 +196,29 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         else:
             # Generic verification - check if execution result indicates success
             verification_status = "VERIFIED"
-            if state.execution and state.execution.result_data:
-                execution_result = state.execution.result_data
-                if isinstance(execution_result, dict):
-                    if execution_result.get("success") is False:
-                        verification_reason = f"Execution result indicates failure: {execution_result.get('error', 'Unknown error')}"
-                        
-                        # Check if operation is non-idempotent or has destructive side-effects
-                        # If so, return UNCERTAIN_OUTCOME instead of FAILED
-                        current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
-                        if current_step:
-                            if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
-                                verification_status = "UNCERTAIN_OUTCOME"
-                                verification_reason = "Non-idempotent operation failed, outcome uncertain"
-                            elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
-                                verification_status = "UNCERTAIN_OUTCOME"
-                                verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
-                            else:
-                                verification_status = "FAILED"
+            verification_reason = "No specific postconditions to verify, assuming success"
+            if state.execution:
+                if state.execution.success is False:
+                    verification_reason = f"Execution result indicates failure"
+                    if state.execution.result_data and "error" in state.execution.result_data:
+                        verification_reason += f": {state.execution.result_data['error']}"
+                    
+                    # Check if operation is non-idempotent or has destructive side-effects
+                    current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
+                    if current_step:
+                        if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
+                            verification_status = "UNCERTAIN_OUTCOME"
+                            verification_reason = "Non-idempotent operation failed, outcome uncertain"
+                        elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+                            verification_status = "UNCERTAIN_OUTCOME"
+                            verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
                         else:
                             verification_status = "FAILED"
                     else:
-                        verification_status = "VERIFIED"
-                        verification_reason = "Executor reported success and no specific postconditions to verify"
-            else:
-                verification_status = "VERIFIED"
-                verification_reason = "No specific postconditions to verify, assuming success"
+                        verification_status = "FAILED"
+                else:
+                    verification_status = "VERIFIED"
+                    verification_reason = "Executor reported success and no specific postconditions to verify"
         
         return VerificationResult(
             status=verification_status,
