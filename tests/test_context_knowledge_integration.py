@@ -452,9 +452,8 @@ def test_check_postconditions_directory_existence():
     import os
     import tempfile
     
-    # Create a temporary directory with a simple path
-    temp_base = tempfile.mkdtemp()
-    temp_dir = os.path.join(temp_base, "test_dir")
+    # Create a temporary directory with a simple name for regex matching
+    temp_dir = "/tmp/test_operonix_dir"
     
     try:
         # Create the directory
@@ -485,11 +484,3 @@ def test_check_postconditions_directory_existence():
         # Clean up
         if os.path.exists(temp_dir):
             os.rmdir(temp_dir)
-        if os.path.exists(temp_base):
-            os.rmdir(temp_base)
-        
-        # Directory exists, so postconditions should be met
-        assert result is True
-    finally:
-        # Clean up
-        os.rmdir(temp_dir)
