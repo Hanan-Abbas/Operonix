@@ -686,11 +686,25 @@ class ExecutionTrace(BaseModel):
             {
                 "event_type": e.event_type.value,
                 "timestamp": e.timestamp.isoformat(),
-                "node_name": e.node_name,
                 "data": e.data
             }
             for e in sorted_events
         ]
+    
+    def end_trace(self, task_id: str, success: bool, final_outcome: str) -> None:
+        """End the trace and set final outcome.
+        
+        Args:
+            task_id: Task ID to verify
+            success: Whether the task succeeded
+            final_outcome: Final outcome description
+        """
+        if self.task_id != task_id:
+            raise ValueError(f"Task ID mismatch: expected {self.task_id}, got {task_id}")
+        
+        self.completed_at = datetime.utcnow()
+        self.success = success
+        self.final_outcome = final_outcome
 
 
 # ─── PHASE 10: CANDIDATE-BASED ROUTING ENGINE ────────────────────────────────────
