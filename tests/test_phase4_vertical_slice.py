@@ -74,7 +74,7 @@ def test_route_node_with_state():
     task = TaskRequest(user_input="test", source=TaskSource.API)
     state = OperonixState(task=task)
     state.intent = IntentResult(name="test", confidence=0.9)
-    step = PlanStep(step_id=str(uuid.uuid4()), action="test")
+    step = PlanStep(step_id=str(uuid.uuid4()), action="test", objective="test action")
     state.plan = Plan(steps=[step])
     
     result = route_node(state)
