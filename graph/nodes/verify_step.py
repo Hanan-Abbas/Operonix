@@ -220,8 +220,8 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         logger.error(f"Error verifying postconditions with context: {e}")
         
         # Fallback to basic verification
-        if state.execution and state.execution.result:
-            execution_result = state.execution.result
+        if state.execution and state.execution.result_data:
+            execution_result = state.execution.result_data
             if isinstance(execution_result, dict):
                 if execution_result.get("success") is False:
                     return VerificationResult(
@@ -236,6 +236,6 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
             status="VERIFIED",
             observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
             expected_state={"outcome": expected_outcome},
-            actual_state=state.execution.result if state.execution and isinstance(state.execution.result, dict) else {},
+            actual_state=state.execution.result_data if state.execution and isinstance(state.execution.result_data, dict) else {},
             reason="Executor reported success and context verification failed, assuming success"
         )
