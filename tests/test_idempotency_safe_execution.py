@@ -601,7 +601,7 @@ def test_transient_failure_with_external_commit_observes():
 
 def test_graph_conditional_routing_uncertain_outcome():
     """Test that UNCERTAIN_OUTCOME triggers recovery (observe)."""
-    from graph.graph import should_recover
+    from graph.graph import should_recover_or_cancel
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot
     
@@ -622,7 +622,7 @@ def test_graph_conditional_routing_uncertain_outcome():
 
 def test_graph_conditional_routing_verified():
     """Test that VERIFIED status triggers finalize."""
-    from graph.graph import should_recover
+    from graph.graph import should_recover_or_cancel
     from migration.graph_state import OperonixState
     from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot
     
