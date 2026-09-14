@@ -16,7 +16,7 @@ def test_execute_step_node_integrates_tool_registry():
     """Test that execute_step_node integrates with tool_registry."""
     from graph.nodes.execute_step import execute_step_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, MethodType
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect, MethodDecision, Candidate, CandidateType
     
     task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
     
@@ -37,16 +37,16 @@ def test_execute_step_node_integrates_tool_registry():
     
     candidate = Candidate(
         candidate_id="candidate_1",
-        method_type=MethodType.SHELL,
+        candidate_type=CandidateType.SHELL,
         capability_id="execute_command",
         plugin_id=None,
-        score=0.9
+        overall_score=0.9
     )
     
     routing = MethodDecision(
         selected_candidate=candidate,
-        fallback_chain=[],
-        reasoning="Test"
+        fallback_candidates=[],
+        routing_explanation="Test"
     )
     
     state = OperonixState(task=task, plan=plan, routing=routing)
