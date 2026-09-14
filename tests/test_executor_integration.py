@@ -196,9 +196,9 @@ def test_execute_step_node_trace_event_collection():
         current_step_index=0
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
@@ -242,9 +242,9 @@ def test_execute_step_node_plan_progress_update():
         current_step_index=0
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
@@ -290,9 +290,9 @@ def test_execute_step_node_error_handling():
         current_step_index=0
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="invalid",
         plugin_id=None,
         overall_score=0.9
@@ -327,9 +327,9 @@ def test_execute_single_attempt():
         parameters={"command": "ls -la"}
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
@@ -363,9 +363,9 @@ def test_execute_placeholder():
         parameters={"command": "ls -la"}
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
@@ -409,9 +409,9 @@ def test_execute_step_node_graceful_degradation():
         current_step_index=0
     )
     
-    candidate = Candidate(
-        candidate_id="candidate_1",
-        candidate_type=CandidateType.SHELL,
+    candidate = RoutingCandidate(
+        method_type="SHELL",
+        tool_id="shell",
         capability_id="execute_command",
         plugin_id=None,
         overall_score=0.9
