@@ -453,7 +453,7 @@ def test_check_postconditions_directory_existence():
     import tempfile
     
     # Create a temporary directory with a simple name for regex matching
-    temp_dir = "/tmp/test_operonix_dir"
+    temp_dir = "/tmp/testdir"
     
     try:
         # Create the directory
