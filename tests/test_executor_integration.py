@@ -207,6 +207,7 @@ def test_execute_step_node_trace_event_collection():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
@@ -301,6 +302,7 @@ def test_execute_step_node_error_handling():
     routing = MethodDecision(
         selected_candidate=candidate,
         fallback_candidates=[],
+        confidence=0.9,
         routing_explanation="Test"
     )
     
