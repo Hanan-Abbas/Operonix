@@ -691,9 +691,12 @@ def test_create_plan_node_collects_trace():
         task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
         state = OperonixState(task=task)
         
+        # Start trace before create_plan node
+        trace_collector = get_trace_collector()
+        trace_collector.start_trace(task.task_id)
+        
         result = create_plan_node(state)
         
-        trace_collector = get_trace_collector()
         trace = trace_collector.get_trace(task.task_id)
         
         assert trace is not None
