@@ -42,7 +42,7 @@ def test_non_idempotent_operation_not_safe_to_retry():
     """Test that non-idempotent operations are not safe to retry."""
     from graph.nodes.recover import _is_safe_to_retry
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep
+    from migration.domain_contracts import TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Delete file", source=TaskSource.VOICE)
     state = OperonixState(task=task)
@@ -53,8 +53,8 @@ def test_non_idempotent_operation_not_safe_to_retry():
         action="execute_intent",
         parameters={},
         objective="Delete file",
-        idempotency="non_idempotent",
-        side_effect="destructive",
+        idempotency=PlanStepIdempotency.NON_IDEMPOTENT,
+        side_effect=PlanStepSideEffect.DESTRUCTIVE,
         reversibility=False
     )
     state.plan = Plan(steps=[step])
