@@ -452,10 +452,14 @@ def test_check_postconditions_directory_existence():
     import os
     import tempfile
     
-    # Create a temporary directory
-    temp_dir = tempfile.mkdtemp()
+    # Create a temporary directory with a simple path
+    temp_base = tempfile.mkdtemp()
+    temp_dir = os.path.join(temp_base, "test_dir")
     
     try:
+        # Create the directory
+        os.makedirs(temp_dir, exist_ok=True)
+        
         task = TaskRequest(user_input="Test", source=TaskSource.VOICE)
         
         step = PlanStep(
@@ -474,6 +478,15 @@ def test_check_postconditions_directory_existence():
         state = OperonixState(task=task, plan=plan)
         
         result = _check_postconditions(state)
+        
+        # Directory exists, so postconditions should be met
+        assert result is True
+    finally:
+        # Clean up
+        if os.path.exists(temp_dir):
+            os.rmdir(temp_dir)
+        if os.path.exists(temp_base):
+            os.rmdir(temp_base)
         
         # Directory exists, so postconditions should be met
         assert result is True
