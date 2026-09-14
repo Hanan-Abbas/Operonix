@@ -317,9 +317,12 @@ def test_external_commit_failure_triggers_uncertain_outcome():
     
     # Execution failed
     state.execution = ExecutionResult(
+        execution_id="exec_1",
         step_id="step_1",
+        success=False,
+        method_used="shell",
         execution_status=TaskStatus.FAILED,
-        result={"error": "SMTP error"}
+        result_data={"error": "SMTP error"}
     )
     
     verification_result = _verify_postconditions(state)
