@@ -74,12 +74,19 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
                 permissions=observed_context.permissions if hasattr(observed_context, 'permissions') else [],
                 confidence=observed_context.confidence if hasattr(observed_context, 'confidence') else 0.0
             )
+        
+        # Distinguish between execution status failure and success flag failure
+        if state.execution.execution_status != TaskStatus.COMPLETED:
+            reason = f"Executor reported failure: {state.execution.execution_status.value}"
+        else:
+            reason = "execution result indicates failure"
+        
         verification_result = VerificationResult(
             status="FAILED",
             observed_context=observed_context,
             expected_state={},
             actual_state={},
-            reason=f"Executor reported failure: {state.execution.execution_status.value if state.execution else 'No execution result'}"
+            reason=reason
         )
     else:
         # Executor succeeded, verify postconditions
