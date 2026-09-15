@@ -29,9 +29,12 @@ def test_verify_step_executor_success_vs_postcondition():
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     state.execution = ExecutionResult(
+        execution_id="exec_1",
         step_id="step_1",
+        success=True,
+        method_used="SHELL",
         execution_status=TaskStatus.COMPLETED,
-        result={"success": True}
+        result_data={"success": True}
     )
     
     result = verify_step_node(state)
@@ -113,9 +116,12 @@ def test_verify_step_history_tracking():
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     state.execution = ExecutionResult(
+        execution_id="exec_4",
         step_id="step_1",
+        success=True,
+        method_used="SHELL",
         execution_status=TaskStatus.COMPLETED,
-        result={"success": True}
+        result_data={"success": True}
     )
     
     result = verify_step_node(state)
