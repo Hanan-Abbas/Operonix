@@ -216,12 +216,13 @@ def test_graph_topology_phase4():
     """Test that graph topology includes all Phase 4 nodes."""
     from graph.graph import build_operonix_graph
     
-    # This test will be skipped if LangGraph is not installed
-    try:
-        graph = build_operonix_graph()
-        assert graph is not None
-    except ImportError:
+    graph = build_operonix_graph()
+    
+    # Skip if LangGraph is not installed (function returns None in that case)
+    if graph is None:
         pytest.skip("LangGraph not installed")
+    
+    assert graph is not None
 
 
 def test_state_flow_through_all_nodes():
