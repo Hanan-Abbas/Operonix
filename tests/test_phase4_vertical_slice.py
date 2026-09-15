@@ -150,7 +150,8 @@ def test_verify_step_node_with_state():
         step_id=step.step_id,
         success=True,
         method_used="SHELL",
-        execution_status=TaskStatus.COMPLETED.value
+        execution_status=TaskStatus.COMPLETED,
+        result_data={}
     )
     
     result = verify_step_node(state)
