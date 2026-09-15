@@ -133,7 +133,7 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         "cwd": None,
         "window_pid": None,
         "confidence": 0.0,
-        "sub_context": {},
+        "sub_context": None,
         "state": {},
         "focus": {},
         "validation": {}
@@ -152,7 +152,7 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
                 context_data["cwd"] = snapshot.get("cwd")
                 context_data["window_pid"] = snapshot.get("window_pid")
                 context_data["confidence"] = snapshot.get("confidence", 0.0)
-                context_data["sub_context"] = snapshot.get("sub_context", {})
+                context_data["sub_context"] = snapshot.get("sub_context")
                 
                 logger.info(f"Context snapshot from WindowDetector: {context_data['window_title']}")
             else:
