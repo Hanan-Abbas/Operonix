@@ -300,7 +300,7 @@ def test_plan_step_idempotency_classification():
         
         for step in plan.steps:
             assert step.idempotency is not None
-            assert step.idempotency in ["IDEMPOTENT", "CONDITIONAL", "NON_IDEMPOTENT"]
+            assert step.idempotency.value in ["idempotent", "conditional", "non_idempotent"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -326,7 +326,7 @@ def test_plan_step_side_effect_classification():
         
         for step in plan.steps:
             assert step.side_effect is not None
-            assert step.side_effect in ["NONE", "READ_ONLY", "REVERSIBLE", "LOCAL", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+            assert step.side_effect.value in ["NONE", "READ_ONLY", "REVERSIBLE", "LOCAL", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -569,7 +569,7 @@ def test_plan_domain_object_consumable():
     # PlanStep is valid domain object
     assert step.step_id is not None
     assert step.action is not None
-    assert step.arguments is not None
+    assert step.parameters is not None
     assert step.objective is not None
 
 
