@@ -163,10 +163,23 @@ def test_recover_node_transient_failure():
     """Test that transient failure triggers retry strategy."""
     from graph.nodes.recover import recover_node
     from migration.graph_state import OperonixState
-    from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot
+    from migration.domain_contracts import TaskRequest, TaskSource, VerificationResult, ContextSnapshot, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
     
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
+    
+    # Add a plan with a safe-to-retry step
+    step = PlanStep(
+        step_id="step_1",
+        action="open_firefox",
+        objective="Open Firefox browser",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.LOCAL,
+        reversibility=True
+    )
+    state.plan = Plan(steps=[step])
+    state.plan.current_step_index = 0
+    
     state.verification = VerificationResult(
         status="FAILED",
         observed_context=ContextSnapshot(),
