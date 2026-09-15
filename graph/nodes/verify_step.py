@@ -45,9 +45,17 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     })
     
     # Step 1: Check if executor reported success
-    executor_success = state.execution.execution_status == TaskStatus.COMPLETED if state.execution else False
-    
-    if not executor_success:
+    if not state.execution:
+        # No execution result, verification is uncertain
+        observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
+        verification_result = VerificationResult(
+            status="UNCERTAIN",
+            observed_context=observed_context,
+            expected_state={},
+            actual_state={},
+            reason="No execution result available"
+        )
+    elif state.execution.execution_status != TaskStatus.COMPLETED:
         # Executor failed, verification fails
         observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
         # Ensure sub_context is a string, not a dict
@@ -122,7 +130,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     if not state.plan or state.plan.current_step_index >= len(state.plan.steps):
         return VerificationResult(
             status="UNCERTAIN",
-            observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
+            observed_context=state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot(),
             expected_state={},
             actual_state={},
             reason="No plan or invalid step index"
