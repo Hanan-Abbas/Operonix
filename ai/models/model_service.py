@@ -205,6 +205,37 @@ class OperonixModelService:
         # Later phases will use LangChain's structured output
         logger.warning("LangChain structured output integration deferred to later phases")
         
+        # Return a stub response that matches common schema patterns
+        schema_name = schema.get('name', 'unnamed')
+        
+        if schema_name == "complexity_analysis":
+            return {
+                "is_complex": False
+            }
+        elif schema_name == "plan_generation":
+            # Return placeholder steps for plan generation
+            return {
+                "steps": [
+                    {
+                        "action": "prepare_environment",
+                        "objective": "Prepare environment for execution",
+                        "arguments": {}
+                    },
+                    {
+                        "action": "execute_intent",
+                        "objective": "Execute the user's request",
+                        "arguments": {}
+                    }
+                ]
+            }
+        elif schema_name == "intent_analysis":
+            return {
+                "intent": "unknown",
+                "confidence": 0.5,
+                "parameters": {}
+            }
+        
+        # Default stub response
         return {
             "provider": self.provider.value,
             "model": self.model_name,
