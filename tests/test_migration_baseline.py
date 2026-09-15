@@ -446,12 +446,12 @@ def test_plan_step_idempotency_validation():
     from pydantic import ValidationError
     
     # Valid idempotency
-    step = PlanStep(step_id="test", action="test", idempotency=PlanStepIdempotency.IDEMPOTENT)
+    step = PlanStep(step_id="test", action="test", objective="test action", idempotency=PlanStepIdempotency.IDEMPOTENT)
     assert step.idempotency == PlanStepIdempotency.IDEMPOTENT
     
     # Invalid idempotency (string instead of enum)
     with pytest.raises(ValidationError):
-        PlanStep(step_id="test", action="test", idempotency="INVALID")
+        PlanStep(step_id="test", action="test", objective="test action", idempotency="INVALID")
 
 
 # ─── INTEGRATION TESTS ────────────────────────────────────────────────────────
