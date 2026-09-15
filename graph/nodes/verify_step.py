@@ -51,7 +51,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
         # Executor failed, verification fails
         observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
         # Ensure sub_context is a string, not a dict
-        if hasattr(observed_context, 'sub_context') and isinstance(observed_context.sub_context, dict):
+        if hasattr(observed_context, 'sub_context') and (observed_context.sub_context is None or isinstance(observed_context.sub_context, dict)):
             observed_context.sub_context = None
         verification_result = VerificationResult(
             status="FAILED",
@@ -143,10 +143,10 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         context_snapshot = _gather_context_snapshot(state)
         observed_context = ContextSnapshot(
             window_title=context_snapshot.get("window_title", "Unknown"),
-            app_name=context_snapshot.get("app_name", "Unknown"),
+            app=context_snapshot.get("app_name", "Unknown"),
             app_type=context_snapshot.get("app_type", "unknown"),
             cwd=context_snapshot.get("cwd"),
-            state=context_snapshot.get("state", {})
+            sub_context=None
         )
         
         # Verify postconditions based on step objective
