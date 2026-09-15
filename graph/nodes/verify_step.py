@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect
+from migration.domain_contracts import VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect, TaskStatus
 from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.VerifyStep")
@@ -45,7 +45,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     })
     
     # Step 1: Check if executor reported success
-    executor_success = state.execution.execution_status == "completed" if state.execution else False
+    executor_success = state.execution.execution_status == TaskStatus.COMPLETED if state.execution else False
     
     if not executor_success:
         # Executor failed, verification fails
@@ -132,8 +132,8 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     
     # Phase 6: Check if step is non-idempotent or has high side-effects
     # If execution failed for such steps, outcome is uncertain
-    if current_step.idempotency == "NON_IDEMPOTENT" or current_step.side_effect in ["DESTRUCTIVE", "EXTERNAL_COMMIT"]:
-        if state.execution and state.execution.execution_status != "COMPLETED":
+    if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT or current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+        if state.execution and state.execution.execution_status != TaskStatus.COMPLETED:
             # Non-idempotent or high side-effect operation failed
             # We cannot determine if the operation had partial effect
             return VerificationResult(
