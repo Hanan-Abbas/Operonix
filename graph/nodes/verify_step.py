@@ -45,7 +45,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     })
     
     # Step 1: Check if executor reported success
-    executor_success = state.execution.execution_status == "COMPLETED" if state.execution else False
+    executor_success = state.execution.execution_status == "completed" if state.execution else False
     
     if not executor_success:
         # Executor failed, verification fails
