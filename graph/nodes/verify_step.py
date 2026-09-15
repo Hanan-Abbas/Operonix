@@ -69,7 +69,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
             observed_context=observed_context,
             expected_state={},
             actual_state={},
-            reason=f"Executor reported failure: {state.execution.execution_status if state.execution else 'No execution result'}"
+            reason=f"Executor reported failure: {state.execution.execution_status.value if state.execution else 'No execution result'}"
         )
     else:
         # Executor succeeded, verify postconditions
