@@ -65,7 +65,7 @@ def test_verify_step_executor_failure():
     
     assert result["state"].verification is not None
     assert result["state"].verification.status == "FAILED"
-    assert "executor reported failure" in result["state"].verification.reason
+    assert "Executor reported failure" in result["state"].verification.reason
 
 
 def test_verify_step_no_execution_result():
