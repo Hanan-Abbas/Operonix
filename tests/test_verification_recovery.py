@@ -516,61 +516,106 @@ def test_error_semantics_planning_failure():
 def test_recovery_mapping_transient_to_retry():
     """Test recovery mapping: TRANSIENT → retry."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource, Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.TRANSIENT, None)
+    # Create minimal state with safe-to-retry plan
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    step = PlanStep(
+        step_id="step_1",
+        action="test",
+        objective="test action",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.LOCAL,
+        reversibility=True
+    )
+    state.plan = Plan(steps=[step])
+    state.plan.current_step_index = 0
+    
+    strategy = _determine_recovery_strategy(FailureCategory.TRANSIENT, state)
     assert strategy.value == "retry"
 
 
 def test_recovery_mapping_context_mismatch_to_observe():
     """Test recovery mapping: CONTEXT_MISMATCH → observe."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.CONTEXT_MISMATCH, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.CONTEXT_MISMATCH, state)
     assert strategy.value == "observe"
 
 
 def test_recovery_mapping_routing_mismatch_to_route():
     """Test recovery mapping: ROUTING_MISMATCH → route."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.ROUTING_MISMATCH, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.ROUTING_MISMATCH, state)
     assert strategy.value == "route"
 
 
 def test_recovery_mapping_tool_unavailable_to_route():
     """Test recovery mapping: TOOL_UNAVAILABLE → route."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.TOOL_UNAVAILABLE, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.TOOL_UNAVAILABLE, state)
     assert strategy.value == "route"
 
 
 def test_recovery_mapping_planning_error_to_replan():
     """Test recovery mapping: PLANNING_ERROR → replan."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.PLANNING_ERROR, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.PLANNING_ERROR, state)
     assert strategy.value == "replan"
 
 
 def test_recovery_mapping_permission_denied_to_abort():
     """Test recovery mapping: PERMISSION_DENIED → abort."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.PERMISSION_DENIED, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.PERMISSION_DENIED, state)
     assert strategy.value == "abort"
 
 
 def test_recovery_mapping_unknown_to_abort():
     """Test recovery mapping: UNKNOWN → abort."""
     from graph.nodes.recover import _determine_recovery_strategy
-    from migration.domain_contracts import FailureCategory
+    from migration.domain_contracts import FailureCategory, TaskRequest, TaskSource
+    from migration.graph_state import OperonixState
     
-    strategy = _determine_recovery_strategy(FailureCategory.UNKNOWN, None)
+    # Create minimal state
+    task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
+    state = OperonixState(task=task)
+    
+    strategy = _determine_recovery_strategy(FailureCategory.UNKNOWN, state)
     assert strategy.value == "abort"
