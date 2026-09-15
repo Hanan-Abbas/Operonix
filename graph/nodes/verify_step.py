@@ -50,6 +50,9 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     if not executor_success:
         # Executor failed, verification fails
         observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
+        # Ensure sub_context is a string, not a dict
+        if hasattr(observed_context, 'sub_context') and isinstance(observed_context.sub_context, dict):
+            observed_context.sub_context = None
         verification_result = VerificationResult(
             status="FAILED",
             observed_context=observed_context,
