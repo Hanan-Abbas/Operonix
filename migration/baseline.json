@@ -1,7 +1,7 @@
 {
-  "baseline_commit": "fafc759b0276b3d5947e7cbe7604227435e6cced",
+  "baseline_commit": "b9d2afafa9aceb770121d66cc5aa18b66e36aeaa",
   "baseline_branch": "main",
-  "established_at": "2026-09-15T15:45:21.749158",
+  "established_at": "2026-09-15T15:48:44.477013",
   "phase": "Phase 0: Baseline, Contracts & Safety",
   "status": "established",
   "critical_workflows": [
