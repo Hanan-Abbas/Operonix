@@ -52,7 +52,18 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
         observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
         # Ensure sub_context is a string, not a dict
         if hasattr(observed_context, 'sub_context') and (observed_context.sub_context is None or isinstance(observed_context.sub_context, dict)):
-            observed_context.sub_context = None
+            # Create a new ContextSnapshot with corrected sub_context
+            observed_context = ContextSnapshot(
+                active_window=observed_context.active_window if hasattr(observed_context, 'active_window') else None,
+                app=observed_context.app if hasattr(observed_context, 'app') else None,
+                app_type=observed_context.app_type if hasattr(observed_context, 'app_type') else None,
+                window_title=observed_context.window_title if hasattr(observed_context, 'window_title') else None,
+                cwd=observed_context.cwd if hasattr(observed_context, 'cwd') else None,
+                sub_context=None,
+                ui_state=observed_context.ui_state if hasattr(observed_context, 'ui_state') else {},
+                permissions=observed_context.permissions if hasattr(observed_context, 'permissions') else [],
+                confidence=observed_context.confidence if hasattr(observed_context, 'confidence') else 0.0
+            )
         verification_result = VerificationResult(
             status="FAILED",
             observed_context=observed_context,
