@@ -300,7 +300,7 @@ def test_plan_step_idempotency_classification():
         
         for step in plan.steps:
             assert step.idempotency is not None
-            assert step.idempotency in ["SAFE", "CONDITIONAL", "NON_IDEMPOTENT"]
+            assert step.idempotency in ["IDEMPOTENT", "CONDITIONAL", "NON_IDEMPOTENT"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -326,7 +326,7 @@ def test_plan_step_side_effect_classification():
         
         for step in plan.steps:
             assert step.side_effect is not None
-            assert step.side_effect in ["READ_ONLY", "REVERSIBLE", "LIMITED_SIDE_EFFECT", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+            assert step.side_effect in ["NONE", "READ_ONLY", "REVERSIBLE", "LOCAL", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -454,7 +454,7 @@ def test_graph_owns_current_step():
     import uuid
     
     task = TaskRequest(user_input="test", source=TaskSource.API)
-    step = PlanStep(step_id=str(uuid.uuid4()), action="test")
+    step = PlanStep(step_id=str(uuid.uuid4()), action="test", objective="test action")
     plan = Plan(steps=[step])
     state = OperonixState(task=task)
     state.plan = plan
@@ -471,8 +471,8 @@ def test_graph_owns_completed_steps():
     import uuid
     
     task = TaskRequest(user_input="test", source=TaskSource.API)
-    step1 = PlanStep(step_id=str(uuid.uuid4()), action="test1")
-    step2 = PlanStep(step_id=str(uuid.uuid4()), action="test2")
+    step1 = PlanStep(step_id=str(uuid.uuid4()), action="test1", objective="test action 1")
+    step2 = PlanStep(step_id=str(uuid.uuid4()), action="test2", objective="test action 2")
     plan = Plan(steps=[step1, step2])
     state = OperonixState(task=task)
     state.plan = plan
