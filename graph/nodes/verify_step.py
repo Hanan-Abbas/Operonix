@@ -155,7 +155,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
             # We cannot determine if the operation had partial effect
             return VerificationResult(
                 status="UNCERTAIN_OUTCOME",
-                observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
+                observed_context=state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot(),
                 expected_state={},
                 actual_state={},
                 reason=f"Non-idempotent or high side-effect operation failed, outcome uncertain (idempotency={current_step.idempotency}, side_effect={current_step.side_effect})"
