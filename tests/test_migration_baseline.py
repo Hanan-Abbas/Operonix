@@ -442,14 +442,14 @@ def test_routing_candidate_score_validation():
 
 def test_plan_step_idempotency_validation():
     """Test that PlanStep validates idempotency enum."""
-    from migration.domain_contracts import PlanStep
+    from migration.domain_contracts import PlanStep, PlanStepIdempotency
     from pydantic import ValidationError
     
     # Valid idempotency
-    step = PlanStep(step_id="test", action="test", idempotency="idempotent")
-    assert step.idempotency == "idempotent"
+    step = PlanStep(step_id="test", action="test", idempotency=PlanStepIdempotency.IDEMPOTENT)
+    assert step.idempotency == PlanStepIdempotency.IDEMPOTENT
     
-    # Invalid idempotency
+    # Invalid idempotency (string instead of enum)
     with pytest.raises(ValidationError):
         PlanStep(step_id="test", action="test", idempotency="INVALID")
 
