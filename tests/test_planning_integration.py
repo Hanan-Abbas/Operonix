@@ -326,7 +326,7 @@ def test_plan_step_side_effect_classification():
         
         for step in plan.steps:
             assert step.side_effect is not None
-            assert step.side_effect.value in ["NONE", "READ_ONLY", "REVERSIBLE", "LOCAL", "DESTRUCTIVE", "EXTERNAL_COMMIT"]
+            assert step.side_effect.value in ["none", "read_only", "reversible", "local", "destructive", "external_commit"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
