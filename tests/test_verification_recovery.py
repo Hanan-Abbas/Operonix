@@ -50,9 +50,12 @@ def test_verify_step_executor_failure():
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     state.execution = ExecutionResult(
+        execution_id="exec_2",
         step_id="step_1",
+        success=False,
+        method_used="SHELL",
         execution_status=TaskStatus.FAILED,
-        result={"error": "Command failed"}
+        result_data={"error": "Command failed"}
     )
     
     result = verify_step_node(state)
@@ -86,9 +89,12 @@ def test_verify_step_execution_result_failure_flag():
     task = TaskRequest(user_input="Open Firefox", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     state.execution = ExecutionResult(
+        execution_id="exec_3",
         step_id="step_1",
+        success=False,
+        method_used="SHELL",
         execution_status=TaskStatus.COMPLETED,
-        result={"success": False, "error": "Tool not found"}
+        result_data={"success": False, "error": "Tool not found"}
     )
     
     result = verify_step_node(state)
