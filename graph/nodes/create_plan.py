@@ -366,8 +366,8 @@ def _generate_placeholder_complex_plan(state: OperonixState) -> Plan:
         action="prepare_environment",
         arguments={},
         objective="Prepare environment for execution",
-        idempotency="SAFE",
-        side_effect="READ_ONLY",
+        idempotency="idempotent",
+        side_effect="read_only",
         reversibility=True
     )
     
@@ -379,8 +379,8 @@ def _generate_placeholder_complex_plan(state: OperonixState) -> Plan:
             "parameters": state.intent.parameters if state.intent else {}
         },
         objective=f"Execute intent: {state.task.user_input}",
-        idempotency="CONDITIONAL",
-        side_effect="LIMITED_SIDE_EFFECT",
+        idempotency="conditional",
+        side_effect="local",
         reversibility=True,
         dependencies=[step1.step_id]
     )
