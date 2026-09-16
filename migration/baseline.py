@@ -79,7 +79,7 @@ class BaselineRegistry:
         baseline_info = {
             "baseline_commit": commit,
             "baseline_branch": branch,
-            "established_at": datetime.utcnow().isoformat(),
+            "established_at": datetime.now(UTC).isoformat(),
             "phase": "Phase 0: Baseline, Contracts & Safety",
             "status": "established",
             "critical_workflows": self._get_critical_workflows(),
