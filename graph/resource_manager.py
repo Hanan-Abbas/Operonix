@@ -160,7 +160,7 @@ class ResourceManager:
         Returns:
             Number of ownerships cleaned up
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)()
         expired_count = 0
         
         ownerships_to_expire = [
