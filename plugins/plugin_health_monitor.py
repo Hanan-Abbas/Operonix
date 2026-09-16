@@ -208,7 +208,7 @@ class PluginHealthMonitor:
         Consumed by dashboard/live_logs.js or external log aggregators.
         """
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC)().isoformat(),
             "type": "plugin_execution",
             "plugin_name": plugin_name,
             "intent": intent,
