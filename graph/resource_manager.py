@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from migration.domain_contracts import ResourceOwnership, ResourceType
 
@@ -61,7 +61,7 @@ class ResourceManager:
         )
         
         if expires_in_seconds:
-            ownership.expires_at = datetime.utcnow() + timedelta(seconds=expires_in_seconds)
+            ownership.expires_at = datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
         
         # Store ownership
         self.active_ownerships[ownership.ownership_id] = ownership
