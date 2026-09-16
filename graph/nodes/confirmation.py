@@ -113,7 +113,7 @@ def resume_from_confirmation(state: OperonixState, human_response: HumanInterven
     if state.confirmation:
         state.confirmation.response = human_response
         from datetime import datetime
-        state.confirmation.responded_at = datetime.utcnow()
+        state.confirmation.responded_at = datetime.now(UTC)
     
     # Mark graph as resumed
     state.paused = False
