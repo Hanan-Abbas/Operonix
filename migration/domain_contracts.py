@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any, Optional, Literal, Dict, List
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
