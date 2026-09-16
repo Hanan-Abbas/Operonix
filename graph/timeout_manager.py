@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from migration.domain_contracts import TimeoutConfig, CancellationRequest, CancellationReason
 
@@ -82,8 +82,8 @@ class TimeoutManager:
                 "task_id": task_id,
                 "step_id": step_id,
                 "timeout_seconds": timeout_seconds,
-                "started_at": datetime.utcnow(),
-                "expires_at": datetime.utcnow() + timedelta(seconds=timeout_seconds)
+                "started_at": datetime.now(UTC),
+                "expires_at": datetime.now(UTC) + timedelta(seconds=timeout_seconds)
             }
             self.timeout_callbacks[timeout_key] = callback
         
@@ -104,8 +104,8 @@ class TimeoutManager:
                 "type": "task",
                 "task_id": task_id,
                 "timeout_seconds": timeout_seconds,
-                "started_at": datetime.utcnow(),
-                "expires_at": datetime.utcnow() + timedelta(seconds=timeout_seconds)
+                "started_at": datetime.now(UTC),
+                "expires_at": datetime.now(UTC) + timedelta(seconds=timeout_seconds)
             }
             self.timeout_callbacks[timeout_key] = callback
         
@@ -126,8 +126,8 @@ class TimeoutManager:
                 "type": "watchdog",
                 "task_id": task_id,
                 "timeout_seconds": timeout_seconds,
-                "started_at": datetime.utcnow(),
-                "expires_at": datetime.utcnow() + timedelta(seconds=timeout_seconds)
+                "started_at": datetime.now(UTC),
+                "expires_at": datetime.now(UTC) + timedelta(seconds=timeout_seconds)
             }
             self.timeout_callbacks[timeout_key] = callback
         
