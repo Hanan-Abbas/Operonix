@@ -89,7 +89,7 @@ class HistoryStore:
         """Insert a new entry and prune old ones over *limit*. Returns new row id."""
         if not self._conn:
             return None
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(UTC).isoformat()
         try:
             cursor = await self._conn.execute(
                 """
