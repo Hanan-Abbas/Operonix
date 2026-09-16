@@ -390,10 +390,7 @@ class CheckpointState(BaseModel):
     state_version: str = "1.0"
     checkpoint_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class HumanInterventionType(str, Enum):
@@ -425,10 +422,7 @@ class HumanIntervention(BaseModel):
     requested_at: datetime = Field(default_factory=datetime.utcnow)
     responded_at: Optional[datetime] = None
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # Import uuid for default factories
@@ -447,10 +441,7 @@ class TimeoutConfig(BaseModel):
     task_timeout_seconds: int = Field(default=300, description="Timeout for entire task")
     system_watchdog_timeout_seconds: int = Field(default=600, description="System/watchdog timeout")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class CancellationReason(str, Enum):
@@ -475,10 +466,7 @@ class CancellationRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     requested_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class ResourceType(str, Enum):
@@ -509,10 +497,7 @@ class ResourceOwnership(BaseModel):
     expires_at: Optional[datetime] = None
     is_active: bool = True
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class AbortSemantics(str, Enum):
