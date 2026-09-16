@@ -470,6 +470,7 @@ def test_operonix_langchain_tool_run_error():
 
 def test_operonix_langchain_tool_arun():
     """Test that OperonixLangChainTool arun works."""
+    import asyncio
     from graph.langchain_tools import OperonixLangChainTool
     from graph.tool_adapter import OperonixToolAdapter
     
@@ -483,8 +484,8 @@ def test_operonix_langchain_tool_arun():
     adapter = MockAdapter("test_tool", "test_capability")
     tool = OperonixLangChainTool(adapter)
     
-    # For now, arun calls run synchronously
-    result = tool.arun(param="value")
+    # arun is async, so we need to await it
+    result = asyncio.run(tool.arun(param="value"))
     
     assert result == "test result"
 
