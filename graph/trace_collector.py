@@ -72,7 +72,7 @@ class TraceCollector:
             return None
         
         trace = self.active_traces[task_id]
-        trace.completed_at = datetime.utcnow()
+        trace.completed_at = datetime.now(UTC)
         trace.success = success
         trace.final_outcome = final_outcome
         
