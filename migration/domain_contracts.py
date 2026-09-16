@@ -645,7 +645,7 @@ class ExecutionTrace(BaseModel):
         if self.task_id != task_id:
             raise ValueError(f"Task ID mismatch: expected {self.task_id}, got {task_id}")
         
-        self.completed_at = datetime.utcnow()
+        self.completed_at = datetime.now(UTC)
         self.success = success
         self.final_outcome = final_outcome
 
