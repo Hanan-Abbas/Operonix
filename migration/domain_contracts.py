@@ -52,10 +52,7 @@ class TaskRequest(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── INTENT ───────────────────────────────────────────────────────────────────
@@ -95,10 +92,7 @@ class ContextSnapshot(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     captured_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── KNOWLEDGE ────────────────────────────────────────────────────────────────
@@ -159,10 +153,7 @@ class Plan(BaseModel):
     completed_steps: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
     
     @property
     def current_step(self) -> Optional[PlanStep]:
@@ -218,10 +209,7 @@ class MethodDecision(BaseModel):
     routing_explanation: Optional[str] = None
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── SAFETY ───────────────────────────────────────────────────────────────────
@@ -247,10 +235,7 @@ class SafetyDecision(BaseModel):
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     additional_info: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── EXECUTION ───────────────────────────────────────────────────────────────
@@ -277,10 +262,7 @@ class ExecutionResult(BaseModel):
     started_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── VERIFICATION ────────────────────────────────────────────────────────────
@@ -294,10 +276,7 @@ class VerificationResult(BaseModel):
     reason: Optional[str] = None
     verification_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── RECOVERY ────────────────────────────────────────────────────────────────
@@ -337,10 +316,7 @@ class RecoveryDecision(BaseModel):
     reason: Optional[str] = None
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── REFLECTION ────────────────────────────────────────────────────────────
@@ -363,10 +339,7 @@ class ReflectionResult(BaseModel):
     evolution_needed: bool = False
     reflection_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── FINAL RESULT ───────────────────────────────────────────────────────────
@@ -380,10 +353,7 @@ class FinalResult(BaseModel):
     task_id: str
     completed_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── CHECKPOINTING ───────────────────────────────────────────────────────────
