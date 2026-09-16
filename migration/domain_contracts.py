@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Optional, Literal, Dict, List
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ─── TASK LIFECYCLE ───────────────────────────────────────────────────────────
