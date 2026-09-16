@@ -49,7 +49,7 @@ class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_input: str
     source: TaskSource
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
@@ -90,7 +90,7 @@ class ContextSnapshot(BaseModel):
     ui_state: Dict[str, Any] = Field(default_factory=dict)
     permissions: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    captured_at: datetime = Field(default_factory=datetime.utcnow)
+    captured_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -151,7 +151,7 @@ class Plan(BaseModel):
     steps: List[PlanStep]
     current_step_index: int = 0
     completed_steps: List[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
     
@@ -207,7 +207,7 @@ class MethodDecision(BaseModel):
     policy_decision: Optional[str] = None
     safety_constraints: List[str] = Field(default_factory=list)
     routing_explanation: Optional[str] = None
-    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    decision_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -232,7 +232,7 @@ class SafetyDecision(BaseModel):
     user_decision: Optional[Literal["ALLOW", "DENY"]] = None
     policy_constraints: List[str] = Field(default_factory=list)
     safety_checks_performed: List[str] = Field(default_factory=list)
-    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    decision_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     additional_info: Dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
@@ -259,7 +259,7 @@ class ExecutionResult(BaseModel):
     attempt: int = 1
     method_used: str
     execution_status: TaskStatus
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: Optional[datetime] = None
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
@@ -274,7 +274,7 @@ class VerificationResult(BaseModel):
     expected_state: Dict[str, Any] = Field(default_factory=dict)
     actual_state: Dict[str, Any] = Field(default_factory=dict)
     reason: Optional[str] = None
-    verification_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    verification_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -314,7 +314,7 @@ class RecoveryDecision(BaseModel):
     replan_required: bool = False
     target_stage: Optional[str] = None
     reason: Optional[str] = None
-    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    decision_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -337,7 +337,7 @@ class ReflectionResult(BaseModel):
     lesson: Optional[str] = None
     confidence_delta: float = Field(default=0.0)
     evolution_needed: bool = False
-    reflection_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    reflection_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -351,7 +351,7 @@ class FinalResult(BaseModel):
     response: str
     error: Optional[str] = None
     task_id: str
-    completed_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -388,7 +388,7 @@ class CheckpointState(BaseModel):
     recovery_data: Optional[Dict[str, Any]] = None
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
     state_version: str = "1.0"
-    checkpoint_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    checkpoint_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -419,7 +419,7 @@ class HumanIntervention(BaseModel):
     options: Optional[list] = None  # For CHOOSE type
     response: Optional[HumanInterventionType] = None
     response_data: Optional[Dict[str, Any]] = None
-    requested_at: datetime = Field(default_factory=datetime.utcnow)
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     responded_at: Optional[datetime] = None
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
@@ -464,7 +464,7 @@ class CancellationRequest(BaseModel):
     reason: CancellationReason
     requested_by: str = Field(default="system", description="Who requested cancellation (user, system, watchdog)")
     context: Dict[str, Any] = Field(default_factory=dict)
-    requested_at: datetime = Field(default_factory=datetime.utcnow)
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -493,7 +493,7 @@ class ResourceOwnership(BaseModel):
     task_id: str
     resource_type: ResourceType
     resource_identifier: Optional[str] = None  # e.g., window title, file path
-    acquired_at: datetime = Field(default_factory=datetime.utcnow)
+    acquired_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: Optional[datetime] = None
     is_active: bool = True
     
@@ -518,7 +518,7 @@ class AbortDecision(BaseModel):
     reason: str
     cleanup_required: bool = True
     rollback_required: bool = False
-    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    decision_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
@@ -554,7 +554,7 @@ class TraceEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_id: str
     event_type: TraceEventType
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     data: Dict[str, Any] = Field(default_factory=dict)
     node_name: Optional[str] = None  # Graph node that generated this event
     
@@ -570,7 +570,7 @@ class ObservabilityEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_id: str
     event_type: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     data: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
@@ -591,7 +591,7 @@ class ExecutionTrace(BaseModel):
     """
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_id: str
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: Optional[datetime] = None
     events: List[TraceEvent] = Field(default_factory=list)
     final_outcome: Optional[str] = None
@@ -738,7 +738,7 @@ class CandidateEvaluation(BaseModel):
     Per migration plan Phase 10: Candidate-Based Routing Engine
     """
     candidate: Candidate
-    evaluation_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    evaluation_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     evaluation_reason: Optional[str] = None
     constraints_satisfied: bool = True
     constraint_violations: List[str] = Field(default_factory=list)
@@ -781,7 +781,7 @@ class RoutingDecision(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     routing_explanation: str
     ranking_policy_id: Optional[str] = None
-    decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    decision_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
