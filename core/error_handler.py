@@ -14,7 +14,7 @@ class AIOSException(Exception):
         self.message = message
         self.component = component
         self.details = details or {}
-        self.timestamp = datetime.utcnow().isoformat()
+        self.timestamp = datetime.now(UTC)().isoformat()
 
 
 class ErrorHandler:
@@ -54,7 +54,7 @@ class ErrorHandler:
         func_name = caller.f_code.co_name if caller else "unknown"
 
         error_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC)().isoformat(),
             "component": component,
             "function": func_name,
             "error_type": error_type,
