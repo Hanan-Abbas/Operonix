@@ -52,7 +52,7 @@ class PluginRollbackManager:
             "plugin_name": plugin_name,
             "plugin_backup": "",
             "manifest_backup": "",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC)().isoformat(),
         }
 
         if os.path.exists(plugin_file):
@@ -131,7 +131,7 @@ class PluginRollbackManager:
             manifest.previous_versions.append(old_version)
 
         manifest.changelog.append(
-            f"[{datetime.utcnow().strftime('%Y-%m-%d')}] v{old_version} → v{new_version}: {reason}"
+            f"[{datetime.now(UTC)().strftime('%Y-%m-%d')}] v{old_version} → v{new_version}: {reason}"
         )
         manifest.version = new_version
         manifest.save(plugin_dir)
