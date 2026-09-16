@@ -58,8 +58,8 @@ class TimeoutManager:
                 "task_id": task_id,
                 "operation_id": operation_id,
                 "timeout_seconds": timeout_seconds,
-                "started_at": datetime.now(UTC)C),
-                "expires_at": datetime.now(UTC)C) + timedelta(seconds=timeout_seconds)
+                "started_at": datetime.now(UTC),
+                "expires_at": datetime.now(UTC) + timedelta(seconds=timeout_seconds)
             }
             self.timeout_callbacks[timeout_key] = callback
         
