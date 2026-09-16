@@ -14,7 +14,7 @@ Per migration plan §3:
 from __future__ import annotations
 
 from typing import Any, Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, UTC
 from pydantic import BaseModel, Field, ConfigDict
 
 from migration.domain_contracts import (
@@ -187,12 +187,12 @@ class OperonixState(BaseModel):
     )
     
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(UTC),
         description="When this state was created"
     )
     
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(UTC),
         description="When this state was last updated"
     )
     
@@ -203,7 +203,7 @@ class OperonixState(BaseModel):
     
     def update_timestamp(self) -> None:
         """Update the updated_at timestamp."""
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(UTC)
     
     def add_history_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Add an event to the history log."""
@@ -211,7 +211,7 @@ class OperonixState(BaseModel):
             self.history["events"] = []
         self.history["events"].append({
             "type": event_type,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "data": data
         })
         self.update_timestamp()
@@ -272,7 +272,7 @@ class CheckpointState(BaseModel):
     context_snapshot: Optional[ContextSnapshot] = None
     state_schema_version: str = "1.0.0"
     workflow_version: str = "1.0.0"
-    checkpoint_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    checkpoint_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
