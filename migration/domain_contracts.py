@@ -520,10 +520,7 @@ class AbortDecision(BaseModel):
     rollback_required: bool = False
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # ─── OBSERVABILITY & EXECUTION TRACE ───────────────────────────────────────────
@@ -561,10 +558,7 @@ class TraceEvent(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
     node_name: Optional[str] = None  # Graph node that generated this event
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class ObservabilityEvent(BaseModel):
@@ -580,10 +574,7 @@ class ObservabilityEvent(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class ExecutionTrace(BaseModel):
@@ -606,10 +597,7 @@ class ExecutionTrace(BaseModel):
     final_outcome: Optional[str] = None
     success: bool = False
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
     
     def add_event(self, event: TraceEvent) -> None:
         """Add an event to the trace.
@@ -704,10 +692,7 @@ class Candidate(BaseModel):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
     
     def calculate_overall_score(self, weights: Optional[Dict[str, float]] = None) -> float:
         """Calculate overall score using provided weights or default weights.
@@ -758,10 +743,7 @@ class CandidateEvaluation(BaseModel):
     constraints_satisfied: bool = True
     constraint_violations: List[str] = Field(default_factory=list)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class RankingPolicy(BaseModel):
@@ -785,10 +767,7 @@ class RankingPolicy(BaseModel):
     min_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     require_all_constraints: bool = True
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 class RoutingDecision(BaseModel):
@@ -804,8 +783,5 @@ class RoutingDecision(BaseModel):
     ranking_policy_id: Optional[str] = None
     decision_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
