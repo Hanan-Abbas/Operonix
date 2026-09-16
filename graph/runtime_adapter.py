@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, UTC
 
 from migration.graph_state import OperonixState
 from migration.domain_contracts import TaskRequest, TaskSource, FinalResult
@@ -80,7 +80,7 @@ class RuntimeGraphAdapter:
             task_id=str(uuid.uuid4()),
             user_input=user_input,
             source=source,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
             metadata=metadata or {}
         )
     
