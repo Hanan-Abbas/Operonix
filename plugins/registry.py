@@ -62,7 +62,7 @@ class PluginEntry:
         self.manifest   = manifest
         self.instance   = instance
         self.plugin_dir = plugin_dir
-        self.loaded_at  = datetime.utcnow().isoformat()
+        self.loaded_at  = datetime.now(UTC)().isoformat()
 
     @property
     def name(self) -> str:
@@ -293,7 +293,7 @@ class PluginRegistry:
                 return False
             entry.manifest.status  = status
             entry.manifest.trusted = (status == PluginStatus.TRUSTED)
-            entry.manifest.last_reviewed = datetime.utcnow().isoformat()
+            entry.manifest.last_reviewed = datetime.now(UTC)().isoformat()
             if entry.plugin_dir or plugin_dir:
                 entry.manifest.save(entry.plugin_dir or plugin_dir)
 
@@ -328,7 +328,7 @@ class PluginRegistry:
                 entry.manifest.total_successes += 1
             else:
                 entry.manifest.total_failures += 1
-            entry.manifest.last_run_at = datetime.utcnow().isoformat()
+            entry.manifest.last_run_at = datetime.now(UTC)().isoformat()
             if entry.plugin_dir:
                 entry.manifest.save(entry.plugin_dir)
 
