@@ -58,8 +58,8 @@ class TimeoutManager:
                 "task_id": task_id,
                 "operation_id": operation_id,
                 "timeout_seconds": timeout_seconds,
-                "started_at": datetime.utcnow(),
-                "expires_at": datetime.utcnow() + timedelta(seconds=timeout_seconds)
+                "started_at": datetime.now(UTC)C),
+                "expires_at": datetime.now(UTC)C) + timedelta(seconds=timeout_seconds)
             }
             self.timeout_callbacks[timeout_key] = callback
         
@@ -178,7 +178,7 @@ class TimeoutManager:
         Returns:
             List of expired timeout keys
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)()
         expired = []
         
         with self._lock:
