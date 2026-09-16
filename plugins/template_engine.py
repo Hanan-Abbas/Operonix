@@ -1338,7 +1338,7 @@ class TemplateEngine:
             description=description,
             category=category,
             version=version,
-            timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            timestamp=datetime.now(UTC)().strftime("%Y-%m-%d %H:%M UTC"),
         )
 
         body = template.format(
