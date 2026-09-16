@@ -11,6 +11,7 @@ import pytest
 import tempfile
 import shutil
 from pathlib import Path
+from datetime import UTC
 
 
 # ─── CHECKPOINTING SERVICE TESTS ─────────────────────────────────────────────
@@ -237,7 +238,7 @@ def test_human_intervention_with_response():
     )
     
     intervention.response = HumanInterventionType.CONFIRM
-    intervention.responded_at = datetime.utcnow()
+    intervention.responded_at = datetime.now(UTC)
     
     assert intervention.response == HumanInterventionType.CONFIRM
     assert intervention.responded_at is not None
