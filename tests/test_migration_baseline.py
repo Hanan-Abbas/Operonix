@@ -476,11 +476,11 @@ def test_domain_contracts_serialization():
     request = TaskRequest(user_input="test", source=TaskSource.VOICE)
     
     # Should serialize without error
-    json_str = request.json()
+    json_str = request.model_dump_json()
     assert json_str is not None
     
     # Should deserialize back
-    deserialized = TaskRequest.parse_raw(json_str)
+    deserialized = TaskRequest.model_validate_json(json_str)
     assert deserialized.user_input == request.user_input
     assert deserialized.source == request.source
 
