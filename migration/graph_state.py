@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Dict, List
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from migration.domain_contracts import (
     TaskRequest,
@@ -196,11 +196,10 @@ class OperonixState(BaseModel):
         description="When this state was last updated"
     )
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        json_encoders={datetime: lambda v: v.isoformat()},
+        arbitrary_types_allowed=True
+    )
     
     def update_timestamp(self) -> None:
         """Update the updated_at timestamp."""
@@ -275,10 +274,7 @@ class CheckpointState(BaseModel):
     workflow_version: str = "1.0.0"
     checkpoint_timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 import uuid
