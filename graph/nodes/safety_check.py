@@ -185,7 +185,45 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error in context validation: {e}, skipping")
         
-        # 4. Determine if confirmation is required based on risk level
+        # 4. Destructive operation detection (keyword-based)
+        try:
+            # Check user input for destructive keywords
+            user_input = state.task.user_input if state.task else ""
+            is_destructive, matched_keyword = _detect_destructive_operation(user_input)
+            
+            if is_destructive:
+                risk_level = RiskLevel.HIGH
+                confirmation_required = True
+                if not reason:
+                    reason = f"Destructive operation detected: '{matched_keyword}'"
+                safety_checks_performed.append("destructive_keyword_detection")
+                logger.warning(f"Destructive operation detected: {matched_keyword}")
+            
+            # Also check step parameters for destructive keywords
+            if current_step and not is_destructive:
+                step_action = getattr(current_step, 'action', None) or getattr(current_step, 'objective', '')
+                step_params = getattr(current_step, 'parameters', {}) or {}
+                
+                # Check action and parameters for destructive keywords
+                texts_to_check = [step_action]
+                for param_value in step_params.values():
+                    if isinstance(param_value, str):
+                        texts_to_check.append(param_value)
+                
+                for text in texts_to_check:
+                    is_destructive, matched_keyword = _detect_destructive_operation(text)
+                    if is_destructive:
+                        risk_level = RiskLevel.HIGH
+                        confirmation_required = True
+                        if not reason:
+                            reason = f"Destructive operation detected in step: '{matched_keyword}'"
+                        safety_checks_performed.append("destructive_keyword_detection")
+                        logger.warning(f"Destructive operation detected in step: {matched_keyword}")
+                        break
+        except Exception as e:
+            logger.error(f"Error in destructive operation detection: {e}, skipping")
+        
+        # 5. Determine if confirmation is required based on risk level
         # Check if confirmation is forced via environment variable for testing
         import os
         force_confirmation = os.getenv("FORCE_CONFIRMATION", "false").lower() == "true"
