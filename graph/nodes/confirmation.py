@@ -74,15 +74,15 @@ def confirmation_node(state: OperonixState) -> Dict[str, Any]:
     
     state.confirmation = intervention
     
-    # Create checkpoint before pausing
+    # Mark graph as paused BEFORE creating checkpoint
+    state.paused = True
+    
+    # Create checkpoint with paused state
     checkpointing_service = get_checkpointing_service()
     checkpoint = checkpointing_service.create_checkpoint(state, "confirmation")
     
     # Store checkpoint ID in state for resume
     state.checkpoint_identifier = checkpoint.checkpoint_identifier
-    
-    # Mark graph as paused
-    state.paused = True
     
     logger.info(f"CONFIRMATION: Checkpoint created: {checkpoint.checkpoint_identifier}, graph paused")
     
