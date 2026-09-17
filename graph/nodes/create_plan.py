@@ -216,9 +216,9 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
         step = PlanStep(
             step_id=str(uuid.uuid4()),
             action="execute_intent",
-            arguments={
+            parameters={
                 "intent": state.intent.name if state.intent else "unknown",
-                "parameters": resolved_args
+                "resolved_args": resolved_args
             },
             objective=f"Execute intent: {state.task.user_input}",
             idempotency="conditional",
