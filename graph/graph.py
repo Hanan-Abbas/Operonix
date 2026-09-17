@@ -39,6 +39,8 @@ from graph.nodes.execute_step import execute_step_node
 from graph.nodes.verify_step import verify_step_node
 from graph.nodes.recover import recover_node
 from graph.nodes.confirmation import confirmation_node
+from graph.nodes.cancel import cancel_node
+from graph.nodes.reflect import reflect_node
 
 
 # ─── GRAPH BUILDER ───────────────────────────────────────────────────────────
@@ -89,7 +91,8 @@ def build_operonix_graph():
         workflow.add_node("execute_step", execute_step_node)
         workflow.add_node("verify_step", verify_step_node)
         workflow.add_node("recover", recover_node)
-        workflow.add_node("cancel", lambda state: state)  # Placeholder for cancellation handling
+        workflow.add_node("cancel", cancel_node)
+        workflow.add_node("reflect", reflect_node)
         workflow.add_node("finalize", finalize_node)
         
         # Define edges
@@ -139,7 +142,7 @@ def build_operonix_graph():
         
         workflow.add_edge("execute_step", "verify_step")
         
-        # Conditional edge from verify_step: finalize on success, recover on failure or uncertain, cancel on cancellation
+        # Conditional edge from verify_step: reflect on success, recover on failure or uncertain, cancel on cancellation
         def should_recover_or_cancel(state: OperonixState) -> str:
             """Determine if recovery or cancellation is needed based on verification result and cancellation status."""
             # Check if workflow is cancelled
@@ -147,13 +150,13 @@ def build_operonix_graph():
                 return "cancel"
             
             if state.verification and state.verification.status == "VERIFIED":
-                return "finalize"
+                return "reflect"  # Reflect on success before finalizing
             elif state.verification and state.verification.status == "UNCERTAIN_OUTCOME":
                 # Uncertain outcome: observe to check if operation already happened
                 return "recover"  # Will route to observe
             elif state.verification and state.verification.status in ["FAILED", "UNCERTAIN"]:
                 return "recover"
-            return "finalize"
+            return "reflect"  # Default to reflect
         
         workflow.add_conditional_edges(
             "verify_step",
@@ -161,9 +164,12 @@ def build_operonix_graph():
             {
                 "recover": "recover",
                 "cancel": "cancel",
-                "finalize": "finalize"
+                "reflect": "reflect"
             }
         )
+        
+        # Reflect node routes to finalize
+        workflow.add_edge("reflect", "finalize")
         
         # Conditional edge from recover to target stage based on recovery strategy
         def get_recovery_target(state: OperonixState) -> str:
