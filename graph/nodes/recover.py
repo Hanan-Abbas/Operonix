@@ -78,7 +78,7 @@ def recover_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"recovery": state.recovery}
 
 
 def _classify_failure(state: OperonixState) -> FailureCategory:
