@@ -399,7 +399,7 @@ def test_checkpoint_state_creation():
     
     assert checkpoint.task_id == task.task_id
     assert checkpoint.workflow_state == workflow_state
-    assert checkpoint.checkpoint_id is not None
+    assert checkpoint.checkpoint_identifier is not None
 
 
 # ─── CONTRACT VALIDATION TESTS ─────────────────────────────────────────────────
