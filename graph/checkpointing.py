@@ -128,6 +128,14 @@ class CheckpointingService:
         """
         # Reconstruct OperonixState from checkpoint workflow_state
         state_data = checkpoint.workflow_state
+        
+        # Reconstruct nested objects from dicts
+        from migration.domain_contracts import HumanIntervention
+        
+        # Reconstruct confirmation if present
+        if state_data.get('confirmation') and isinstance(state_data['confirmation'], dict):
+            state_data['confirmation'] = HumanIntervention(**state_data['confirmation'])
+        
         state = OperonixState(**state_data)
         
         # Restore plan step index
