@@ -60,4 +60,4 @@ def intake_node(state: OperonixState) -> Dict[str, Any]:
         "task_id": state.task.task_id
     })
     
-    return {"state": state}
+    return {"task": state.task}
