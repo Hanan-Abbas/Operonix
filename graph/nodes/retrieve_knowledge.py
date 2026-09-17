@@ -154,4 +154,4 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"knowledge": state.knowledge}
