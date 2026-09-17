@@ -136,9 +136,10 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     
     # Update plan progress if execution succeeded
     if state.execution.success and state.plan and state.plan.current_step:
+        step_id = state.plan.current_step.step_id
         state.plan.current_step_index += 1
-        if state.plan.current_step.step_id not in state.plan.completed_steps:
-            state.plan.completed_steps.append(state.plan.current_step.step_id)
+        if step_id not in state.plan.completed_steps:
+            state.plan.completed_steps.append(step_id)
     
     state.add_history_event("execute_step_completed", {
         "task_id": state.task.task_id,
