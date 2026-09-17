@@ -748,6 +748,22 @@ class CandidateEvaluation(BaseModel):
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
+class ReflectionData(BaseModel):
+    """Reflection data for learning and improvement.
+    
+    Per migration plan Phase 9: Observability & Execution Trace
+    """
+    task_id: str
+    success: Optional[bool] = None
+    execution_time: Optional[float] = None
+    errors: List[str] = Field(default_factory=list)
+    learning_feedback: Dict[str, Any] = Field(default_factory=dict)
+    recommendations: List[str] = Field(default_factory=list)
+    reflected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
 class RankingPolicy(BaseModel):
     """Policy for ranking candidates.
     
