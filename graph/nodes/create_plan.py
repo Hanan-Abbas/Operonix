@@ -98,7 +98,7 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"plan": plan}
 
 
 def _is_complex_request(user_input: str) -> bool:
