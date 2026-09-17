@@ -198,17 +198,37 @@ def _execute_with_executor(
         # Convert step to executor format
         step_dict = _convert_step_to_executor_format(step)
         
-        # Run async executor in sync context
-        loop = asyncio.get_event_loop()
-        success, result, method_used = loop.run_until_complete(
-            executor._execute_with_decision(
-                task_id=task_id,
-                step_index=0,
-                step=step_dict,
-                context=context or {},
-                decision=executor_decision
+        # Run async executor - handle existing event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # Event loop is already running, create a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor_pool:
+                future = executor_pool.submit(
+                    asyncio.run,
+                    executor._execute_with_decision(
+                        task_id=task_id,
+                        step_index=0,
+                        step=step_dict,
+                        context=context or {},
+                        decision=executor_decision
+                    )
+                )
+                success, result, method_used = future.result()
+        except RuntimeError:
+            # No event loop running, use run_until_complete
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            success, result, method_used = loop.run_until_complete(
+                executor._execute_with_decision(
+                    task_id=task_id,
+                    step_index=0,
+                    step=step_dict,
+                    context=context or {},
+                    decision=executor_decision
+                )
             )
-        )
+            loop.close()
         
         execution_time = time.time() - start_time
         
