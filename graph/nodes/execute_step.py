@@ -235,7 +235,7 @@ def _execute_with_executor(
         # Convert executor result to ExecutionResult
         return ExecutionResult(
             execution_id=execution_id,
-            step_id=step.step_id,
+            step_id=step.step_id if step else "unknown",
             success=success,
             method_used=method_used,
             execution_status=TaskStatus.COMPLETED if success else TaskStatus.FAILED,
@@ -253,7 +253,7 @@ def _execute_with_executor(
         execution_time = time.time() - start_time
         return ExecutionResult(
             execution_id=execution_id,
-            step_id=step.step_id,
+            step_id=step.step_id if step else "unknown",
             success=False,
             method_used="executor_error",
             execution_status=TaskStatus.FAILED,
