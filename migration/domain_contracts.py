@@ -375,7 +375,7 @@ class CheckpointState(BaseModel):
     - state version
     - timestamp
     """
-    checkpoint_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    checkpoint_identifier: str = Field(default_factory=lambda: str(uuid.uuid4()))
     task_id: str
     workflow_state: Dict[str, Any] = Field(default_factory=dict)
     current_node: Optional[str] = None
