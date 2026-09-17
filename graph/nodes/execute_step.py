@@ -11,6 +11,7 @@ Executor Integration Phase: Integrate actual executor module.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Dict, Any
 
@@ -67,11 +68,12 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         # Get routing decision
         routing_decision = state.routing
         
-        # Perform execution with retry and fallback logic
-        execution_result = _execute_with_retry_fallback(
+        # Perform execution with actual Executor
+        execution_result = _execute_with_executor(
             current_step,
             routing_decision,
-            state.context if isinstance(state.context, dict) else None
+            state.context if isinstance(state.context, dict) else None,
+            state.task.task_id
         )
         
         state.execution = execution_result
@@ -149,79 +151,25 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     return {"state": state}
 
 
-def _execute_with_retry_fallback(
+def _execute_with_executor(
     step,
     routing_decision,
-    context: Dict[str, Any] = None
+    context: Dict[str, Any] = None,
+    task_id: str = "unknown"
 ) -> ExecutionResult:
-    """Execute step with retry and fallback logic.
+    """Execute step using actual Executor class.
     
-    Executor Integration: Integrate retry_manager and fallback_manager.
+    This function:
+    - Translates graph state routing decision to executor routing decision
+    - Calls Executor._execute_with_decision for actual execution
+    - Handles async/sync translation
+    - Converts executor result to ExecutionResult
     
     Args:
         step: Current plan step
-        routing_decision: Routing decision
+        routing_decision: Routing decision from graph state
         context: Current context
-        
-    Returns:
-        ExecutionResult with execution outcome
-    """
-    max_retries = 3
-    retry_count = 0
-    
-    # Try to integrate with retry_manager
-    try:
-        from executor.retry_manager import retry_manager
-        
-        # Use retry manager if available
-        max_retries = getattr(retry_manager, 'max_retries', 3)
-        logger.info(f"Using retry_manager with max_retries={max_retries}")
-    except ImportError:
-        logger.warning("Could not import retry_manager, using default max_retries=3")
-    
-    # Try execution with retries
-    while retry_count <= max_retries:
-        try:
-            execution_result = _execute_single_attempt(
-                step,
-                routing_decision,
-                context
-            )
-            
-            if execution_result.success:
-                logger.info(f"Execution succeeded on attempt {retry_count + 1}")
-                return execution_result
-            else:
-                # Check if error is retryable
-                if _is_retryable_error(execution_result.result_data):
-                    retry_count += 1
-                    logger.warning(f"Execution failed (retryable), retry {retry_count}/{max_retries}")
-                    continue
-                else:
-                    # Non-retryable error, try fallback
-                    break
-        except Exception as e:
-            retry_count += 1
-            logger.warning(f"Execution raised exception (retry {retry_count}/{max_retries}): {e}")
-            if retry_count > max_retries:
-                break
-    
-    # All retries exhausted, try fallback
-    logger.info("Retries exhausted, attempting fallback")
-    return _execute_with_fallback(step, routing_decision, context)
-
-
-def _execute_single_attempt(
-    step,
-    routing_decision,
-    context: Dict[str, Any] = None
-) -> ExecutionResult:
-    """Execute a single execution attempt.
-    
-    Args:
-        step: Current plan step
-        routing_decision: Routing decision
-        context: Current context
+        task_id: Task ID
         
     Returns:
         ExecutionResult with execution outcome
@@ -232,130 +180,157 @@ def _execute_single_attempt(
     execution_id = str(uuid.uuid4())
     start_time = time.time()
     
-    # Get method type from routing decision
-    method_type = routing_decision.selected_candidate.method_type if routing_decision else "unknown"
-    
-    # Get step parameters
-    step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
-    step_parameters = getattr(step, 'parameters', {}) or {}
-    
-    logger.info(f"Executing {method_type} for action: {step_action}")
-    
-    # Try to execute using tool_registry
     try:
-        from tools.tool_registry import tool_registry
+        # Import Executor
+        from executor.executor import Executor
+        from tools.routing_decision import MethodDecision as ExecutorMethodDecision, MethodType, LayeredPayload
         
-        # Map method type to tool type
-        tool_type = _map_method_to_tool_type(method_type)
+        # Create Executor instance
+        executor = Executor()
         
-        # Get tool from registry
-        tool = tool_registry.get_tool(tool_type)
+        # Translate graph routing decision to executor routing decision
+        executor_decision = _translate_routing_decision(routing_decision, step)
         
-        if tool:
-            # Execute tool
-            result = tool.execute(**step_parameters)
-            
-            execution_time = time.time() - start_time
-            
-            return ExecutionResult(
-                execution_id=execution_id,
-                step_id=step.step_id,
-                success=True,
-                method_used=method_type,
-                execution_status=TaskStatus.COMPLETED,
-                result_data={
-                    "result": result,
-                    "execution_time": execution_time,
-                    "tool_type": tool_type
-                }
+        if executor_decision is None:
+            logger.warning("Could not translate routing decision, using placeholder")
+            return _execute_placeholder(step, routing_decision, context, execution_id)
+        
+        # Convert step to executor format
+        step_dict = _convert_step_to_executor_format(step)
+        
+        # Run async executor in sync context
+        loop = asyncio.get_event_loop()
+        success, result, method_used = loop.run_until_complete(
+            executor._execute_with_decision(
+                task_id=task_id,
+                step_index=0,
+                step=step_dict,
+                context=context or {},
+                decision=executor_decision
             )
-        else:
-            # Tool not found
-            return ExecutionResult(
-                execution_id=execution_id,
-                step_id=step.step_id,
-                success=False,
-                method_used=method_type,
-                execution_status=TaskStatus.FAILED,
-                result_data={"error": f"Tool not found for type: {tool_type}"}
-            )
-    except ImportError:
-        logger.warning("Could not import tool_registry, using placeholder execution")
+        )
+        
+        execution_time = time.time() - start_time
+        
+        # Convert executor result to ExecutionResult
+        return ExecutionResult(
+            execution_id=execution_id,
+            step_id=step.step_id,
+            success=success,
+            method_used=method_used,
+            execution_status=TaskStatus.COMPLETED if success else TaskStatus.FAILED,
+            result_data={
+                "result": result,
+                "execution_time": execution_time
+            }
+        )
+        
+    except ImportError as e:
+        logger.warning(f"Could not import Executor: {e}, using placeholder execution")
         return _execute_placeholder(step, routing_decision, context, execution_id)
     except Exception as e:
-        logger.error(f"Error executing tool: {e}")
+        logger.error(f"Error executing with Executor: {e}")
+        execution_time = time.time() - start_time
         return ExecutionResult(
             execution_id=execution_id,
             step_id=step.step_id,
             success=False,
-            method_used=method_type,
+            method_used="executor_error",
             execution_status=TaskStatus.FAILED,
-            result_data={"error": str(e)}
+            result_data={
+                "error": str(e),
+                "execution_time": execution_time
+            }
         )
 
 
-def _execute_with_fallback(
-    step,
-    routing_decision,
-    context: Dict[str, Any] = None
-) -> ExecutionResult:
-    """Execute with fallback method.
-    
-    Executor Integration: Integrate fallback_manager.
+def _translate_routing_decision(
+    graph_routing_decision,
+    step
+) -> Any:
+    """Translate graph state MethodDecision to executor MethodDecision.
     
     Args:
+        graph_routing_decision: MethodDecision from migration.domain_contracts
         step: Current plan step
-        routing_decision: Routing decision
-        context: Current context
         
     Returns:
-        ExecutionResult with execution outcome
+        Executor MethodDecision or None if translation fails
     """
-    import uuid
-    
-    execution_id = str(uuid.uuid4())
-    
-    # Try to integrate with fallback_manager
     try:
-        from executor.fallback_manager import fallback_manager
+        from tools.routing_decision import MethodDecision as ExecutorMethodDecision, MethodType, LayeredPayload
+        from types import MappingProxyType
         
-        # Get fallback chain from routing decision
-        fallback_chain = getattr(routing_decision, 'fallback_chain', None)
+        if not graph_routing_decision:
+            return None
         
-        if fallback_chain:
-            logger.info(f"Using fallback_manager with {len(fallback_chain)} fallback methods")
-            
-            # Try each fallback method
-            for fallback_method in fallback_chain:
-                try:
-                    # Execute with fallback method
-                    execution_result = _execute_single_attempt(
-                        step,
-                        routing_decision,
-                        context
-                    )
-                    
-                    if execution_result.success:
-                        logger.info(f"Fallback method {fallback_method} succeeded")
-                        return execution_result
-                except Exception as e:
-                    logger.warning(f"Fallback method {fallback_method} failed: {e}")
-                    continue
-    except ImportError:
-        logger.warning("Could not import fallback_manager, skipping fallback")
+        # Extract method type from graph decision
+        method_type_str = graph_routing_decision.selected_candidate.method_type
+        
+        # Map to executor MethodType
+        method_type_map = {
+            "plugin": MethodType.PLUGIN,
+            "api": MethodType.API,
+            "shell": MethodType.SHELL,
+            "ui": MethodType.UI,
+            "command": MethodType.SHELL
+        }
+        
+        method_type = method_type_map.get(method_type_str.lower(), MethodType.SHELL)
+        
+        # Build fallback chain
+        fallback_chain = tuple(
+            method_type_map.get(c.method_type.lower(), MethodType.SHELL)
+            for c in graph_routing_decision.fallback_candidates
+        ) if graph_routing_decision.fallback_candidates else tuple()
+        
+        # Build layered payload from step parameters
+        step_parameters = getattr(step, 'parameters', {}) or {}
+        step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
+        
+        # Create payload for each method type
+        payload = LayeredPayload(
+            plugin_kwargs=MappingProxyType(step_parameters) if method_type == MethodType.PLUGIN else None,
+            api_body=MappingProxyType(step_parameters) if method_type == MethodType.API else None,
+            shell_argv=tuple(str(step_action).split()) if method_type == MethodType.SHELL else None,
+            ui_action=MappingProxyType({"action": step_action, **step_parameters}) if method_type == MethodType.UI else None
+        )
+        
+        # Create executor MethodDecision
+        executor_decision = ExecutorMethodDecision(
+            method=method_type,
+            confidence=graph_routing_decision.confidence,
+            fallback_chain=fallback_chain,
+            payload=payload,
+            expected_app=None,  # Would need to extract from context
+            expected_ui_state=None,  # Would need to extract from context
+            rejected=[]  # Would need to translate rejected candidates
+        )
+        
+        return executor_decision
+        
     except Exception as e:
-        logger.error(f"Error in fallback_manager: {e}")
-    
-    # All fallbacks exhausted, return failure
-    return ExecutionResult(
-        execution_id=execution_id,
-        step_id=step.step_id,
-        success=False,
-        method_used="fallback_failed",
-        execution_status=TaskStatus.FAILED,
-        result_data={"error": "All execution attempts and fallbacks failed"}
-    )
+        logger.error(f"Error translating routing decision: {e}")
+        return None
 
+
+def _convert_step_to_executor_format(step) -> Dict[str, Any]:
+    """Convert graph PlanStep to executor step format.
+    
+    Args:
+        step: PlanStep from graph state
+        
+    Returns:
+        Dict in executor step format
+    """
+    return {
+        "action": getattr(step, 'action', None) or getattr(step, 'objective', ''),
+        "args": getattr(step, 'parameters', {}) or {},
+        "step_id": getattr(step, 'step_id', 'unknown')
+    }
+
+
+# Keep placeholder as fallback
 
 def _execute_placeholder(
     step,
@@ -392,54 +367,9 @@ def _execute_placeholder(
         method_used=method_type,
         execution_status=TaskStatus.COMPLETED,
         result_data={
-            "note": "Placeholder execution (tool_registry unavailable)",
+            "note": "Placeholder execution (Executor unavailable)",
             "execution_time": execution_time
         }
     )
 
 
-def _map_method_to_tool_type(method_type: str) -> str:
-    """Map method type to tool type.
-    
-    Args:
-        method_type: Method type from routing decision
-        
-    Returns:
-        Tool type for tool_registry
-    """
-    method_type_lower = method_type.lower()
-    
-    if "shell" in method_type_lower or "command" in method_type_lower:
-        return "shell_tool"
-    elif "ui" in method_type_lower:
-        return "ui_tool"
-    elif "api" in method_type_lower:
-        return "api_tool"
-    elif "plugin" in method_type_lower:
-        return "plugin"
-    else:
-        return "shell_tool"  # Default
-
-
-def _is_retryable_error(result_data: Dict[str, Any]) -> bool:
-    """Check if error is retryable.
-    
-    Args:
-        result_data: Result data from execution
-        
-    Returns:
-        True if error is retryable, False otherwise
-    """
-    error = result_data.get("error", "")
-    
-    # Transient errors are retryable
-    transient_errors = [
-        "timeout",
-        "connection",
-        "network",
-        "temporary",
-        "transient"
-    ]
-    
-    error_lower = error.lower()
-    return any(err in error_lower for err in transient_errors)
