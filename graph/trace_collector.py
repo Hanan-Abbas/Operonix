@@ -303,12 +303,32 @@ class TraceCollector:
         Args:
             task_id: Task identifier
             reflection_data: Reflection data
+            
+        Returns:
+            None
         """
         self.add_trace_event(
             task_id=task_id,
             event_type=TraceEventType.REFLECTION,
             data=reflection_data,
             node_name="reflect"
+        )
+    
+    def collect_cancellation(self, task_id: str, cancellation_data: Dict[str, Any]) -> None:
+        """Collect cancellation event.
+        
+        Args:
+            task_id: Task identifier
+            cancellation_data: Cancellation data
+            
+        Returns:
+            None
+        """
+        self.add_trace_event(
+            task_id=task_id,
+            event_type=TraceEventType.REFLECTION,  # Use REFLECTION as cancellation event type
+            data=cancellation_data,
+            node_name="cancel"
         )
     
     def collect_final_outcome(self, task_id: str, outcome_data: Dict[str, Any]) -> None:
