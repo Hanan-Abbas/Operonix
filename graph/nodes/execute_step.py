@@ -148,7 +148,7 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"execution": state.execution, "plan": state.plan}
 
 
 def _execute_with_executor(
