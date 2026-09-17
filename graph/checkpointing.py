@@ -59,9 +59,15 @@ class CheckpointingService:
         Returns:
             CheckpointState object
         """
+        # Get workflow state and ensure paused state is included
+        workflow_state = state.model_dump()
+        # Explicitly ensure paused and checkpoint_identifier are in the workflow state
+        workflow_state['paused'] = state.paused
+        workflow_state['checkpoint_identifier'] = state.checkpoint_identifier
+        
         checkpoint = CheckpointState(
             task_id=state.task.task_id,
-            workflow_state=state.model_dump(),
+            workflow_state=workflow_state,
             current_node=current_node,
             current_plan_step_index=state.plan.current_step_index if state.plan else 0,
             completed_steps=state.plan.completed_steps if state.plan else [],
@@ -142,6 +148,14 @@ class CheckpointingService:
         if state.plan:
             state.plan.current_step_index = checkpoint.current_plan_step_index
             state.plan.completed_steps = checkpoint.completed_steps
+        
+        # Explicitly restore paused state if it was saved
+        if 'paused' in state_data:
+            state.paused = state_data['paused']
+        
+        # Explicitly restore checkpoint_identifier if it was saved
+        if 'checkpoint_identifier' in state_data:
+            state.checkpoint_identifier = state_data['checkpoint_identifier']
         
         logger.info(f"State restored from checkpoint: {checkpoint.checkpoint_identifier}")
         
