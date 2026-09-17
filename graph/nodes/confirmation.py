@@ -79,16 +79,16 @@ def confirmation_node(state: OperonixState) -> Dict[str, Any]:
     checkpoint = checkpointing_service.create_checkpoint(state, "confirmation")
     
     # Store checkpoint ID in state for resume
-    state.checkpoint_id = checkpoint.checkpoint_id
+    state.checkpoint_identifier = checkpoint.checkpoint_identifier
     
     # Mark graph as paused
     state.paused = True
     
-    logger.info(f"CONFIRMATION: Checkpoint created: {checkpoint.checkpoint_id}, graph paused")
+    logger.info(f"CONFIRMATION: Checkpoint created: {checkpoint.checkpoint_identifier}, graph paused")
     
     state.add_history_event("confirmation_paused", {
         "task_id": state.task.task_id,
-        "checkpoint_id": checkpoint.checkpoint_id,
+        "checkpoint_identifier": checkpoint.checkpoint_identifier,
         "intervention_type": intervention.intervention_type.value
     })
     
