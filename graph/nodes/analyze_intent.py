@@ -74,7 +74,7 @@ def analyze_intent_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"intent": intent_result}
 
 
 def _analyze_intent_with_langchain(state: OperonixState) -> IntentResult:
