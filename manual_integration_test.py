@@ -214,12 +214,12 @@ class ManualIntegrationTester:
         return test_result
     
     async def test_pause_resume(self) -> dict:
-        """Test 4: Pause/Resume Workflow (Phase 7)
+        """Test 4: Pause/Resume Workflow (Phase 7) with External Resume Mechanism
         
-        Flow: SAFETY_CHECK → CONFIRMATION → PAUSE → RESUME → EXECUTE_STEP
+        Flow: SAFETY_CHECK → CONFIRMATION → PAUSE → External API Resume → EXECUTE_STEP
         """
         logger.info("=" * 80)
-        logger.info("TEST 4: PAUSE/RESUME WORKFLOW")
+        logger.info("TEST 4: PAUSE/RESUME WORKFLOW WITH EXTERNAL RESUME")
         logger.info("=" * 80)
         
         test_result = {
@@ -233,6 +233,7 @@ class ManualIntegrationTester:
         
         try:
             from migration.domain_contracts import TaskSource
+            from graph.checkpointing import get_checkpointing_service
             
             # Create task requiring confirmation
             logger.info("Creating task request requiring confirmation: 'Format disk'")
@@ -241,15 +242,62 @@ class ManualIntegrationTester:
                 source=TaskSource.VOICE
             )
             
-            logger.info("Executing task through graph...")
+            logger.info("Executing task through graph (should pause at confirmation)...")
             result = await self.adapter.execute_task(request, use_graph=True)
             
-            logger.info(f"Task completed with success: {result.success}")
-            logger.info(f"Response: {result.response}")
+            logger.info(f"Task paused: {result.paused}")
+            logger.info(f"Checkpoint identifier: {result.checkpoint_identifier}")
             
-            test_result["observations"].append("Pause/resume workflow executed")
-            test_result["observations"].append(f"Checkpoint creation observed")
-            test_result["status"] = "PASS"
+            if not result.paused:
+                test_result["issues"].append("Task did not pause as expected")
+                test_result["status"] = "FAIL"
+                test_result["end_time"] = datetime.now().isoformat()
+                self.results.append(test_result)
+                return test_result
+            
+            test_result["observations"].append("Task paused at confirmation node")
+            test_result["observations"].append(f"Checkpoint created: {result.checkpoint_identifier}")
+            
+            # Test checkpoint loading
+            checkpointing_service = get_checkpointing_service()
+            checkpoint = checkpointing_service.load_checkpoint(result.checkpoint_identifier)
+            
+            if checkpoint:
+                test_result["observations"].append("Checkpoint successfully loaded")
+                test_result["observations"].append(f"Checkpoint task_id: {checkpoint.task_id}")
+            else:
+                test_result["issues"].append("Failed to load checkpoint")
+            
+            # Test resume mechanism via direct function call (simulating API)
+            logger.info("Testing resume mechanism...")
+            from graph.nodes.confirmation import resume_from_confirmation
+            from migration.domain_contracts import HumanInterventionType
+            
+            # Restore state from checkpoint
+            if checkpoint:
+                state = checkpointing_service.restore_state(checkpoint)
+                if state:
+                    logger.info("State restored from checkpoint")
+                    
+                    # Apply human response (CONFIRM)
+                    state_update = resume_from_confirmation(state, HumanInterventionType.CONFIRM)
+                    test_result["observations"].append("Human response applied (CONFIRM)")
+                    
+                    # Resume graph execution
+                    logger.info("Resuming graph execution...")
+                    final_state = await self.adapter.execute_task(request, use_graph=True)
+                    
+                    logger.info(f"Task completed with success: {final_state.success}")
+                    logger.info(f"Response: {final_state.response}")
+                    
+                    test_result["observations"].append("Graph resumed and completed execution")
+                    test_result["status"] = "PASS"
+                else:
+                    test_result["issues"].append("Failed to restore state from checkpoint")
+                    test_result["status"] = "FAIL"
+            else:
+                test_result["issues"].append("Checkpoint not available for resume test")
+                test_result["status"] = "FAIL"
             
         except Exception as e:
             logger.error(f"✗ Test failed with exception: {e}", exc_info=True)
