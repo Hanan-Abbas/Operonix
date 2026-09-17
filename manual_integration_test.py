@@ -308,6 +308,76 @@ class ManualIntegrationTester:
         self.results.append(test_result)
         return test_result
     
+    async def test_cancellation(self) -> dict:
+        """Test 5: Cancellation Workflow (Phase 8)
+        
+        Flow: Request cancellation → Cancel node → Cleanup/Rollback → Finalize
+        """
+        logger.info("=" * 80)
+        logger.info("TEST 5: CANCELLATION WORKFLOW")
+        logger.info("=" * 80)
+        
+        test_result = {
+            "test_name": "Cancellation Workflow",
+            "status": "PENDING",
+            "start_time": datetime.now().isoformat(),
+            "observations": [],
+            "issues": [],
+            "missing_components": []
+        }
+        
+        try:
+            from migration.domain_contracts import TaskSource, CancellationReason
+            from graph.cancellation import get_cancellation_service
+            
+            # Create task
+            logger.info("Creating task request: 'Long running task'")
+            request = self.adapter.create_task_request(
+                user_input="Long running task",
+                source=TaskSource.VOICE
+            )
+            
+            # Request cancellation before execution
+            logger.info("Requesting cancellation for task")
+            cancellation_service = get_cancellation_service()
+            cancellation = cancellation_service.request_cancellation(
+                task_id=request.task_id,
+                reason=CancellationReason.USER_REQUESTED,
+                requested_by="test_user"
+            )
+            
+            test_result["observations"].append(f"Cancellation requested: {cancellation.cancellation_id}")
+            test_result["observations"].append(f"Cancellation reason: {cancellation.reason.value}")
+            
+            # Test cancel node directly
+            logger.info("Testing cancel node directly...")
+            from migration.graph_state import OperonixState
+            from graph.nodes.cancel import cancel_node
+            
+            state = OperonixState(task=request)
+            state.cancellation = cancellation
+            
+            state_update = cancel_node(state)
+            
+            logger.info(f"Cancel node executed, cancelled: {state_update.get('cancelled')}")
+            
+            if state_update.get('cancelled'):
+                test_result["observations"].append("Cancel node marked workflow as cancelled")
+                test_result["observations"].append(f"Abort semantics: {state.abort_decision.semantics.value if state.abort_decision else 'unknown'}")
+                test_result["status"] = "PASS"
+            else:
+                test_result["issues"].append("Cancel node did not mark workflow as cancelled")
+                test_result["status"] = "FAIL"
+            
+        except Exception as e:
+            logger.error(f"✗ Test failed with exception: {e}", exc_info=True)
+            test_result["status"] = "FAIL"
+            test_result["issues"].append(str(e))
+        
+        test_result["end_time"] = datetime.now().isoformat()
+        self.results.append(test_result)
+        return test_result
+    
     def print_graph_topology(self):
         """Print the current graph topology for reference."""
         logger.info("=" * 80)
@@ -369,7 +439,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Manual Integration Test Runner")
     parser.add_argument(
         "--test",
-        choices=["simple", "safety", "recovery", "pause_resume", "all"],
+        choices=["simple", "safety", "recovery", "pause_resume", "cancellation", "all"],
         default="simple",
         help="Which test to run"
     )
@@ -404,6 +474,9 @@ async def main():
     
     if args.test == "pause_resume" or args.test == "all":
         await tester.test_pause_resume()
+    
+    if args.test == "cancellation" or args.test == "all":
+        await tester.test_cancellation()
     
     # Print summary
     tester.print_summary()
