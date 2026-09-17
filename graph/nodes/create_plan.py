@@ -65,6 +65,10 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
     
     state.plan = plan
     
+    logger.info(f"CREATE_PLAN: Created plan with {len(plan.steps)} steps, current_step_index={plan.current_step_index}")
+    if plan.steps:
+        logger.info(f"CREATE_PLAN: First step: {plan.steps[0].step_id}, action={plan.steps[0].action}")
+    
     # Phase 9: Collect trace event for plan
     trace_collector = get_trace_collector()
     trace_collector.collect_plan(
