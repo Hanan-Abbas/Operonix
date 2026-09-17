@@ -352,6 +352,8 @@ class FinalResult(BaseModel):
     error: Optional[str] = None
     task_id: str
     completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    paused: bool = False
+    checkpoint_identifier: Optional[str] = None
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
