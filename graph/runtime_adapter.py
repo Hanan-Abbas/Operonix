@@ -129,6 +129,17 @@ class RuntimeGraphAdapter:
             # Run task through graph
             final_state = await self.graph_runner.run_task(task_request)
             
+            # Check if workflow was paused (awaiting confirmation)
+            if final_state.paused:
+                logger.info(f"Task {task_request.task_id} paused awaiting confirmation")
+                return FinalResult(
+                    success=True,
+                    response=f"Task {task_request.task_id} paused awaiting confirmation",
+                    paused=True,
+                    checkpoint_identifier=final_state.checkpoint_identifier,
+                    task_id=task_request.task_id
+                )
+            
             # Extract final result
             if final_state.final:
                 logger.info(f"Task {task_request.task_id} completed successfully through graph")
