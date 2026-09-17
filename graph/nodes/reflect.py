@@ -107,11 +107,11 @@ def reflect_node(state: OperonixState) -> Dict[str, Any]:
         
         # Determine outcome grade
         if reflection_data["success"]:
-            outcome_grade = OutcomeGrade.SUCCESS
+            outcome_grade = OutcomeGrade.EXCELLENT
         elif reflection_data["errors"]:
-            outcome_grade = OutcomeGrade.FAILURE
+            outcome_grade = OutcomeGrade.FAILED
         else:
-            outcome_grade = OutcomeGrade.PARTIAL
+            outcome_grade = OutcomeGrade.ACCEPTABLE
         
         state.reflection = ReflectionResult(
             outcome=outcome_grade,
