@@ -48,6 +48,13 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
         "current_step": state.plan.current_step.step_id if state.plan and state.plan.current_step else None
     })
     
+    # Debug logging
+    logger.info(f"ROUTE: state.plan exists: {state.plan is not None}")
+    if state.plan:
+        logger.info(f"ROUTE: plan.steps count: {len(state.plan.steps)}")
+        logger.info(f"ROUTE: plan.current_step_index: {state.plan.current_step_index}")
+        logger.info(f"ROUTE: plan.current_step: {state.plan.current_step}")
+    
     # Phase 10: Integrate actual candidate-based routing engine
     try:
         # Get services
