@@ -72,4 +72,4 @@ def finalize_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"final": state.final}
