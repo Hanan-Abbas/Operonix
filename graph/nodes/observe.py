@@ -106,7 +106,7 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"context": state.context}
 
 
 def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
