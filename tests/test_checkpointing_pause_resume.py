@@ -43,7 +43,7 @@ def test_create_checkpoint():
         assert checkpoint is not None
         assert checkpoint.task_id == task.task_id
         assert checkpoint.current_node == "test_node"
-        assert checkpoint.checkpoint_id is not None
+        assert checkpoint.checkpoint_identifier is not None
 
 
 def test_persist_checkpoint():
@@ -61,7 +61,7 @@ def test_persist_checkpoint():
         checkpoint = service.create_checkpoint(state, "test_node")
         
         # Check that file exists
-        checkpoint_file = Path(tmpdir) / f"{checkpoint.checkpoint_id}.json"
+        checkpoint_file = Path(tmpdir) / f"{checkpoint.checkpoint_identifier}.json"
         assert checkpoint_file.exists()
 
 
@@ -80,10 +80,10 @@ def test_load_checkpoint():
         checkpoint = service.create_checkpoint(state, "test_node")
         
         # Load checkpoint
-        loaded_checkpoint = service.load_checkpoint(checkpoint.checkpoint_id)
+        loaded_checkpoint = service.load_checkpoint(checkpoint.checkpoint_identifier)
         
         assert loaded_checkpoint is not None
-        assert loaded_checkpoint.checkpoint_id == checkpoint.checkpoint_id
+        assert loaded_checkpoint.checkpoint_identifier == checkpoint.checkpoint_identifier
         assert loaded_checkpoint.task_id == checkpoint.task_id
 
 
@@ -129,7 +129,7 @@ def test_get_latest_checkpoint():
         
         assert latest is not None
         # Should be checkpoint2 (later timestamp)
-        assert latest.checkpoint_id == checkpoint2.checkpoint_id
+        assert latest.checkpoint_identifier == checkpoint2.checkpoint_identifier
 
 
 def test_delete_checkpoint():
@@ -147,12 +147,12 @@ def test_delete_checkpoint():
         checkpoint = service.create_checkpoint(state, "test_node")
         
         # Delete checkpoint
-        deleted = service.delete_checkpoint(checkpoint.checkpoint_id)
+        deleted = service.delete_checkpoint(checkpoint.checkpoint_identifier)
         
         assert deleted is True
         
         # Check that file is deleted
-        checkpoint_file = Path(tmpdir) / f"{checkpoint.checkpoint_id}.json"
+        checkpoint_file = Path(tmpdir) / f"{checkpoint.checkpoint_identifier}.json"
         assert not checkpoint_file.exists()
 
 
@@ -191,7 +191,7 @@ def test_checkpoint_state_domain_object():
     
     assert checkpoint.task_id == "test_task"
     assert checkpoint.current_node == "test_node"
-    assert checkpoint.checkpoint_id is not None
+    assert checkpoint.checkpoint_identifier is not None
     assert checkpoint.checkpoint_timestamp is not None
 
 
@@ -286,7 +286,7 @@ def test_confirmation_node_creates_checkpoint():
             
             result = confirmation_node(state)
             
-            assert result["state"].checkpoint_id is not None
+            assert result["state"].checkpoint_identifier is not None
             assert result["state"].paused is True
         finally:
             checkpointing_module._checkpointing_service = original_service
