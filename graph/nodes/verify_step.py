@@ -115,7 +115,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"verification": state.verification}
 
 
 def _verify_postconditions(state: OperonixState) -> VerificationResult:
