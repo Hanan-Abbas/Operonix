@@ -142,7 +142,7 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"state": state}
+    return {"routing": state.routing}
 
 
 def _convert_to_method_decision(routing_decision: RoutingDecision) -> MethodDecision:
