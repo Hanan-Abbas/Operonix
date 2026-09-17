@@ -404,7 +404,7 @@ def test_confirmation_node_creates_human_intervention():
     
     assert result["state"].confirmation is not None
     assert result["state"].paused is True
-    assert result["state"].checkpoint_id is not None
+    assert result["state"].checkpoint_identifier is not None
 
 
 def test_confirmation_node_creates_checkpoint():
@@ -418,7 +418,7 @@ def test_confirmation_node_creates_checkpoint():
     
     result = confirmation_node(state)
     
-    assert result["state"].checkpoint_id is not None
+    assert result["state"].checkpoint_identifier is not None
     assert result["state"].paused is True
 
 
