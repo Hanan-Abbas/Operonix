@@ -21,6 +21,38 @@ from graph.trace_collector import get_trace_collector
 logger = logging.getLogger("Graph.SafetyCheck")
 
 
+# Destructive operation keywords that require confirmation
+DESTRUCTIVE_KEYWORDS = [
+    "delete", "remove", "rm", "rmdir", "del",
+    "format", "wipe", "erase",
+    "destroy", "kill", "terminate",
+    "drop", "truncate",
+    "overwrite", "replace",
+    "clear", "reset", "flush",
+    "uninstall", "purge"
+]
+
+
+def _detect_destructive_operation(text: str) -> tuple[bool, str]:
+    """Detect if text contains destructive operation keywords.
+    
+    Args:
+        text: Text to analyze (user input, command, path, etc.)
+        
+    Returns:
+        Tuple of (is_destructive, matched_keyword)
+    """
+    if not text:
+        return False, ""
+    
+    text_lower = text.lower()
+    for keyword in DESTRUCTIVE_KEYWORDS:
+        if keyword in text_lower:
+            return True, keyword
+    
+    return False, ""
+
+
 def safety_check_node(state: OperonixState) -> Dict[str, Any]:
     """Safety check node: Validate and authorize execution.
     
