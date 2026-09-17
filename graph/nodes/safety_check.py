@@ -154,7 +154,17 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
             logger.error(f"Error in context validation: {e}, skipping")
         
         # 4. Determine if confirmation is required based on risk level
-        if risk_level == RiskLevel.HIGH:
+        # Check if confirmation is forced via environment variable for testing
+        import os
+        force_confirmation = os.getenv("FORCE_CONFIRMATION", "false").lower() == "true"
+        
+        if force_confirmation:
+            confirmation_required = True
+            risk_level = RiskLevel.HIGH
+            if not reason:
+                reason = "Confirmation forced via environment variable for testing"
+            safety_checks_performed.append("force_confirmation")
+        elif risk_level == RiskLevel.HIGH:
             confirmation_required = True
             if not reason:
                 reason = "High risk operation requires confirmation"
@@ -182,13 +192,17 @@ def safety_check_node(state: OperonixState) -> Dict[str, Any]:
         logger.error(f"Error in safety check integration: {e}, using fallback")
         
         # Fallback to placeholder safety decision
+        # Check if confirmation is forced via environment variable for testing
+        import os
+        force_confirmation = os.getenv("FORCE_CONFIRMATION", "false").lower() == "true"
+        
         safety_decision = SafetyDecision(
-            risk_level=RiskLevel.LOW,
+            risk_level=RiskLevel.HIGH if force_confirmation else RiskLevel.LOW,
             validation_status="APPROVED",
             permission_status="GRANTED",
-            confirmation_required=False,
+            confirmation_required=force_confirmation,
             safety_checks_performed=["fallback_check"],
-            additional_info={"error": str(e)}
+            additional_info={"error": str(e), "force_confirmation": force_confirmation}
         )
     
     state.safety = safety_decision
