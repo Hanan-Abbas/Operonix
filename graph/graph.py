@@ -239,6 +239,11 @@ class OperonixGraphRunner:
             # We wrap it in async for future compatibility
             final_state = self.graph.invoke(initial_state)
             
+            # LangGraph may return dict instead of OperonixState object
+            # Convert back to OperonixState if needed
+            if isinstance(final_state, dict):
+                final_state = OperonixState(**final_state)
+            
             logger.info(f"Task {task_request.task_id} completed through LangGraph")
             return final_state
             
