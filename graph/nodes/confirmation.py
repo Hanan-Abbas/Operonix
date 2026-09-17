@@ -94,7 +94,7 @@ def confirmation_node(state: OperonixState) -> Dict[str, Any]:
     
     state.update_timestamp()
     
-    return {"confirmation": state.confirmation, "paused": state.paused}
+    return {"confirmation": state.confirmation, "paused": state.paused, "checkpoint_identifier": state.checkpoint_identifier}
 
 
 def resume_from_confirmation(state: OperonixState, human_response: HumanInterventionType) -> Dict[str, Any]:
