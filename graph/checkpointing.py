@@ -76,7 +76,7 @@ class CheckpointingService:
         # Persist checkpoint to disk
         self._persist_checkpoint(checkpoint)
         
-        logger.info(f"Checkpoint created: {checkpoint.checkpoint_id} for task {state.task.task_id}")
+        logger.info(f"Checkpoint created: {checkpoint.checkpoint_identifier} for task {state.task.task_id}")
         
         return checkpoint
     
@@ -86,26 +86,26 @@ class CheckpointingService:
         Args:
             checkpoint: CheckpointState to persist
         """
-        checkpoint_file = self.checkpoint_dir / f"{checkpoint.checkpoint_id}.json"
+        checkpoint_file = self.checkpoint_dir / f"{checkpoint.checkpoint_identifier}.json"
         
         with open(checkpoint_file, 'w') as f:
             json.dump(checkpoint.model_dump(), f, indent=2, default=str)
         
         logger.debug(f"Checkpoint persisted to: {checkpoint_file}")
     
-    def load_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointState]:
+    def load_checkpoint(self, checkpoint_identifier: str) -> Optional[CheckpointState]:
         """Load a checkpoint from disk.
         
         Args:
-            checkpoint_id: Checkpoint ID to load
+            checkpoint_identifier: Checkpoint ID to load
             
         Returns:
             CheckpointState if found, None otherwise
         """
-        checkpoint_file = self.checkpoint_dir / f"{checkpoint_id}.json"
+        checkpoint_file = self.checkpoint_dir / f"{checkpoint_identifier}.json"
         
         if not checkpoint_file.exists():
-            logger.warning(f"Checkpoint not found: {checkpoint_id}")
+            logger.warning(f"Checkpoint not found: {checkpoint_identifier}")
             return None
         
         with open(checkpoint_file, 'r') as f:
@@ -113,7 +113,7 @@ class CheckpointingService:
         
         checkpoint = CheckpointState(**checkpoint_data)
         
-        logger.info(f"Checkpoint loaded: {checkpoint_id}")
+        logger.info(f"Checkpoint loaded: {checkpoint_identifier}")
         
         return checkpoint
     
@@ -135,7 +135,7 @@ class CheckpointingService:
             state.plan.current_step_index = checkpoint.current_plan_step_index
             state.plan.completed_steps = checkpoint.completed_steps
         
-        logger.info(f"State restored from checkpoint: {checkpoint.checkpoint_id}")
+        logger.info(f"State restored from checkpoint: {checkpoint.checkpoint_identifier}")
         
         return state
     
@@ -163,28 +163,28 @@ class CheckpointingService:
         # Sort by timestamp and return latest
         latest_checkpoint = max(task_checkpoints, key=lambda c: c.checkpoint_timestamp)
         
-        logger.info(f"Latest checkpoint for task {task_id}: {latest_checkpoint.checkpoint_id}")
+        logger.info(f"Latest checkpoint for task {task_id}: {latest_checkpoint.checkpoint_identifier}")
         
         return latest_checkpoint
     
-    def delete_checkpoint(self, checkpoint_id: str) -> bool:
+    def delete_checkpoint(self, checkpoint_identifier: str) -> bool:
         """Delete a checkpoint.
         
         Args:
-            checkpoint_id: Checkpoint ID to delete
+            checkpoint_identifier: Checkpoint ID to delete
             
         Returns:
             True if deleted, False otherwise
         """
-        checkpoint_file = self.checkpoint_dir / f"{checkpoint_id}.json"
+        checkpoint_file = self.checkpoint_dir / f"{checkpoint_identifier}.json"
         
         if not checkpoint_file.exists():
-            logger.warning(f"Checkpoint not found for deletion: {checkpoint_id}")
+            logger.warning(f"Checkpoint not found for deletion: {checkpoint_identifier}")
             return False
         
         checkpoint_file.unlink()
         
-        logger.info(f"Checkpoint deleted: {checkpoint_id}")
+        logger.info(f"Checkpoint deleted: {checkpoint_identifier}")
         
         return True
     
