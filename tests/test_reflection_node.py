@@ -172,12 +172,14 @@ def test_reflection_node_with_recovery():
 
 def test_reflection_node_with_failed_recovery():
     """Test reflection node with failed recovery."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     # Simulate failed recovery
     from migration.domain_contracts import RecoveryDecision
     state.recovery = RecoveryDecision(
+        recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
         recovery_strategy="retry_with_alternative",
         recovery_attempted=True,
