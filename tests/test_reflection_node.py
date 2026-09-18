@@ -161,7 +161,8 @@ def test_reflection_node_with_recovery():
     state.recovery = RecoveryDecision(
         recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
-        recovery_strategy="retry_with_alternative",
+        recovery_strategy="retry",
+        failure_category="execution_error",
         recovery_attempted=True,
         recovery_successful=True
     )
@@ -183,7 +184,8 @@ def test_reflection_node_with_failed_recovery():
     state.recovery = RecoveryDecision(
         recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
-        recovery_strategy="retry_with_alternative",
+        recovery_strategy="retry",
+        failure_category="execution_error",
         recovery_attempted=True,
         recovery_successful=False
     )
@@ -247,7 +249,8 @@ def test_reflection_node_partial_outcome():
         verification_id=str(uuid.uuid4()),
         step_id="test-step",
         status="UNCERTAIN_OUTCOME",
-        confidence=0.5
+        confidence=0.5,
+        observed_context={}
     )
     
     result = reflect_node(state)
@@ -280,6 +283,7 @@ def test_reflection_node_with_routing_decision():
     state.routing = RoutingDecision(
         selected_candidate=Candidate(
             candidate_id=str(uuid.uuid4()),
+            candidate_type="shell",
             method_type="shell",
             method_name="execute_command"
         )
