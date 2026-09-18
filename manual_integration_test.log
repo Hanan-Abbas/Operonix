@@ -1,0 +1,710 @@
+2026-09-18 20:52:22,433 - asyncio - DEBUG - Using selector: EpollSelector
+2026-09-18 20:52:22,442 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:22,442 - ManualIntegrationTest - INFO - MANUAL INTEGRATION TEST - SETUP
+2026-09-18 20:52:22,442 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:22,811 - FeatureFlags - INFO - Feature Flags State:
+2026-09-18 20:52:22,811 - FeatureFlags - INFO -   MIGRATION_DRY_RUN: True
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   MIGRATION_SHADOW_MODE: False
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   SAFETY_ALLOW_BYPASS: False
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   SAFETY_STRICT_MODE: True
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   USE_CANDIDATE_ROUTING: False
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   USE_CHECKPOINTING: True
+2026-09-18 20:52:22,812 - FeatureFlags - INFO -   USE_GRAPH_CONFIRMATION: False
+2026-09-18 20:52:22,813 - FeatureFlags - INFO -   USE_GRAPH_EXECUTION: True
+2026-09-18 20:52:22,813 - FeatureFlags - INFO -   USE_GRAPH_ROUTING: False
+2026-09-18 20:52:22,813 - FeatureFlags - INFO -   USE_IDEMPOTENCY_CHECKS: False
+2026-09-18 20:52:22,814 - FeatureFlags - INFO -   USE_LANGCHAIN_MODELS: False
+2026-09-18 20:52:22,814 - FeatureFlags - INFO -   USE_LANGGRAPH: True
+2026-09-18 20:52:22,814 - FeatureFlags - INFO -   USE_LEARNING_ROUTING: False
+2026-09-18 20:52:22,814 - FeatureFlags - INFO -   USE_RAG_MEMORY: False
+2026-09-18 20:52:22,814 - FeatureFlags - INFO -   USE_RECOVERY: True
+2026-09-18 20:52:22,815 - FeatureFlags - INFO -   USE_TOOL_ADAPTERS: False
+2026-09-18 20:52:22,815 - FeatureFlags - INFO -   USE_VERIFICATION: True
+2026-09-18 20:52:24,886 - Graph - INFO - Operonix LangGraph topology built successfully (Phase 8)
+2026-09-18 20:52:24,886 - Graph - INFO - Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END
+2026-09-18 20:52:24,887 - RuntimeAdapter - INFO - RuntimeGraphAdapter: Graph runner initialized
+2026-09-18 20:52:24,887 - RuntimeAdapter - INFO - RuntimeGraphAdapter: Graph runner initialized
+2026-09-18 20:52:24,887 - ManualIntegrationTest - INFO - Feature Flags State:
+2026-09-18 20:52:24,887 - ManualIntegrationTest - INFO -   MIGRATION_DRY_RUN: True
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   MIGRATION_SHADOW_MODE: False
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   SAFETY_ALLOW_BYPASS: False
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   SAFETY_STRICT_MODE: True
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   USE_CANDIDATE_ROUTING: False
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   USE_CHECKPOINTING: True
+2026-09-18 20:52:24,888 - ManualIntegrationTest - INFO -   USE_GRAPH_CONFIRMATION: False
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_GRAPH_EXECUTION: True
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_GRAPH_ROUTING: False
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_IDEMPOTENCY_CHECKS: False
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_LANGCHAIN_MODELS: False
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_LANGGRAPH: True
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_LEARNING_ROUTING: False
+2026-09-18 20:52:24,889 - ManualIntegrationTest - INFO -   USE_RAG_MEMORY: False
+2026-09-18 20:52:24,890 - ManualIntegrationTest - INFO -   USE_RECOVERY: True
+2026-09-18 20:52:24,890 - ManualIntegrationTest - INFO -   USE_TOOL_ADAPTERS: False
+2026-09-18 20:52:24,890 - ManualIntegrationTest - INFO -   USE_VERIFICATION: True
+2026-09-18 20:52:24,890 - ManualIntegrationTest - INFO - Migration Phase: Phase 7+: Checkpointing & Human Intervention
+2026-09-18 20:52:24,890 - ManualIntegrationTest - INFO - ✓ Runtime adapter initialized successfully
+2026-09-18 20:52:24,891 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:24,891 - ManualIntegrationTest - INFO - GRAPH TOPOLOGY
+2026-09-18 20:52:24,891 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:24,992 - Graph - INFO - Operonix LangGraph topology built successfully (Phase 8)
+2026-09-18 20:52:24,993 - Graph - INFO - Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END
+2026-09-18 20:52:24,993 - ManualIntegrationTest - INFO - Graph built successfully
+2026-09-18 20:52:25,037 - ManualIntegrationTest - INFO - ASCII representation not available
+2026-09-18 20:52:25,038 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:25,038 - ManualIntegrationTest - INFO - TEST 1: SIMPLE TASK EXECUTION
+2026-09-18 20:52:25,039 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:25,040 - ManualIntegrationTest - INFO - Creating task request: 'Open Firefox'
+2026-09-18 20:52:25,040 - ManualIntegrationTest - INFO - Task ID: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,041 - ManualIntegrationTest - INFO - User Input: Open Firefox
+2026-09-18 20:52:25,041 - ManualIntegrationTest - INFO - Source: TaskSource.VOICE
+2026-09-18 20:52:25,042 - ManualIntegrationTest - INFO - Executing task through LangGraph workflow...
+2026-09-18 20:52:25,042 - RuntimeAdapter - INFO - Executing task 22c8b703-273f-40a0-be31-7c502aceb031 through LangGraph workflow
+2026-09-18 20:52:25,044 - Graph - INFO - Running task 22c8b703-273f-40a0-be31-7c502aceb031 through LangGraph
+2026-09-18 20:52:25,050 - Graph.Intake - INFO - INTAKE: Processing task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,051 - Graph.TraceCollector - INFO - TraceCollector initialized
+2026-09-18 20:52:25,051 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,052 - Graph.Observe - INFO - OBSERVE: Gathering context for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,053 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:25,203 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:25,204 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:25,205 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:25,206 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:25,253 - Config - INFO - Successfully loaded dynamic intent configurations.
+2026-09-18 20:52:25,253 - Config - INFO - ✅ Groq provider ready — model: openai/gpt-oss-120b
+2026-09-18 20:52:25,254 - Config - INFO - LLM priority — Groq: openai/gpt-oss-120b | OpenRouter: meta-llama/llama-3.3-70b-instruct:free | Gemini: gemini-3.6-flash | Ollama: llama3
+2026-09-18 20:52:25,254 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:25,254 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:25,254 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,256 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:25,256 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:27,818 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,821 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,959 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:27,960 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:27,962 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:27,962 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,963 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,963 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:27,972 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:27,973 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:27,973 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: 83f83d8e-f645-4310-aa28-e176f84e474d, action=execute_intent
+2026-09-18 20:52:27,973 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,975 - Graph.Route - INFO - ROUTE: Routing execution method for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,976 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:27,977 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:27,978 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:27,978 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='83f83d8e-f645-4310-aa28-e176f84e474d' objective='Execute intent: Open Firefox' action='execute_intent' parameters={'intent': 'open_application', 'resolved_args': {'user_input': 'Open Firefox', 'application': 'firefox'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:27,983 - Plugins.PluginManifest - INFO - PluginManifestRegistry initialized
+2026-09-18 20:52:27,984 - Graph.CandidateDiscovery - INFO - Synced 0 plugins from plugin manifest registry
+2026-09-18 20:52:27,984 - Graph.CandidateDiscovery - INFO - CandidateDiscoveryService initialized
+2026-09-18 20:52:27,984 - Graph.CandidateEvaluation - INFO - CandidateEvaluationService initialized
+2026-09-18 20:52:27,984 - Graph.RankingPolicy - INFO - RankingPolicyService initialized
+2026-09-18 20:52:27,985 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: 83f83d8e-f645-4310-aa28-e176f84e474d
+2026-09-18 20:52:27,987 - Graph.LearningIntegration - INFO - Connected to existing learning system
+2026-09-18 20:52:27,987 - Graph.LearningIntegration - INFO - LearningIntegration initialized
+2026-09-18 20:52:27,987 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /open_application: []
+2026-09-18 20:52:27,987 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.000 = 0.500
+2026-09-18 20:52:27,988 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:27,988 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step 83f83d8e-f645-4310-aa28-e176f84e474d
+2026-09-18 20:52:27,988 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:27,988 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: 83f83d8e-f645-4310-aa28-e176f84e474d
+2026-09-18 20:52:27,989 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step 83f83d8e-f645-4310-aa28-e176f84e474d
+2026-09-18 20:52:27,989 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:27,989 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:27,989 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:27,990 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:27,990 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:27,990 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:27,990 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:27,991 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,991 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:27,993 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,000 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:28,001 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:28,001 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:28,002 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=low, validation=APPROVED, permission=GRANTED, confirmation=False
+2026-09-18 20:52:28,002 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,004 - Graph.ExecuteStep - INFO - EXECUTE_STEP: Executing step for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,036 - ToolRegistry - INFO - ✅ Registered tool 'file_tool' | type=file_tool | priority=80
+2026-09-18 20:52:28,038 - EventBus - INFO - Subscribed to pattern: shell_tool_intent_registered
+2026-09-18 20:52:28,038 - ToolRegistry - INFO - ✅ Registered tool 'shell_tool' | type=shell_tool | priority=70
+2026-09-18 20:52:28,128 - ToolRegistry - INFO - ✅ Registered tool 'ui_tool' | type=ui_tool | priority=50
+2026-09-18 20:52:28,130 - ToolRegistry - INFO - ✅ Registered tool 'api_tool' | type=api_tool | priority=90
+2026-09-18 20:52:28,131 - ToolRegistry - INFO - ✅ Registered tool 'ollama_tool' | type=ollama_tool | priority=10
+2026-09-18 20:52:28,133 - asyncio - DEBUG - Using selector: EpollSelector
+2026-09-18 20:52:28,136 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'tool_selected'
+2026-09-18 20:52:28,146 - TerminalResolver - DEBUG - _list_terminals: wmctrl returned 4 windows
+2026-09-18 20:52:28,151 - TerminalResolver - DEBUG - _list_terminals: z=0 win=0x04600004 pid=35064 wm_class='wm_class(string) = "github desktop", "github desktop"' is_terminal=False title='GitHub Desktop'
+2026-09-18 20:52:28,157 - TerminalResolver - DEBUG - _list_terminals: z=1 win=0x04200004 pid=35823 wm_class='wm_class(string) = "devin", "devin"' is_terminal=False title='Operonix - Devin - test_results.txt'
+2026-09-18 20:52:28,163 - TerminalResolver - DEBUG - _list_terminals: z=2 win=0x0220000b pid=37597 wm_class='wm_class(string) = "gjs", "gjs"' is_terminal=False title='Desktop Icons 1'
+2026-09-18 20:52:28,168 - TerminalResolver - DEBUG - _list_terminals: z=3 win=0x0240000a pid=39663 wm_class='wm_class(string) = "gnome-terminal-server", "gnome-terminal"' is_terminal=True title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:28,169 - TerminalResolver - INFO - _list_terminals: TERMINAL z=3 win=0x0240000a pid=39663 pts=/dev/pts/3 cwd=/home/muhammad-mohid-abbas title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:28,170 - TerminalResolver - DEBUG - TerminalResolver: scored terminal='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' cwd='/home/muhammad-mohid-abbas' cwd_score=0.00 recency=0.00 total=0.00 pts=/dev/pts/3
+2026-09-18 20:52:28,170 - TerminalResolver - INFO - TerminalResolver: Bridge → 'muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' (score=0.00, pts=/dev/pts/3, cwd=/home/muhammad-mohid-abbas)
+2026-09-18 20:52:28,170 - Executor - INFO - Task [22c8b703-273f-40a0-be31-7c502aceb031] step 0 → BridgeTarget
+2026-09-18 20:52:28,170 - Executor - DEBUG - Bridge pre-flight: pts '/dev/pts/3' writable ✓
+2026-09-18 20:52:28,171 - ShellTool - INFO - Bridge: injected 'execute_intent' into /dev/pts/3
+2026-09-18 20:52:28,171 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'command_dispatched'
+2026-09-18 20:52:28,173 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,173 - Graph.LearningIntegration - INFO - Collected performance feedback: open_application -> shell (success=True)
+2026-09-18 20:52:28,175 - Graph.VerifyStep - INFO - VERIFY_STEP: Verifying execution for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,176 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,179 - Graph.Recover - INFO - RECOVER: Handling recovery for task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,179 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,181 - Graph.Finalize - INFO - FINALIZE: Finalizing task 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,182 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,182 - Graph.TraceCollector - WARNING - No active trace found for task: 22c8b703-273f-40a0-be31-7c502aceb031
+2026-09-18 20:52:28,183 - Graph - INFO - Task 22c8b703-273f-40a0-be31-7c502aceb031 completed through LangGraph
+2026-09-18 20:52:28,183 - RuntimeAdapter - INFO - Task 22c8b703-273f-40a0-be31-7c502aceb031 completed successfully through graph
+2026-09-18 20:52:28,184 - ManualIntegrationTest - INFO - Task completed with success: True
+2026-09-18 20:52:28,184 - ManualIntegrationTest - INFO - Response: Task 22c8b703-273f-40a0-be31-7c502aceb031 completed (Phase 1 foundation)
+2026-09-18 20:52:28,184 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:28,184 - ManualIntegrationTest - INFO - TEST SUMMARY
+2026-09-18 20:52:28,184 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO - 
+Simple Task Execution:
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:25.040110
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:28.184550
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -     - Graph workflow executed without errors
+2026-09-18 20:52:28,185 - ManualIntegrationTest - INFO -     - Final result success: True
+2026-09-18 20:52:28,186 - ManualIntegrationTest - INFO - 
+Overall: 1 passed, 0 failed out of 1 tests
+2026-09-18 20:52:28,186 - ManualIntegrationTest - INFO - 
+Results saved to: manual_integration_test_results.json
+2026-09-18 20:52:41,085 - asyncio - DEBUG - Using selector: EpollSelector
+2026-09-18 20:52:41,091 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:41,091 - ManualIntegrationTest - INFO - MANUAL INTEGRATION TEST - SETUP
+2026-09-18 20:52:41,091 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:41,417 - FeatureFlags - INFO - Feature Flags State:
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   MIGRATION_DRY_RUN: True
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   MIGRATION_SHADOW_MODE: False
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   SAFETY_ALLOW_BYPASS: False
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   SAFETY_STRICT_MODE: True
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   USE_CANDIDATE_ROUTING: False
+2026-09-18 20:52:41,418 - FeatureFlags - INFO -   USE_CHECKPOINTING: True
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_GRAPH_CONFIRMATION: False
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_GRAPH_EXECUTION: True
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_GRAPH_ROUTING: False
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_IDEMPOTENCY_CHECKS: False
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_LANGCHAIN_MODELS: False
+2026-09-18 20:52:41,419 - FeatureFlags - INFO -   USE_LANGGRAPH: True
+2026-09-18 20:52:41,420 - FeatureFlags - INFO -   USE_LEARNING_ROUTING: False
+2026-09-18 20:52:41,420 - FeatureFlags - INFO -   USE_RAG_MEMORY: False
+2026-09-18 20:52:41,420 - FeatureFlags - INFO -   USE_RECOVERY: True
+2026-09-18 20:52:41,420 - FeatureFlags - INFO -   USE_TOOL_ADAPTERS: False
+2026-09-18 20:52:41,420 - FeatureFlags - INFO -   USE_VERIFICATION: True
+2026-09-18 20:52:42,789 - Graph - INFO - Operonix LangGraph topology built successfully (Phase 8)
+2026-09-18 20:52:42,790 - Graph - INFO - Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END
+2026-09-18 20:52:42,790 - RuntimeAdapter - INFO - RuntimeGraphAdapter: Graph runner initialized
+2026-09-18 20:52:42,790 - RuntimeAdapter - INFO - RuntimeGraphAdapter: Graph runner initialized
+2026-09-18 20:52:42,790 - ManualIntegrationTest - INFO - Feature Flags State:
+2026-09-18 20:52:42,790 - ManualIntegrationTest - INFO -   MIGRATION_DRY_RUN: True
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   MIGRATION_SHADOW_MODE: False
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   SAFETY_ALLOW_BYPASS: False
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   SAFETY_STRICT_MODE: True
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   USE_CANDIDATE_ROUTING: False
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   USE_CHECKPOINTING: True
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   USE_GRAPH_CONFIRMATION: False
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   USE_GRAPH_EXECUTION: True
+2026-09-18 20:52:42,791 - ManualIntegrationTest - INFO -   USE_GRAPH_ROUTING: False
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_IDEMPOTENCY_CHECKS: False
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_LANGCHAIN_MODELS: False
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_LANGGRAPH: True
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_LEARNING_ROUTING: False
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_RAG_MEMORY: False
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_RECOVERY: True
+2026-09-18 20:52:42,792 - ManualIntegrationTest - INFO -   USE_TOOL_ADAPTERS: False
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO -   USE_VERIFICATION: True
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO - Migration Phase: Phase 7+: Checkpointing & Human Intervention
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO - ✓ Runtime adapter initialized successfully
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO - GRAPH TOPOLOGY
+2026-09-18 20:52:42,793 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:42,919 - Graph - INFO - Operonix LangGraph topology built successfully (Phase 8)
+2026-09-18 20:52:42,919 - Graph - INFO - Topology: START → INTAKE → OBSERVE → ANALYZE_INTENT → RETRIEVE_KNOWLEDGE → CREATE_PLAN → ROUTE → SAFETY_CHECK → [EXECUTE_STEP | CONFIRMATION] → VERIFY_STEP → [FINALIZE | RECOVER | CANCEL] → END
+2026-09-18 20:52:42,920 - ManualIntegrationTest - INFO - Graph built successfully
+2026-09-18 20:52:42,934 - ManualIntegrationTest - INFO - ASCII representation not available
+2026-09-18 20:52:42,935 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:42,935 - ManualIntegrationTest - INFO - TEST 1: SIMPLE TASK EXECUTION
+2026-09-18 20:52:42,936 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:42,936 - ManualIntegrationTest - INFO - Creating task request: 'Open Firefox'
+2026-09-18 20:52:42,937 - ManualIntegrationTest - INFO - Task ID: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:42,937 - ManualIntegrationTest - INFO - User Input: Open Firefox
+2026-09-18 20:52:42,938 - ManualIntegrationTest - INFO - Source: TaskSource.VOICE
+2026-09-18 20:52:42,938 - ManualIntegrationTest - INFO - Executing task through LangGraph workflow...
+2026-09-18 20:52:42,939 - RuntimeAdapter - INFO - Executing task 4aae8451-745b-4c39-9973-63fbe21f11bf through LangGraph workflow
+2026-09-18 20:52:42,939 - Graph - INFO - Running task 4aae8451-745b-4c39-9973-63fbe21f11bf through LangGraph
+2026-09-18 20:52:42,946 - Graph.Intake - INFO - INTAKE: Processing task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:42,946 - Graph.TraceCollector - INFO - TraceCollector initialized
+2026-09-18 20:52:42,946 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:42,948 - Graph.Observe - INFO - OBSERVE: Gathering context for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:42,949 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:43,141 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:43,143 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:43,144 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:43,146 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:43,209 - Config - INFO - Successfully loaded dynamic intent configurations.
+2026-09-18 20:52:43,209 - Config - INFO - ✅ Groq provider ready — model: openai/gpt-oss-120b
+2026-09-18 20:52:43,212 - Config - INFO - LLM priority — Groq: openai/gpt-oss-120b | OpenRouter: meta-llama/llama-3.3-70b-instruct:free | Gemini: gemini-3.6-flash | Ollama: llama3
+2026-09-18 20:52:43,213 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:43,213 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:43,213 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:43,214 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:43,215 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:45,775 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,779 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,926 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:45,927 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:45,931 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:45,932 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,935 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,936 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:45,946 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:45,947 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:45,948 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: c0fc34b1-6856-4ee0-98ae-d14f14f981de, action=execute_intent
+2026-09-18 20:52:45,949 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,952 - Graph.Route - INFO - ROUTE: Routing execution method for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,953 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:45,953 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:45,954 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:45,954 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='c0fc34b1-6856-4ee0-98ae-d14f14f981de' objective='Execute intent: Open Firefox' action='execute_intent' parameters={'intent': 'open_application', 'resolved_args': {'user_input': 'Open Firefox', 'application': 'firefox'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:45,960 - Plugins.PluginManifest - INFO - PluginManifestRegistry initialized
+2026-09-18 20:52:45,961 - Graph.CandidateDiscovery - INFO - Synced 0 plugins from plugin manifest registry
+2026-09-18 20:52:45,961 - Graph.CandidateDiscovery - INFO - CandidateDiscoveryService initialized
+2026-09-18 20:52:45,961 - Graph.CandidateEvaluation - INFO - CandidateEvaluationService initialized
+2026-09-18 20:52:45,961 - Graph.RankingPolicy - INFO - RankingPolicyService initialized
+2026-09-18 20:52:45,962 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: c0fc34b1-6856-4ee0-98ae-d14f14f981de
+2026-09-18 20:52:45,964 - Graph.LearningIntegration - INFO - Connected to existing learning system
+2026-09-18 20:52:45,964 - Graph.LearningIntegration - INFO - LearningIntegration initialized
+2026-09-18 20:52:45,965 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /open_application: []
+2026-09-18 20:52:45,965 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.000 = 0.500
+2026-09-18 20:52:45,965 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:45,966 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step c0fc34b1-6856-4ee0-98ae-d14f14f981de
+2026-09-18 20:52:45,966 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:45,966 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: c0fc34b1-6856-4ee0-98ae-d14f14f981de
+2026-09-18 20:52:45,967 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step c0fc34b1-6856-4ee0-98ae-d14f14f981de
+2026-09-18 20:52:45,967 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:45,968 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:45,968 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:45,968 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:45,968 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:45,969 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:45,969 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:45,970 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,970 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,972 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,979 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:45,980 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:45,981 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:45,981 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=low, validation=APPROVED, permission=GRANTED, confirmation=False
+2026-09-18 20:52:45,981 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:45,983 - Graph.ExecuteStep - INFO - EXECUTE_STEP: Executing step for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,004 - ToolRegistry - INFO - ✅ Registered tool 'file_tool' | type=file_tool | priority=80
+2026-09-18 20:52:46,004 - EventBus - INFO - Subscribed to pattern: shell_tool_intent_registered
+2026-09-18 20:52:46,005 - ToolRegistry - INFO - ✅ Registered tool 'shell_tool' | type=shell_tool | priority=70
+2026-09-18 20:52:46,085 - ToolRegistry - INFO - ✅ Registered tool 'ui_tool' | type=ui_tool | priority=50
+2026-09-18 20:52:46,087 - ToolRegistry - INFO - ✅ Registered tool 'api_tool' | type=api_tool | priority=90
+2026-09-18 20:52:46,088 - ToolRegistry - INFO - ✅ Registered tool 'ollama_tool' | type=ollama_tool | priority=10
+2026-09-18 20:52:46,090 - asyncio - DEBUG - Using selector: EpollSelector
+2026-09-18 20:52:46,091 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'tool_selected'
+2026-09-18 20:52:46,105 - TerminalResolver - DEBUG - _list_terminals: wmctrl returned 4 windows
+2026-09-18 20:52:46,111 - TerminalResolver - DEBUG - _list_terminals: z=0 win=0x04600004 pid=35064 wm_class='wm_class(string) = "github desktop", "github desktop"' is_terminal=False title='GitHub Desktop'
+2026-09-18 20:52:46,116 - TerminalResolver - DEBUG - _list_terminals: z=1 win=0x04200004 pid=35823 wm_class='wm_class(string) = "devin", "devin"' is_terminal=False title='Operonix - Devin - test_results.txt'
+2026-09-18 20:52:46,120 - TerminalResolver - DEBUG - _list_terminals: z=2 win=0x0220000b pid=37597 wm_class='wm_class(string) = "gjs", "gjs"' is_terminal=False title='Desktop Icons 1'
+2026-09-18 20:52:46,124 - TerminalResolver - DEBUG - _list_terminals: z=3 win=0x0240000a pid=39663 wm_class='wm_class(string) = "gnome-terminal-server", "gnome-terminal"' is_terminal=True title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:46,125 - TerminalResolver - INFO - _list_terminals: TERMINAL z=3 win=0x0240000a pid=39663 pts=/dev/pts/3 cwd=/home/muhammad-mohid-abbas title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:46,125 - TerminalResolver - DEBUG - TerminalResolver: scored terminal='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' cwd='/home/muhammad-mohid-abbas' cwd_score=0.00 recency=0.00 total=0.00 pts=/dev/pts/3
+2026-09-18 20:52:46,126 - TerminalResolver - INFO - TerminalResolver: Bridge → 'muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' (score=0.00, pts=/dev/pts/3, cwd=/home/muhammad-mohid-abbas)
+2026-09-18 20:52:46,126 - Executor - INFO - Task [4aae8451-745b-4c39-9973-63fbe21f11bf] step 0 → BridgeTarget
+2026-09-18 20:52:46,126 - Executor - DEBUG - Bridge pre-flight: pts '/dev/pts/3' writable ✓
+2026-09-18 20:52:46,127 - ShellTool - INFO - Bridge: injected 'execute_intent' into /dev/pts/3
+2026-09-18 20:52:46,128 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'command_dispatched'
+2026-09-18 20:52:46,133 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,133 - Graph.LearningIntegration - INFO - Collected performance feedback: open_application -> shell (success=True)
+2026-09-18 20:52:46,135 - Graph.VerifyStep - INFO - VERIFY_STEP: Verifying execution for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,135 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,138 - Graph.Recover - INFO - RECOVER: Handling recovery for task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,138 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,140 - Graph.Finalize - INFO - FINALIZE: Finalizing task 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,140 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,141 - Graph.TraceCollector - WARNING - No active trace found for task: 4aae8451-745b-4c39-9973-63fbe21f11bf
+2026-09-18 20:52:46,142 - Graph - INFO - Task 4aae8451-745b-4c39-9973-63fbe21f11bf completed through LangGraph
+2026-09-18 20:52:46,143 - RuntimeAdapter - INFO - Task 4aae8451-745b-4c39-9973-63fbe21f11bf completed successfully through graph
+2026-09-18 20:52:46,143 - ManualIntegrationTest - INFO - Task completed with success: True
+2026-09-18 20:52:46,143 - ManualIntegrationTest - INFO - Response: Task 4aae8451-745b-4c39-9973-63fbe21f11bf completed (Phase 1 foundation)
+2026-09-18 20:52:46,144 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,144 - ManualIntegrationTest - INFO - TEST 2: SAFETY CHECK WORKFLOW
+2026-09-18 20:52:46,145 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,145 - ManualIntegrationTest - INFO - Creating task request: 'Delete all files in /tmp'
+2026-09-18 20:52:46,146 - ManualIntegrationTest - INFO - Executing task through graph...
+2026-09-18 20:52:46,146 - RuntimeAdapter - INFO - Executing task 12cae684-967f-4039-9753-b0315ab0f914 through LangGraph workflow
+2026-09-18 20:52:46,146 - Graph - INFO - Running task 12cae684-967f-4039-9753-b0315ab0f914 through LangGraph
+2026-09-18 20:52:46,149 - Graph.Intake - INFO - INTAKE: Processing task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,149 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,151 - Graph.Observe - INFO - OBSERVE: Gathering context for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,151 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:46,151 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:46,151 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:46,152 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:46,152 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:46,152 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:46,152 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:46,152 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,154 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,154 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:46,154 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,156 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,346 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:46,347 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:46,347 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:46,347 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,348 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,349 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:46,349 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:46,349 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:46,349 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: ce60e230-f7b7-466c-b679-8aa64f460f40, action=execute_intent
+2026-09-18 20:52:46,350 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,351 - Graph.Route - INFO - ROUTE: Routing execution method for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,351 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:46,352 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:46,352 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:46,352 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='ce60e230-f7b7-466c-b679-8aa64f460f40' objective='Execute intent: Delete all files in /tmp' action='execute_intent' parameters={'intent': 'delete_file', 'resolved_args': {'user_input': 'Delete all files in /tmp'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:46,352 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: ce60e230-f7b7-466c-b679-8aa64f460f40
+2026-09-18 20:52:46,352 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /delete_file: []
+2026-09-18 20:52:46,353 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.000 = 0.500
+2026-09-18 20:52:46,353 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:46,353 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step ce60e230-f7b7-466c-b679-8aa64f460f40
+2026-09-18 20:52:46,353 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:46,353 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: ce60e230-f7b7-466c-b679-8aa64f460f40
+2026-09-18 20:52:46,353 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step ce60e230-f7b7-466c-b679-8aa64f460f40
+2026-09-18 20:52:46,354 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:46,354 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:46,354 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:46,354 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:46,354 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:46,354 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:46,355 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:46,355 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,355 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,357 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,357 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:46,357 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:46,357 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:46,358 - Graph.SafetyCheck - WARNING - Destructive operation detected: delete
+2026-09-18 20:52:46,358 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=high, validation=APPROVED, permission=GRANTED, confirmation=True
+2026-09-18 20:52:46,358 - Graph.TraceCollector - WARNING - No active trace found for task: 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,360 - Graph.Confirmation - INFO - CONFIRMATION: Handling human intervention for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,360 - Graph.Checkpointing - INFO - CheckpointingService initialized with directory: .checkpoints
+2026-09-18 20:52:46,363 - Graph.Checkpointing - DEBUG - Checkpoint persisted to: .checkpoints/71b44ded-aafe-4c58-af6a-cc7c48f0f6f4.json
+2026-09-18 20:52:46,364 - Graph.Checkpointing - INFO - Checkpoint created: 71b44ded-aafe-4c58-af6a-cc7c48f0f6f4 for task 12cae684-967f-4039-9753-b0315ab0f914
+2026-09-18 20:52:46,364 - Graph.Confirmation - INFO - CONFIRMATION: Checkpoint created: 71b44ded-aafe-4c58-af6a-cc7c48f0f6f4, graph paused
+2026-09-18 20:52:46,365 - Graph - INFO - Graph paused for task 12cae684-967f-4039-9753-b0315ab0f914, awaiting external resume
+2026-09-18 20:52:46,366 - Graph - INFO - Task 12cae684-967f-4039-9753-b0315ab0f914 completed through LangGraph
+2026-09-18 20:52:46,367 - RuntimeAdapter - INFO - Task 12cae684-967f-4039-9753-b0315ab0f914 paused awaiting confirmation
+2026-09-18 20:52:46,367 - ManualIntegrationTest - INFO - Task completed with success: True
+2026-09-18 20:52:46,367 - ManualIntegrationTest - INFO - Response: Task 12cae684-967f-4039-9753-b0315ab0f914 paused awaiting confirmation
+2026-09-18 20:52:46,367 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,367 - ManualIntegrationTest - INFO - TEST 3: RECOVERY SCENARIO
+2026-09-18 20:52:46,367 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,368 - ManualIntegrationTest - INFO - Creating task request that may fail: 'Open non-existent application'
+2026-09-18 20:52:46,368 - ManualIntegrationTest - INFO - Executing task through graph...
+2026-09-18 20:52:46,368 - RuntimeAdapter - INFO - Executing task 7d1696df-08fa-4795-b2cf-b6c5b82402c5 through LangGraph workflow
+2026-09-18 20:52:46,368 - Graph - INFO - Running task 7d1696df-08fa-4795-b2cf-b6c5b82402c5 through LangGraph
+2026-09-18 20:52:46,371 - Graph.Intake - INFO - INTAKE: Processing task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,372 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,373 - Graph.Observe - INFO - OBSERVE: Gathering context for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,373 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:46,374 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:46,374 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:46,374 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:46,374 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:46,374 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:46,374 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:46,375 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,376 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,376 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:46,376 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,378 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,578 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:46,578 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:46,578 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:46,578 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,580 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,580 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:46,580 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:46,580 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:46,580 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: 1b29f5df-8f29-40d3-94b4-ee73f272e982, action=execute_intent
+2026-09-18 20:52:46,581 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,582 - Graph.Route - INFO - ROUTE: Routing execution method for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,582 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:46,582 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:46,582 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:46,583 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='1b29f5df-8f29-40d3-94b4-ee73f272e982' objective='Execute intent: Open non-existent-app-xyz' action='execute_intent' parameters={'intent': 'open_application', 'resolved_args': {'user_input': 'Open non-existent-app-xyz'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:46,583 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: 1b29f5df-8f29-40d3-94b4-ee73f272e982
+2026-09-18 20:52:46,583 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /open_application: []
+2026-09-18 20:52:46,583 - Graph.LearningIntegration - DEBUG - Applied success rate boost: 0.1 for shell (success_rate=1.00)
+2026-09-18 20:52:46,584 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.100 = 0.600
+2026-09-18 20:52:46,584 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:46,584 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step 1b29f5df-8f29-40d3-94b4-ee73f272e982
+2026-09-18 20:52:46,584 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:46,584 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: 1b29f5df-8f29-40d3-94b4-ee73f272e982
+2026-09-18 20:52:46,585 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step 1b29f5df-8f29-40d3-94b4-ee73f272e982
+2026-09-18 20:52:46,585 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:46,585 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:46,585 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:46,585 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:46,585 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:46,586 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:46,586 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:46,586 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,586 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,587 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,588 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:46,588 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:46,588 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:46,588 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=low, validation=APPROVED, permission=GRANTED, confirmation=False
+2026-09-18 20:52:46,588 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,590 - Graph.ExecuteStep - INFO - EXECUTE_STEP: Executing step for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,591 - asyncio - DEBUG - Using selector: EpollSelector
+2026-09-18 20:52:46,592 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'tool_selected'
+2026-09-18 20:52:46,599 - TerminalResolver - DEBUG - _list_terminals: wmctrl returned 4 windows
+2026-09-18 20:52:46,604 - TerminalResolver - DEBUG - _list_terminals: z=0 win=0x04600004 pid=35064 wm_class='wm_class(string) = "github desktop", "github desktop"' is_terminal=False title='GitHub Desktop'
+2026-09-18 20:52:46,610 - TerminalResolver - DEBUG - _list_terminals: z=1 win=0x04200004 pid=35823 wm_class='wm_class(string) = "devin", "devin"' is_terminal=False title='Operonix - Devin - test_results.txt'
+2026-09-18 20:52:46,614 - TerminalResolver - DEBUG - _list_terminals: z=2 win=0x0220000b pid=37597 wm_class='wm_class(string) = "gjs", "gjs"' is_terminal=False title='Desktop Icons 1'
+2026-09-18 20:52:46,618 - TerminalResolver - DEBUG - _list_terminals: z=3 win=0x0240000a pid=39663 wm_class='wm_class(string) = "gnome-terminal-server", "gnome-terminal"' is_terminal=True title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:46,619 - TerminalResolver - INFO - _list_terminals: TERMINAL z=3 win=0x0240000a pid=39663 pts=/dev/pts/3 cwd=/home/muhammad-mohid-abbas title='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: '
+2026-09-18 20:52:46,620 - TerminalResolver - DEBUG - TerminalResolver: scored terminal='muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' cwd='/home/muhammad-mohid-abbas' cwd_score=0.00 recency=0.00 total=0.00 pts=/dev/pts/3
+2026-09-18 20:52:46,620 - TerminalResolver - INFO - TerminalResolver: Bridge → 'muhammad-mohid-abbas@muhammad-mohid-abbas-SATELLITE-C50t-A: ~/Desktop/Hanan/GitHub/Operonix' (score=0.00, pts=/dev/pts/3, cwd=/home/muhammad-mohid-abbas)
+2026-09-18 20:52:46,620 - Executor - INFO - Task [7d1696df-08fa-4795-b2cf-b6c5b82402c5] step 0 → BridgeTarget
+2026-09-18 20:52:46,621 - Executor - DEBUG - Bridge pre-flight: pts '/dev/pts/3' writable ✓
+2026-09-18 20:52:46,622 - ShellTool - INFO - Bridge: injected 'execute_intent' into /dev/pts/3
+2026-09-18 20:52:46,622 - EventBus - WARNING - Event loop not initialized yet. Dropping event 'command_dispatched'
+2026-09-18 20:52:46,624 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,624 - Graph.LearningIntegration - INFO - Collected performance feedback: open_application -> shell (success=True)
+2026-09-18 20:52:46,626 - Graph.VerifyStep - INFO - VERIFY_STEP: Verifying execution for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,626 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,628 - Graph.Recover - INFO - RECOVER: Handling recovery for task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,628 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,630 - Graph.Finalize - INFO - FINALIZE: Finalizing task 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,631 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,631 - Graph.TraceCollector - WARNING - No active trace found for task: 7d1696df-08fa-4795-b2cf-b6c5b82402c5
+2026-09-18 20:52:46,632 - Graph - INFO - Task 7d1696df-08fa-4795-b2cf-b6c5b82402c5 completed through LangGraph
+2026-09-18 20:52:46,632 - RuntimeAdapter - INFO - Task 7d1696df-08fa-4795-b2cf-b6c5b82402c5 completed successfully through graph
+2026-09-18 20:52:46,633 - ManualIntegrationTest - INFO - Task completed with success: True
+2026-09-18 20:52:46,633 - ManualIntegrationTest - INFO - Response: Task 7d1696df-08fa-4795-b2cf-b6c5b82402c5 completed (Phase 1 foundation)
+2026-09-18 20:52:46,633 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,633 - ManualIntegrationTest - INFO - TEST 4: PAUSE/RESUME WORKFLOW WITH EXTERNAL RESUME
+2026-09-18 20:52:46,633 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,634 - ManualIntegrationTest - INFO - Creating task request requiring confirmation: 'Format disk'
+2026-09-18 20:52:46,634 - ManualIntegrationTest - INFO - Executing task through graph (should pause at confirmation)...
+2026-09-18 20:52:46,634 - RuntimeAdapter - INFO - Executing task a1c46ab7-f592-4ba4-9cbc-305badec959e through LangGraph workflow
+2026-09-18 20:52:46,634 - Graph - INFO - Running task a1c46ab7-f592-4ba4-9cbc-305badec959e through LangGraph
+2026-09-18 20:52:46,636 - Graph.Intake - INFO - INTAKE: Processing task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,636 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,638 - Graph.Observe - INFO - OBSERVE: Gathering context for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,638 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:46,638 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:46,638 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:46,638 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:46,639 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:46,639 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:46,639 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:46,639 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,640 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,640 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:46,641 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,641 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,773 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:46,774 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:46,774 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:46,774 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,775 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,775 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:46,775 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:46,776 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:46,776 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: b5b67504-fc51-40f0-a664-6500aac03d98, action=execute_intent
+2026-09-18 20:52:46,776 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,777 - Graph.Route - INFO - ROUTE: Routing execution method for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,777 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:46,777 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:46,778 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:46,778 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='b5b67504-fc51-40f0-a664-6500aac03d98' objective='Execute intent: Format disk' action='execute_intent' parameters={'intent': 'unknown', 'resolved_args': {'user_input': 'Format disk'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:46,778 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: b5b67504-fc51-40f0-a664-6500aac03d98
+2026-09-18 20:52:46,778 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /unknown: []
+2026-09-18 20:52:46,778 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.000 = 0.500
+2026-09-18 20:52:46,778 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:46,779 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step b5b67504-fc51-40f0-a664-6500aac03d98
+2026-09-18 20:52:46,779 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:46,779 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: b5b67504-fc51-40f0-a664-6500aac03d98
+2026-09-18 20:52:46,779 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step b5b67504-fc51-40f0-a664-6500aac03d98
+2026-09-18 20:52:46,779 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:46,779 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:46,780 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:46,780 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:46,780 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:46,780 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:46,780 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:46,780 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,781 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,782 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,782 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:46,783 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:46,783 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:46,783 - Graph.SafetyCheck - WARNING - Destructive operation detected: rm
+2026-09-18 20:52:46,783 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=high, validation=APPROVED, permission=GRANTED, confirmation=True
+2026-09-18 20:52:46,784 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,785 - Graph.Confirmation - INFO - CONFIRMATION: Handling human intervention for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,788 - Graph.Checkpointing - DEBUG - Checkpoint persisted to: .checkpoints/6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8.json
+2026-09-18 20:52:46,789 - Graph.Checkpointing - INFO - Checkpoint created: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8 for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,789 - Graph.Confirmation - INFO - CONFIRMATION: Checkpoint created: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8, graph paused
+2026-09-18 20:52:46,790 - Graph - INFO - Graph paused for task a1c46ab7-f592-4ba4-9cbc-305badec959e, awaiting external resume
+2026-09-18 20:52:46,791 - Graph - INFO - Task a1c46ab7-f592-4ba4-9cbc-305badec959e completed through LangGraph
+2026-09-18 20:52:46,792 - RuntimeAdapter - INFO - Task a1c46ab7-f592-4ba4-9cbc-305badec959e paused awaiting confirmation
+2026-09-18 20:52:46,793 - ManualIntegrationTest - INFO - Task paused: True
+2026-09-18 20:52:46,793 - ManualIntegrationTest - INFO - Checkpoint identifier: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8
+2026-09-18 20:52:46,795 - Graph.Checkpointing - INFO - Checkpoint loaded: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8
+2026-09-18 20:52:46,796 - ManualIntegrationTest - INFO - Testing resume mechanism...
+2026-09-18 20:52:46,797 - Graph.Checkpointing - INFO - State restored from checkpoint: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8
+2026-09-18 20:52:46,797 - ManualIntegrationTest - INFO - State restored from checkpoint
+2026-09-18 20:52:46,798 - Graph.Confirmation - INFO - CONFIRMATION: Resuming from human intervention: confirm
+2026-09-18 20:52:46,798 - ManualIntegrationTest - INFO - Resuming graph execution...
+2026-09-18 20:52:46,799 - RuntimeAdapter - INFO - Executing task a1c46ab7-f592-4ba4-9cbc-305badec959e through LangGraph workflow
+2026-09-18 20:52:46,799 - Graph - INFO - Running task a1c46ab7-f592-4ba4-9cbc-305badec959e through LangGraph
+2026-09-18 20:52:46,802 - Graph.Intake - INFO - INTAKE: Processing task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,802 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,804 - Graph.Observe - INFO - OBSERVE: Gathering context for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,804 - Graph.Observe - INFO - OBSERVE: Initial observation with actual context services
+2026-09-18 20:52:46,805 - Graph.Observe - WARNING - WindowDetector has no snapshot available
+2026-09-18 20:52:46,805 - Graph.Observe - WARNING - Could not import AppClassifier
+2026-09-18 20:52:46,805 - Graph.Observe - DEBUG - State heuristics: {'current_file': None, 'domain': None}
+2026-09-18 20:52:46,806 - Graph.Observe - ERROR - Error getting focus info: 'FocusTracker' object has no attribute 'get_current_focus'
+2026-09-18 20:52:46,806 - Graph.Observe - ERROR - Error validating context: 'ContextValidator' object has no attribute 'validate_context'
+2026-09-18 20:52:46,806 - Graph.Observe - INFO - OBSERVE: Context snapshot gathered: window=Unknown, app=Unknown
+2026-09-18 20:52:46,807 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,808 - Graph.AnalyzeIntent - INFO - ANALYZE_INTENT: Analyzing intent for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,809 - Graph.AnalyzeIntent - INFO - Using placeholder intent analysis
+2026-09-18 20:52:46,809 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,811 - Graph.RetrieveKnowledge - INFO - RETRIEVE_KNOWLEDGE: Retrieving knowledge for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,938 - Graph.RetrieveKnowledge - INFO - Retrieved 0 memories from LongTermMemory
+2026-09-18 20:52:46,939 - Graph.RetrieveKnowledge - ERROR - Error retrieving from VectorStore: 'VectorStore' object has no attribute 'search'
+2026-09-18 20:52:46,939 - Graph.RetrieveKnowledge - ERROR - Error retrieving from Retriever: 'Retriever' object has no attribute 'retrieve_patterns'
+2026-09-18 20:52:46,939 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,940 - Graph.CreatePlan - INFO - CREATE_PLAN: Generating plan for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,941 - Graph.CreatePlan - INFO - CREATE_PLAN: Request classified as simple
+2026-09-18 20:52:46,941 - Graph.CreatePlan - INFO - Generated simple plan using brain/planner.py integration
+2026-09-18 20:52:46,941 - Graph.CreatePlan - INFO - CREATE_PLAN: Created plan with 1 steps, current_step_index=0
+2026-09-18 20:52:46,942 - Graph.CreatePlan - INFO - CREATE_PLAN: First step: 2d2416ec-9530-48dc-8a3f-b633322ddb95, action=execute_intent
+2026-09-18 20:52:46,942 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,943 - Graph.Route - INFO - ROUTE: Routing execution method for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,944 - Graph.Route - INFO - ROUTE: state.plan exists: True
+2026-09-18 20:52:46,944 - Graph.Route - INFO - ROUTE: plan.steps count: 1
+2026-09-18 20:52:46,944 - Graph.Route - INFO - ROUTE: plan.current_step_index: 0
+2026-09-18 20:52:46,944 - Graph.Route - INFO - ROUTE: plan.current_step: step_id='2d2416ec-9530-48dc-8a3f-b633322ddb95' objective='Execute intent: Format disk' action='execute_intent' parameters={'intent': 'unknown', 'resolved_args': {'user_input': 'Format disk'}} dependencies=[] metadata={} idempotency=<PlanStepIdempotency.CONDITIONAL: 'conditional'> side_effect=<PlanStepSideEffect.LOCAL: 'local'> reversibility=True preconditions=[] postconditions=[] retry_policy={} timeout=None
+2026-09-18 20:52:46,944 - Graph.CandidateDiscovery - INFO - Discovering candidates for step: 2d2416ec-9530-48dc-8a3f-b633322ddb95
+2026-09-18 20:52:46,945 - Graph.LearningIntegration - INFO - Retrieved historical ranking for /unknown: []
+2026-09-18 20:52:46,945 - Graph.LearningIntegration - DEBUG - Learning adjustment: 0.500 + 0.000 = 0.500
+2026-09-18 20:52:46,945 - Graph.CandidateDiscovery - ERROR - Error applying learning adjustments: "Candidate" object has no field "score"
+2026-09-18 20:52:46,945 - Graph.CandidateDiscovery - INFO - Discovered 1 candidates for step 2d2416ec-9530-48dc-8a3f-b633322ddb95
+2026-09-18 20:52:46,945 - Graph.Route - INFO - Discovered 1 candidates
+2026-09-18 20:52:46,945 - Graph.CandidateEvaluation - INFO - Evaluating 1 candidates for step: 2d2416ec-9530-48dc-8a3f-b633322ddb95
+2026-09-18 20:52:46,946 - Graph.CandidateEvaluation - INFO - Evaluated 1 candidates for step 2d2416ec-9530-48dc-8a3f-b633322ddb95
+2026-09-18 20:52:46,946 - Graph.Route - INFO - Evaluated 1 candidates
+2026-09-18 20:52:46,946 - Graph.RankingPolicy - INFO - Ranking 1 candidates with policy: default
+2026-09-18 20:52:46,947 - Graph.RankingPolicy - INFO - Valid candidates after constraint check: 1
+2026-09-18 20:52:46,947 - Graph.RankingPolicy - INFO - Ranked candidates: [('shell', 0.7700000000000001)]
+2026-09-18 20:52:46,947 - Graph.Route - INFO - Ranked 1 candidates
+2026-09-18 20:52:46,948 - Graph.RankingPolicy - INFO - Routing decision: shell (score: 0.7700000000000001)
+2026-09-18 20:52:46,948 - Graph.Route - INFO - Routing decision: SHELL (confidence: 0.7700000000000001)
+2026-09-18 20:52:46,949 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,949 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,951 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Performing safety check for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,952 - Graph.SafetyCheck - INFO - Risk assessment: low
+2026-09-18 20:52:46,952 - Graph.SafetyCheck - INFO - Permission check: GRANTED
+2026-09-18 20:52:46,952 - Graph.SafetyCheck - INFO - Context validation: APPROVED
+2026-09-18 20:52:46,953 - Graph.SafetyCheck - WARNING - Destructive operation detected: rm
+2026-09-18 20:52:46,953 - Graph.SafetyCheck - INFO - SAFETY_CHECK: Safety decision - risk=high, validation=APPROVED, permission=GRANTED, confirmation=True
+2026-09-18 20:52:46,954 - Graph.TraceCollector - WARNING - No active trace found for task: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,956 - Graph.Confirmation - INFO - CONFIRMATION: Handling human intervention for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,960 - Graph.Checkpointing - DEBUG - Checkpoint persisted to: .checkpoints/a5474d81-e8e4-4f6d-918a-4a7353677936.json
+2026-09-18 20:52:46,961 - Graph.Checkpointing - INFO - Checkpoint created: a5474d81-e8e4-4f6d-918a-4a7353677936 for task a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,961 - Graph.Confirmation - INFO - CONFIRMATION: Checkpoint created: a5474d81-e8e4-4f6d-918a-4a7353677936, graph paused
+2026-09-18 20:52:46,963 - Graph - INFO - Graph paused for task a1c46ab7-f592-4ba4-9cbc-305badec959e, awaiting external resume
+2026-09-18 20:52:46,965 - Graph - INFO - Task a1c46ab7-f592-4ba4-9cbc-305badec959e completed through LangGraph
+2026-09-18 20:52:46,966 - RuntimeAdapter - INFO - Task a1c46ab7-f592-4ba4-9cbc-305badec959e paused awaiting confirmation
+2026-09-18 20:52:46,966 - ManualIntegrationTest - INFO - Task completed with success: True
+2026-09-18 20:52:46,966 - ManualIntegrationTest - INFO - Response: Task a1c46ab7-f592-4ba4-9cbc-305badec959e paused awaiting confirmation
+2026-09-18 20:52:46,966 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,966 - ManualIntegrationTest - INFO - TEST 5: CANCELLATION WORKFLOW
+2026-09-18 20:52:46,967 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,967 - ManualIntegrationTest - INFO - Creating task request: 'Long running task'
+2026-09-18 20:52:46,967 - ManualIntegrationTest - INFO - Requesting cancellation for task
+2026-09-18 20:52:46,967 - Graph.TimeoutManager - INFO - TimeoutManager initialized with config: operation_timeout_seconds=30 step_timeout_seconds=120 task_timeout_seconds=300 system_watchdog_timeout_seconds=600
+2026-09-18 20:52:46,968 - Graph.Cancellation - INFO - CancellationService initialized
+2026-09-18 20:52:46,968 - Graph.TimeoutManager - DEBUG - Cancelled 0 timeouts for task: a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,968 - Graph.Cancellation - INFO - Cancellation requested: 25765934-8cfb-489a-b298-088dc1d6a19f for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4 (reason: user_requested)
+2026-09-18 20:52:46,968 - ManualIntegrationTest - INFO - Testing cancel node directly...
+2026-09-18 20:52:46,968 - Graph.Cancel - INFO - CANCEL: Handling cancellation for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,969 - Graph.Cancel - INFO - CANCEL: Processing cancellation request 25765934-8cfb-489a-b298-088dc1d6a19f
+2026-09-18 20:52:46,969 - Graph.Cancellation - INFO - Cancelling workflow for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4 (reason: user_requested)
+2026-09-18 20:52:46,969 - Graph.Cancel - INFO - CANCEL: Workflow cancelled with semantics: graceful
+2026-09-18 20:52:46,970 - Graph.Cancel - INFO - CANCEL: Performing cleanup for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,970 - Graph.Cancel - INFO - CANCEL: Cleanup performed for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,971 - Graph.TraceCollector - WARNING - No active trace found for task: a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,971 - Graph.Cancel - INFO - CANCEL: Cancellation completed for task a8b9eebc-5f20-44b3-a3b4-d251ad93a7a4
+2026-09-18 20:52:46,971 - ManualIntegrationTest - INFO - Cancel node executed, cancelled: True
+2026-09-18 20:52:46,972 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,972 - ManualIntegrationTest - INFO - TEST SUMMARY
+2026-09-18 20:52:46,972 - ManualIntegrationTest - INFO - ================================================================================
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO - 
+Simple Task Execution:
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:42.936814
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:46.144248
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:46,973 - ManualIntegrationTest - INFO -     - Graph workflow executed without errors
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO -     - Final result success: True
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO - 
+Safety Check Workflow:
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:46.145160
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:46.367621
+2026-09-18 20:52:46,974 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -     - Safety check workflow executed
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -     - Confirmation required behavior observed
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO - 
+Recovery Scenario:
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:46.368118
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:46.633588
+2026-09-18 20:52:46,975 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:46,976 - ManualIntegrationTest - INFO -     - Recovery workflow executed
+2026-09-18 20:52:46,976 - ManualIntegrationTest - INFO -     - Recovery strategy selection observed
+2026-09-18 20:52:46,976 - ManualIntegrationTest - INFO - 
+Pause/Resume Workflow:
+2026-09-18 20:52:46,976 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:46,976 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:46.634067
+2026-09-18 20:52:46,977 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:46.966722
+2026-09-18 20:52:46,977 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:46,977 - ManualIntegrationTest - INFO -     - Task paused at confirmation node
+2026-09-18 20:52:46,977 - ManualIntegrationTest - INFO -     - Checkpoint created: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8
+2026-09-18 20:52:46,977 - ManualIntegrationTest - INFO -     - Checkpoint successfully loaded
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO -     - Checkpoint task_id: a1c46ab7-f592-4ba4-9cbc-305badec959e
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO -     - Human response applied (CONFIRM)
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO -     - Graph resumed and completed execution
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO - 
+Cancellation Workflow:
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO -   Status: PASS
+2026-09-18 20:52:46,978 - ManualIntegrationTest - INFO -   Start: 2026-09-18T20:52:46.967369
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -   End: 2026-09-18T20:52:46.972152
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -   Observations:
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -     - Cancellation requested: 25765934-8cfb-489a-b298-088dc1d6a19f
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -     - Cancellation reason: user_requested
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -     - Cancel node marked workflow as cancelled
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO -     - Abort semantics: graceful
+2026-09-18 20:52:46,979 - ManualIntegrationTest - INFO - 
+Overall: 5 passed, 0 failed out of 5 tests
+2026-09-18 20:52:46,980 - ManualIntegrationTest - INFO - 
+Results saved to: manual_integration_test_results.json

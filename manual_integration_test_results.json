@@ -1,0 +1,68 @@
+[
+  {
+    "test_name": "Simple Task Execution",
+    "status": "PASS",
+    "start_time": "2026-09-18T20:52:42.936814",
+    "observations": [
+      "Graph workflow executed without errors",
+      "Final result success: True"
+    ],
+    "issues": [],
+    "missing_components": [],
+    "end_time": "2026-09-18T20:52:46.144248"
+  },
+  {
+    "test_name": "Safety Check Workflow",
+    "status": "PASS",
+    "start_time": "2026-09-18T20:52:46.145160",
+    "observations": [
+      "Safety check workflow executed",
+      "Confirmation required behavior observed"
+    ],
+    "issues": [],
+    "missing_components": [],
+    "end_time": "2026-09-18T20:52:46.367621"
+  },
+  {
+    "test_name": "Recovery Scenario",
+    "status": "PASS",
+    "start_time": "2026-09-18T20:52:46.368118",
+    "observations": [
+      "Recovery workflow executed",
+      "Recovery strategy selection observed"
+    ],
+    "issues": [],
+    "missing_components": [],
+    "end_time": "2026-09-18T20:52:46.633588"
+  },
+  {
+    "test_name": "Pause/Resume Workflow",
+    "status": "PASS",
+    "start_time": "2026-09-18T20:52:46.634067",
+    "observations": [
+      "Task paused at confirmation node",
+      "Checkpoint created: 6858396e-1dbe-4c4a-a2ac-abe04fa3e8d8",
+      "Checkpoint successfully loaded",
+      "Checkpoint task_id: a1c46ab7-f592-4ba4-9cbc-305badec959e",
+      "Human response applied (CONFIRM)",
+      "Graph resumed and completed execution"
+    ],
+    "issues": [],
+    "missing_components": [],
+    "end_time": "2026-09-18T20:52:46.966722"
+  },
+  {
+    "test_name": "Cancellation Workflow",
+    "status": "PASS",
+    "start_time": "2026-09-18T20:52:46.967369",
+    "observations": [
+      "Cancellation requested: 25765934-8cfb-489a-b298-088dc1d6a19f",
+      "Cancellation reason: user_requested",
+      "Cancel node marked workflow as cancelled",
+      "Abort semantics: graceful"
+    ],
+    "issues": [],
+    "missing_components": [],
+    "end_time": "2026-09-18T20:52:46.972152"
+  }
+]
