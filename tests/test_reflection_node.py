@@ -286,7 +286,8 @@ def test_reflection_node_with_routing_decision():
             candidate_type="shell",
             method_type="shell",
             method_name="execute_command"
-        )
+        ),
+        routing_explanation="Test routing decision"
     )
     
     # Simulate successful execution
