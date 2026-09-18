@@ -102,27 +102,27 @@ def reflect_node(state: OperonixState) -> Dict[str, Any]:
                 reflection_data["errors"].append("Recovery failed")
                 reflection_data["recommendations"].append("Consider different recovery strategy")
         
-        # Store reflection data in state
-        from migration.domain_contracts import ReflectionResult, OutcomeGrade
-        
-        # Determine outcome grade
-        if reflection_data["success"]:
-            outcome_grade = OutcomeGrade.EXCELLENT
-        elif reflection_data["errors"]:
-            outcome_grade = OutcomeGrade.FAILED
-        else:
-            outcome_grade = OutcomeGrade.ACCEPTABLE
-        
-        state.reflection = ReflectionResult(
-            outcome=outcome_grade,
-            failure_category=None  # TODO: Map errors to FailureCategory if needed
-        )
-        
         logger.info(f"REFLECT: Reflection completed for task {state.task.task_id}")
         
     except Exception as e:
         logger.error(f"REFLECT: Error during reflection: {e}", exc_info=True)
         reflection_data["errors"].append(f"Reflection error: {str(e)}")
+    
+    # Store reflection data in state (outside try/except to ensure it's always set)
+    from migration.domain_contracts import ReflectionResult, OutcomeGrade
+    
+    # Determine outcome grade
+    if reflection_data["success"]:
+        outcome_grade = OutcomeGrade.EXCELLENT
+    elif reflection_data["errors"]:
+        outcome_grade = OutcomeGrade.FAILED
+    else:
+        outcome_grade = OutcomeGrade.ACCEPTABLE
+    
+    state.reflection = ReflectionResult(
+        outcome=outcome_grade,
+        failure_category=None  # TODO: Map errors to FailureCategory if needed
+    )
     
     # Collect trace event for reflection
     trace_collector = get_trace_collector()
