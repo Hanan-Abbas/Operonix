@@ -37,9 +37,11 @@ def test_create_plan_node_with_simple_request():
     
     result = create_plan_node(state)
     
-    assert "state" in result
-    assert result["state"].plan is not None
-    assert len(result["state"].plan.steps) == 1  # Simple = single step
+    # Field-level update: plan field returned directly
+    assert "plan" in result or state.plan is not None
+    plan = result.get("plan") or state.plan
+    assert plan is not None
+    assert len(plan.steps) == 1  # Simple = single step
 
 
 def test_create_plan_node_with_complex_request():
@@ -54,9 +56,11 @@ def test_create_plan_node_with_complex_request():
     
     result = create_plan_node(state)
     
-    assert "state" in result
-    assert result["state"].plan is not None
-    assert len(result["state"].plan.steps) >= 1  # Complex = multiple steps
+    # Field-level update: plan field returned directly
+    assert "plan" in result or state.plan is not None
+    plan = result.get("plan") or state.plan
+    assert plan is not None
+    assert len(plan.steps) >= 1  # Complex = multiple steps
 
 
 def test_create_plan_node_creates_valid_plan():
@@ -71,10 +75,12 @@ def test_create_plan_node_creates_valid_plan():
     
     result = create_plan_node(state)
     
-    assert isinstance(result["state"].plan, Plan)
-    assert result["state"].plan.plan_id is not None
-    assert result["state"].plan.steps is not None
-    assert len(result["state"].plan.steps) > 0
+    # Field-level update: plan field returned directly
+    plan = result.get("plan") or state.plan
+    assert isinstance(plan, Plan)
+    assert plan.plan_id is not None
+    assert plan.steps is not None
+    assert len(plan.steps) > 0
 
 
 def test_create_plan_node_creates_valid_plan_steps():
@@ -89,7 +95,9 @@ def test_create_plan_node_creates_valid_plan_steps():
     
     result = create_plan_node(state)
     
-    for step in result["state"].plan.steps:
+    # Field-level update: plan field returned directly
+    plan = result.get("plan") or state.plan
+    for step in plan.steps:
         assert isinstance(step, PlanStep)
         assert step.step_id is not None
         assert step.action is not None
@@ -109,7 +117,9 @@ def test_create_plan_node_idempotency_classification():
     
     result = create_plan_node(state)
     
-    for step in result["state"].plan.steps:
+    # Field-level update: plan field returned directly
+    plan = result.get("plan") or state.plan
+    for step in plan.steps:
         assert step.idempotency is not None
         assert step.idempotency in ["idempotent", "conditional", "non_idempotent"]
 
@@ -126,7 +136,9 @@ def test_create_plan_node_side_effect_classification():
     
     result = create_plan_node(state)
     
-    for step in result["state"].plan.steps:
+    # Field-level update: plan field returned directly
+    plan = result.get("plan") or state.plan
+    for step in plan.steps:
         assert step.side_effect is not None
         assert step.side_effect in ["none", "read_only", "reversible", "local", "destructive", "external_commit"]
 
@@ -143,7 +155,9 @@ def test_create_plan_node_history_tracking():
     
     result = create_plan_node(state)
     
-    events = result["state"].history.get("events", [])
+    # Field-level update: history field returned directly
+    history = result.get("history") or state.history
+    events = history.get("events", [])
     assert len(events) >= 2  # create_plan_started, create_plan_completed
     
     event_types = [e["type"] for e in events]
@@ -532,11 +546,17 @@ def test_node_sequence_with_plan():
     state = OperonixState(task=task)
     
     # Execute node sequence
-    state = intake_node(state)["state"]
-    state = observe_node(state)["state"]
-    state = analyze_intent_node(state)["state"]
-    state = create_plan_node(state)["state"]
-    state = finalize_node(state)["state"]
+    # Field-level updates: merge results into state using model_copy
+    result = intake_node(state)
+    state = state.model_copy(update=result)
+    result = observe_node(state)
+    state = state.model_copy(update=result)
+    result = analyze_intent_node(state)
+    state = state.model_copy(update=result)
+    result = create_plan_node(state)
+    state = state.model_copy(update=result)
+    result = finalize_node(state)
+    state = state.model_copy(update=result)
     
     # Verify final state
     assert state.final is not None
