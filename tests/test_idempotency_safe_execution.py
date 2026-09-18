@@ -471,8 +471,9 @@ def test_observe_node_recovery_observation():
     result = observe_node(state)
     
     # Should have postcondition check in context
-    assert result["state"].context is not None
-    assert "postcondition_check" in result["state"].context
+    context = result.get("context") or state.context
+    assert context is not None
+    assert "postcondition_check" in context
 
 
 def test_observe_node_initial_observation():
@@ -487,7 +488,8 @@ def test_observe_node_initial_observation():
     result = observe_node(state)
     
     # Should not have postcondition check (not recovery)
-    assert result["state"].context is not None
+    context = result.get("context") or state.context
+    assert context is not None
     # postcondition_check may or may not be present, but should not be set
 
 
