@@ -117,7 +117,8 @@ def test_reflection_node_with_verification():
         verification_id=str(uuid.uuid4()),
         step_id="test-step",
         status="VERIFIED",
-        confidence=0.95
+        confidence=0.95,
+        observed_context={}
     )
     
     result = reflect_node(state)
@@ -139,7 +140,8 @@ def test_reflection_node_with_failed_verification():
         step_id="test-step",
         status="FAILED",
         confidence=0.0,
-        failure_reason="Postcondition not met"
+        failure_reason="Postcondition not met",
+        observed_context={}
     )
     
     result = reflect_node(state)
