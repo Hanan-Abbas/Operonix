@@ -58,11 +58,11 @@ def reflect_node(state: OperonixState) -> Dict[str, Any]:
     try:
         # Analyze execution results
         if state.execution:
-            execution_success = state.execution.execution_status == "SUCCESS"
+            execution_success = state.execution.execution_status == "completed"
             reflection_data["success"] = execution_success
             
-            if state.execution.error_message:
-                reflection_data["errors"].append(state.execution.error_message)
+            if state.execution.error:
+                reflection_data["errors"].append(state.execution.error)
             
             logger.info(f"REFLECT: Execution success: {execution_success}")
         
