@@ -206,20 +206,25 @@ def test_reflection_node_trace_collection():
 
 def test_reflection_node_outcome_grade_mapping():
     """Test that outcome grades are mapped correctly."""
+    import uuid
     test_cases = [
-        ("SUCCESS", OutcomeGrade.SUCCESS),
-        ("FAILED", OutcomeGrade.FAILURE),
+        (True, OutcomeGrade.EXCELLENT),
+        (False, OutcomeGrade.FAILED),
     ]
     
-    for execution_status, expected_outcome in test_cases:
+    for success, expected_outcome in test_cases:
         task = TaskRequest(user_input="test", source=TaskSource.VOICE)
         state = OperonixState(task=task)
         
         state.execution = ExecutionResult(
+            execution_id=str(uuid.uuid4()),
             step_id="test-step",
-            execution_status=execution_status,
-            output="test",
-            error_message=None if execution_status == "SUCCESS" else "error"
+            success=success,
+            result_data={"output": "test"},
+            error=None if success else "error",
+            error_type=None if success else "Error",
+            method_used="shell",
+            execution_status=TaskStatus.COMPLETED if success else TaskStatus.FAILED
         )
         
         reflect_node(state)
@@ -230,12 +235,14 @@ def test_reflection_node_outcome_grade_mapping():
 
 def test_reflection_node_partial_outcome():
     """Test reflection node with partial/uncertain outcome."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     # Simulate uncertain verification
     from migration.domain_contracts import VerificationResult
     state.verification = VerificationResult(
+        verification_id=str(uuid.uuid4()),
         step_id="test-step",
         status="UNCERTAIN_OUTCOME",
         confidence=0.5
@@ -245,7 +252,7 @@ def test_reflection_node_partial_outcome():
     
     # Should have reflection result
     assert state.reflection is not None
-    # May be PARTIAL or SUCCESS depending on other factors
+    # May be ACCEPTABLE depending on other factors
 
 
 def test_reflection_node_returns_state_update():
@@ -262,6 +269,7 @@ def test_reflection_node_returns_state_update():
 
 def test_reflection_node_with_routing_decision():
     """Test reflection node with routing decision for learning feedback."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
@@ -269,6 +277,7 @@ def test_reflection_node_with_routing_decision():
     from migration.domain_contracts import RoutingDecision, Candidate
     state.routing = RoutingDecision(
         selected_candidate=Candidate(
+            candidate_id=str(uuid.uuid4()),
             method_type="shell",
             method_name="execute_command"
         )
@@ -276,10 +285,12 @@ def test_reflection_node_with_routing_decision():
     
     # Simulate successful execution
     state.execution = ExecutionResult(
+        execution_id=str(uuid.uuid4()),
         step_id="test-step",
-        execution_status="SUCCESS",
-        output="Success",
-        error_message=None
+        success=True,
+        result_data={"output": "Success"},
+        method_used="shell",
+        execution_status=TaskStatus.COMPLETED
     )
     
     result = reflect_node(state)
