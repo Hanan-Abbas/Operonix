@@ -72,7 +72,7 @@ def reflect_node(state: OperonixState) -> Dict[str, Any]:
             
             # Generate performance feedback
             method_type = state.routing.selected_candidate.method_type if state.routing.selected_candidate else "unknown"
-            success = state.execution.execution_status == "SUCCESS"
+            success = state.execution.execution_status == "completed"
             
             learning_feedback = learning_integration.collect_performance_feedback(
                 task_id=state.task.task_id,
