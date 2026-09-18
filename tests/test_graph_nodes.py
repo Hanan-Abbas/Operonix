@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 from typing import Dict, Any
 from migration.graph_state import OperonixState
-from migration.domain_contracts import TaskRequest, TaskSource, Intent
+from migration.domain_contracts import TaskRequest, TaskSource
 from graph.nodes.intake import intake_node
 from graph.nodes.observe import observe_node
 from graph.nodes.analyze_intent import analyze_intent_node
