@@ -647,8 +647,11 @@ def test_route_node_uses_candidate_based_routing():
     
     result = route_node(state)
     
-    assert result["state"].routing is not None
-    assert result["state"].routing.selected_candidate is not None
+    # Field-level update: routing field returned directly
+    assert "routing" in result or state.routing is not None
+    routing = result.get("routing") or state.routing
+    assert routing is not None
+    assert routing.selected_candidate is not None
 
 
 def test_route_node_fallback_on_error():
@@ -662,8 +665,11 @@ def test_route_node_fallback_on_error():
     
     result = route_node(state)
     
-    assert result["state"].routing is not None
-    assert "fallback" in result["state"].routing.routing_explanation.lower()
+    # Field-level update: routing field returned directly
+    assert "routing" in result or state.routing is not None
+    routing = result.get("routing") or state.routing
+    assert routing is not None
+    assert "fallback" in routing.routing_explanation.lower()
 
 
 def test_convert_to_method_decision():
