@@ -39,9 +39,12 @@ def test_verify_step_executor_success_vs_postcondition():
     
     result = verify_step_node(state)
     
-    assert result["state"].verification is not None
+    # Field-level update: verification field returned directly
+    assert "verification" in result or state.verification is not None
+    verification = result.get("verification") or state.verification
+    assert verification is not None
     # Executor success should lead to postcondition verification
-    assert result["state"].verification.status in ["VERIFIED", "UNCERTAIN"]
+    assert verification.status in ["VERIFIED", "UNCERTAIN"]
 
 
 def test_verify_step_executor_failure():
@@ -63,9 +66,12 @@ def test_verify_step_executor_failure():
     
     result = verify_step_node(state)
     
-    assert result["state"].verification is not None
-    assert result["state"].verification.status == "FAILED"
-    assert "Executor reported failure" in result["state"].verification.reason
+    # Field-level update: verification field returned directly
+    assert "verification" in result or state.verification is not None
+    verification = result.get("verification") or state.verification
+    assert verification is not None
+    assert verification.status == "FAILED"
+    assert "Executor reported failure" in verification.reason
 
 
 def test_verify_step_no_execution_result():
@@ -79,8 +85,11 @@ def test_verify_step_no_execution_result():
     
     result = verify_step_node(state)
     
-    assert result["state"].verification is not None
-    assert result["state"].verification.status == "UNCERTAIN"
+    # Field-level update: verification field returned directly
+    assert "verification" in result or state.verification is not None
+    verification = result.get("verification") or state.verification
+    assert verification is not None
+    assert verification.status == "UNCERTAIN"
 
 
 def test_verify_step_execution_result_failure_flag():
@@ -102,9 +111,12 @@ def test_verify_step_execution_result_failure_flag():
     
     result = verify_step_node(state)
     
-    assert result["state"].verification is not None
-    assert result["state"].verification.status == "FAILED"
-    assert "execution result indicates failure" in result["state"].verification.reason
+    # Field-level update: verification field returned directly
+    assert "verification" in result or state.verification is not None
+    verification = result.get("verification") or state.verification
+    assert verification is not None
+    assert verification.status == "FAILED"
+    assert "execution result indicates failure" in verification.reason
 
 
 def test_verify_step_history_tracking():
@@ -126,7 +138,9 @@ def test_verify_step_history_tracking():
     
     result = verify_step_node(state)
     
-    events = result["state"].history.get("events", [])
+    # Field-level update: history field returned directly
+    history = result.get("history") or state.history
+    events = history.get("events", [])
     assert len(events) >= 2  # verify_step_started, verify_step_completed
     
     event_types = [e["type"] for e in events]
@@ -188,10 +202,13 @@ def test_recover_node_transient_failure():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "transient"
-    assert result["state"].recovery.recovery_strategy.value == "retry"
-    assert result["state"].recovery.target_stage == "execute_step"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "transient"
+    assert recovery.recovery_strategy.value == "retry"
+    assert recovery.target_stage == "execute_step"
 
 
 def test_recover_node_context_mismatch():
@@ -210,10 +227,13 @@ def test_recover_node_context_mismatch():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "context_mismatch"
-    assert result["state"].recovery.recovery_strategy.value == "observe"
-    assert result["state"].recovery.target_stage == "observe"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "context_mismatch"
+    assert recovery.recovery_strategy.value == "observe"
+    assert recovery.target_stage == "observe"
 
 
 def test_recover_node_routing_mismatch():
@@ -232,10 +252,13 @@ def test_recover_node_routing_mismatch():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "routing_mismatch"
-    assert result["state"].recovery.recovery_strategy.value == "route"
-    assert result["state"].recovery.target_stage == "route"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "routing_mismatch"
+    assert recovery.recovery_strategy.value == "route"
+    assert recovery.target_stage == "route"
 
 
 def test_recover_node_tool_unavailable():
@@ -254,10 +277,13 @@ def test_recover_node_tool_unavailable():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "tool_unavailable"
-    assert result["state"].recovery.recovery_strategy.value == "route"
-    assert result["state"].recovery.target_stage == "route"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "tool_unavailable"
+    assert recovery.recovery_strategy.value == "route"
+    assert recovery.target_stage == "route"
 
 
 def test_recover_node_planning_error():
@@ -276,10 +302,13 @@ def test_recover_node_planning_error():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "planning_error"
-    assert result["state"].recovery.recovery_strategy.value == "replan"
-    assert result["state"].recovery.target_stage == "create_plan"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "planning_error"
+    assert recovery.recovery_strategy.value == "replan"
+    assert recovery.target_stage == "create_plan"
 
 
 def test_recover_node_permission_denied():
@@ -298,10 +327,13 @@ def test_recover_node_permission_denied():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.failure_category.value == "permission_denied"
-    assert result["state"].recovery.recovery_strategy.value == "abort"
-    assert result["state"].recovery.target_stage == "finalize"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.failure_category.value == "permission_denied"
+    assert recovery.recovery_strategy.value == "abort"
+    assert recovery.target_stage == "finalize"
 
 
 def test_recover_node_max_retries():
@@ -325,9 +357,12 @@ def test_recover_node_max_retries():
     
     result = recover_node(state)
     
-    assert result["state"].recovery is not None
-    assert result["state"].recovery.recovery_strategy.value == "abort"
-    assert result["state"].recovery.target_stage == "finalize"
+    # Field-level update: recovery field returned directly
+    assert "recovery" in result or state.recovery is not None
+    recovery = result.get("recovery") or state.recovery
+    assert recovery is not None
+    assert recovery.recovery_strategy.value == "abort"
+    assert recovery.target_stage == "finalize"
 
 
 def test_recover_node_history_tracking():
@@ -346,7 +381,9 @@ def test_recover_node_history_tracking():
     
     result = recover_node(state)
     
-    events = result["state"].history.get("events", [])
+    # Field-level update: history field returned directly
+    history = result.get("history") or state.history
+    events = history.get("events", [])
     assert len(events) >= 2  # recover_started, recover_completed
     
     event_types = [e["type"] for e in events]
