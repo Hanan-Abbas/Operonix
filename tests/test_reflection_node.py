@@ -162,7 +162,7 @@ def test_reflection_node_with_recovery():
         recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
         recovery_strategy="retry",
-        failure_category="execution_error",
+        failure_category="transient",
         recovery_attempted=True,
         recovery_successful=True
     )
@@ -185,7 +185,7 @@ def test_reflection_node_with_failed_recovery():
         recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
         recovery_strategy="retry",
-        failure_category="execution_error",
+        failure_category="transient",
         recovery_attempted=True,
         recovery_successful=False
     )
