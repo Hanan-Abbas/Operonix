@@ -128,12 +128,14 @@ def test_reflection_node_with_verification():
 
 def test_reflection_node_with_failed_verification():
     """Test reflection node with failed verification."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     # Simulate failed verification
     from migration.domain_contracts import VerificationResult
     state.verification = VerificationResult(
+        verification_id=str(uuid.uuid4()),
         step_id="test-step",
         status="FAILED",
         confidence=0.0,
@@ -148,12 +150,14 @@ def test_reflection_node_with_failed_verification():
 
 def test_reflection_node_with_recovery():
     """Test reflection node with recovery attempt."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     # Simulate recovery
     from migration.domain_contracts import RecoveryDecision
     state.recovery = RecoveryDecision(
+        recovery_id=str(uuid.uuid4()),
         task_id=task.task_id,
         recovery_strategy="retry_with_alternative",
         recovery_attempted=True,
