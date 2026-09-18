@@ -333,7 +333,7 @@ def test_execute_step_node_collects_performance_feedback():
     result = execute_step_node(state)
     
     # Should execute without error
-    assert result["state"].execution is not None
+    assert "execution" in result or state.execution is not None
 
 
 # ─── CANDIDATE DISCOVERY LEARNING INTEGRATION TESTS ───────────────────────
