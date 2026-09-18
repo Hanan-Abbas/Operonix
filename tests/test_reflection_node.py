@@ -311,25 +311,30 @@ def test_reflection_result_structure():
     assert state.reflection is not None
     assert hasattr(state.reflection, 'outcome')
     assert hasattr(state.reflection, 'failure_category')
-    assert state.reflection.outcome in [OutcomeGrade.SUCCESS, OutcomeGrade.FAILURE, OutcomeGrade.PARTIAL]
+    assert state.reflection.outcome in [OutcomeGrade.EXCELLENT, OutcomeGrade.GOOD, OutcomeGrade.ACCEPTABLE, OutcomeGrade.POOR, OutcomeGrade.FAILED]
 
 
 def test_reflection_result_failure_category():
     """Test that failure category is set for failed executions."""
+    import uuid
     task = TaskRequest(user_input="test", source=TaskSource.VOICE)
     state = OperonixState(task=task)
     
     state.execution = ExecutionResult(
+        execution_id=str(uuid.uuid4()),
         step_id="test-step",
-        execution_status="FAILED",
-        output=None,
-        error_message="Error occurred"
+        success=False,
+        result_data={},
+        error="Error occurred",
+        error_type="Error",
+        method_used="shell",
+        execution_status=TaskStatus.FAILED
     )
     
     reflect_node(state)
     
     assert state.reflection is not None
-    assert state.reflection.outcome == OutcomeGrade.FAILURE
+    assert state.reflection.outcome == OutcomeGrade.FAILED
     # failure_category may be None or set based on error analysis
 
 
