@@ -164,10 +164,13 @@ def test_analyze_intent_node_with_state():
     
     result = analyze_intent_node(state)
     
-    assert "state" in result
-    assert result["state"].intent is not None
-    assert result["state"].intent.name == "open_application"  # Placeholder logic detects "open" and "firefox"
-    assert len(result["state"].history.get("events", [])) > 0
+    # Field-level update: intent field returned directly
+    assert "intent" in result or state.intent is not None
+    intent = result.get("intent") or state.intent
+    assert intent is not None
+    assert intent.name == "open_application"  # Placeholder logic detects "open" and "firefox"
+    history = result.get("history") or state.history
+    assert len(history.get("events", [])) > 0
 
 
 def test_analyze_intent_node_creates_intent_result():
@@ -181,9 +184,11 @@ def test_analyze_intent_node_creates_intent_result():
     
     result = analyze_intent_node(state)
     
-    assert isinstance(result["state"].intent, IntentResult)
-    assert result["state"].intent.confidence >= 0.0
-    assert result["state"].intent.confidence <= 1.0
+    # Field-level update: intent field returned directly
+    intent = result.get("intent") or state.intent
+    assert isinstance(intent, IntentResult)
+    assert intent.confidence >= 0.0
+    assert intent.confidence <= 1.0
 
 
 # ─── INTEGRATION TESTS ───────────────────────────────────────────────────────
@@ -223,10 +228,15 @@ def test_node_sequence_with_intent():
     state = OperonixState(task=task)
     
     # Execute node sequence
-    state = intake_node(state)["state"]
-    state = observe_node(state)["state"]
-    state = analyze_intent_node(state)["state"]
-    state = finalize_node(state)["state"]
+    # Field-level updates: merge results into state using model_copy
+    result = intake_node(state)
+    state = state.model_copy(update=result)
+    result = observe_node(state)
+    state = state.model_copy(update=result)
+    result = analyze_intent_node(state)
+    state = state.model_copy(update=result)
+    result = finalize_node(state)
+    state = state.model_copy(update=result)
     
     # Verify final state
     assert state.final is not None
@@ -265,10 +275,12 @@ def test_analyze_intent_with_langchain_enabled():
         
         result = analyze_intent_node(state)
         
-        assert result["state"].intent is not None
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
+        assert intent is not None
         # If LangChain is available, fallback_used should be False
         # If not available, it should fall back to placeholder
-        assert result["state"].intent.name is not None
+        assert intent.name is not None
         
     finally:
         # Restore original flag
@@ -292,8 +304,10 @@ def test_analyze_intent_with_langchain_disabled():
         
         result = analyze_intent_node(state)
         
-        assert result["state"].intent is not None
-        assert result["state"].intent.fallback_used is True  # Should use placeholder
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
+        assert intent is not None
+        assert intent.fallback_used is True  # Should use placeholder
         
     finally:
         # Restore original flag
@@ -317,8 +331,10 @@ def test_analyze_intent_keyword_fallback_firefox():
         
         result = analyze_intent_node(state)
         
-        assert result["state"].intent.name == "open_application"
-        assert result["state"].intent.parameters.get("application") == "firefox"
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
+        assert intent.name == "open_application"
+        assert intent.parameters.get("application") == "firefox"
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -341,8 +357,10 @@ def test_analyze_intent_keyword_fallback_chrome():
         
         result = analyze_intent_node(state)
         
-        assert result["state"].intent.name == "open_application"
-        assert result["state"].intent.parameters.get("application") == "chrome"
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
+        assert intent.name == "open_application"
+        assert intent.parameters.get("application") == "chrome"
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -365,8 +383,10 @@ def test_analyze_intent_bridge_keyword():
         
         result = analyze_intent_node(state)
         
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
         # Should set profile_hint to bridge
-        assert result["state"].intent.parameters.get("profile_hint") == "bridge"
+        assert intent.parameters.get("profile_hint") == "bridge"
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -389,8 +409,10 @@ def test_analyze_intent_deterministic_resolution():
         
         result = analyze_intent_node(state)
         
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
         # Intent should be validated against capability registry
-        assert result["state"].intent.name in ["open_application", "unknown"]
+        assert intent.name in ["open_application", "unknown"]
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -413,8 +435,10 @@ def test_analyze_intent_confidence_range():
         
         result = analyze_intent_node(state)
         
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
         # Confidence should be between 0.0 and 1.0
-        assert 0.0 <= result["state"].intent.confidence <= 1.0
+        assert 0.0 <= intent.confidence <= 1.0
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
@@ -437,9 +461,11 @@ def test_analyze_intent_parameters_preserved():
         
         result = analyze_intent_node(state)
         
+        # Field-level update: intent field returned directly
+        intent = result.get("intent") or state.intent
         # Parameters should be preserved
-        assert result["state"].intent.parameters is not None
-        assert isinstance(result["state"].intent.parameters, dict)
+        assert intent.parameters is not None
+        assert isinstance(intent.parameters, dict)
         
     finally:
         flags.USE_LANGCHAIN_MODELS = original_flag
