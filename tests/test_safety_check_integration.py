@@ -39,9 +39,12 @@ def test_safety_check_node_integrates_risk_rules():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert result["state"].safety.risk_level is not None
-    assert "command_risk_assessment" in result["state"].safety.safety_checks_performed
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert safety.risk_level is not None
+    assert "command_risk_assessment" in safety.safety_checks_performed
 
 
 def test_safety_check_node_integrates_permission_guard():
@@ -70,8 +73,11 @@ def test_safety_check_node_integrates_permission_guard():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert result["state"].safety.permission_status is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert safety.permission_status is not None
 
 
 def test_safety_check_node_integrates_validator():
@@ -101,8 +107,11 @@ def test_safety_check_node_integrates_validator():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert result["state"].safety.validation_status is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert safety.validation_status is not None
 
 
 def test_safety_check_node_high_risk_requires_confirmation():
@@ -132,10 +141,13 @@ def test_safety_check_node_high_risk_requires_confirmation():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
     # High risk operations should require confirmation
-    if result["state"].safety.risk_level == RiskLevel.HIGH:
-        assert result["state"].safety.confirmation_required is True
+    if safety.risk_level == RiskLevel.HIGH:
+        assert safety.confirmation_required is True
 
 
 def test_safety_check_node_forbidden_pattern_rejection():
@@ -165,10 +177,13 @@ def test_safety_check_node_forbidden_pattern_rejection():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
     # Forbidden patterns should be rejected
-    if "path_pattern_check" in result["state"].safety.safety_checks_performed:
-        assert result["state"].safety.validation_status == "REJECTED"
+    if "path_pattern_check" in safety.safety_checks_performed:
+        assert safety.validation_status == "REJECTED"
 
 
 def test_safety_check_node_without_plan():
@@ -182,9 +197,12 @@ def test_safety_check_node_without_plan():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
     # Should use fallback safety decision
-    assert result["state"].safety.validation_status == "APPROVED"
+    assert safety.validation_status == "APPROVED"
 
 
 def test_safety_check_node_trace_event_collection():
@@ -215,8 +233,9 @@ def test_safety_check_node_trace_event_collection():
     result = safety_check_node(state)
     
     # Check that history events were added
-    assert "safety_check_started" in [event["type"] for event in result["state"].history.get("events", [])]
-    assert "safety_check_completed" in [event["type"] for event in result["state"].history.get("events", [])]
+    history = result.get("history") or state.history
+    assert "safety_check_started" in [event["type"] for event in history.get("events", [])]
+    assert "safety_check_completed" in [event["type"] for event in history.get("events", [])]
 
 
 def test_safety_check_node_file_operation_risk():
@@ -246,8 +265,11 @@ def test_safety_check_node_file_operation_risk():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert "file_risk_assessment" in result["state"].safety.safety_checks_performed
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert "file_risk_assessment" in safety.safety_checks_performed
 
 
 def test_safety_check_node_web_operation_risk():
@@ -277,8 +299,11 @@ def test_safety_check_node_web_operation_risk():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert "web_risk_assessment" in result["state"].safety.safety_checks_performed
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert "web_risk_assessment" in safety.safety_checks_performed
 
 
 def test_safety_check_node_graceful_degradation():
@@ -309,9 +334,11 @@ def test_safety_check_node_graceful_degradation():
     # Should not crash even if safety modules are not available
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
     # Should have fallback check if modules not available
-    assert len(result["state"].safety.safety_checks_performed) > 0
+    assert len(safety.safety_checks_performed) > 0
 
 
 def test_safety_check_node_safety_checks_performed_tracking():
@@ -341,10 +368,13 @@ def test_safety_check_node_safety_checks_performed_tracking():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
-    assert len(result["state"].safety.safety_checks_performed) > 0
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
+    assert len(safety.safety_checks_performed) > 0
     # Should have at least one check performed
-    assert any("assessment" in check for check in result["state"].safety.safety_checks_performed)
+    assert any("assessment" in check for check in safety.safety_checks_performed)
 
 
 def test_safety_check_node_additional_info():
@@ -374,11 +404,14 @@ def test_safety_check_node_additional_info():
     
     result = safety_check_node(state)
     
-    assert result["state"].safety is not None
+    # Field-level update: safety field returned directly
+    assert "safety" in result or state.safety is not None
+    safety = result.get("safety") or state.safety
+    assert safety is not None
     # If rejected, should have additional info with reason
-    if result["state"].safety.validation_status == "REJECTED":
-        assert result["state"].safety.additional_info is not None
-        assert "reason" in result["state"].safety.additional_info
+    if safety.validation_status == "REJECTED":
+        assert safety.additional_info is not None
+        assert "reason" in safety.additional_info
 
 
 # ─── CONFIRMATION NODE TESTS ───────────────────────────────────────────────
@@ -402,9 +435,14 @@ def test_confirmation_node_creates_human_intervention():
     
     result = confirmation_node(state)
     
-    assert result["state"].confirmation is not None
-    assert result["state"].paused is True
-    assert result["state"].checkpoint_identifier is not None
+    # Field-level update: confirmation field returned directly
+    assert "confirmation" in result or state.confirmation is not None
+    confirmation = result.get("confirmation") or state.confirmation
+    paused = result.get("paused") or state.paused
+    checkpoint_id = result.get("checkpoint_identifier") or state.checkpoint_identifier
+    assert confirmation is not None
+    assert paused is True
+    assert checkpoint_id is not None
 
 
 def test_confirmation_node_creates_checkpoint():
@@ -418,8 +456,11 @@ def test_confirmation_node_creates_checkpoint():
     
     result = confirmation_node(state)
     
-    assert result["state"].checkpoint_identifier is not None
-    assert result["state"].paused is True
+    # Field-level update: checkpoint_identifier field returned directly
+    checkpoint_id = result.get("checkpoint_identifier") or state.checkpoint_identifier
+    paused = result.get("paused") or state.paused
+    assert checkpoint_id is not None
+    assert paused is True
 
 
 def test_resume_from_confirmation():
@@ -448,5 +489,8 @@ def test_resume_from_confirmation():
     
     result = resume_from_confirmation(state, HumanInterventionType.CONFIRM)
     
-    assert result["state"].paused is False
-    assert result["state"].confirmation.response == HumanInterventionType.CONFIRM
+    # Field-level update: paused field returned directly
+    paused = result.get("paused") or state.paused
+    confirmation = result.get("confirmation") or state.confirmation
+    assert paused is False
+    assert confirmation.response == HumanInterventionType.CONFIRM
