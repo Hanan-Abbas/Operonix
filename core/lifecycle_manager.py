@@ -100,6 +100,7 @@ from api.routes.health import system_state
 from core.config_validator import validated_config
 from voice.stt import SpeechToText
 from plugins import start_plugin_system
+from graph.resume_manager import get_resume_manager
 
 logger = logging.getLogger("LifecycleManager")
 
@@ -382,6 +383,13 @@ class LifecycleManager:
             logger.info("🎯 PromptTrustLayer: Online (threshold=%d approvals).", 5)
         except Exception as exc:
             logger.error("Failed to start PromptTrustLayer: %s", exc)
+
+        # Initialize Resume Manager for external resume mechanism (dashboard/panel integration)
+        try:
+            get_resume_manager(event_bus=bus)
+            logger.info("🔄 ResumeManager: Initialized with EventBus integration.")
+        except Exception as exc:
+            logger.error("Failed to initialize ResumeManager: %s", exc)
 
         logger.info("✨ All modules synchronised and listening to the Event Bus.")
         self._register_signal_handlers(loop)
