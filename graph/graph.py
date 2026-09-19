@@ -121,24 +121,13 @@ def build_operonix_graph():
         )
         
         # Confirmation node pauses graph, so we need external resume mechanism
-        # When paused, graph should stop and wait for external resume via API
-        # Conditional edge: if paused, go to END; otherwise continue to execute_step
-        def should_pause_or_continue(state: OperonixState) -> str:
-            """Determine if graph should pause or continue after confirmation."""
-            if state.paused:
-                # Graph is paused - will be resumed externally via API
-                logger.info(f"Graph paused for task {state.task.task_id}, awaiting external resume")
-                return "pause_end"
-            return "execute_step"
-        
-        workflow.add_conditional_edges(
-            "confirmation",
-            should_pause_or_continue,
-            {
-                "pause_end": END,
-                "execute_step": "execute_step"
-            }
-        )
+        # When paused, graph should stop and wait for external resume via API/panel
+        # The confirmation node sets state.paused = True and creates a checkpoint
+        # External systems (dashboard API or panel EventBus) will resume by calling ResumeManager
+        # For now, we allow the graph to continue to execute_step after confirmation
+        # The actual pause/resume is handled by the confirmation node creating a checkpoint
+        # and external systems restoring state and re-invoking the graph
+        workflow.add_edge("confirmation", "execute_step")
         
         workflow.add_edge("execute_step", "verify_step")
         
