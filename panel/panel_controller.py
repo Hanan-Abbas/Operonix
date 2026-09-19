@@ -712,49 +712,6 @@ class PanelController:
         )
         if self._bridge:
             self._bridge.sig_show_interactive_prompt.emit(payload)
-            if self._window and not (
-                self._window.isVisible() if hasattr(self._window, "isVisible") else True
-            ):
-                self._bridge.sig_toggle.emit()
-
-    def _on_interactive_prompt_responded(self, response: str) -> None:
-        """
-        User clicked Yes/No or submitted free-text in the interactive prompt widget.
-        Runs on Qt thread — bus.publish() is thread-safe.
-        """
-        if not self._pending_interactive:
-            log.warning("panel_controller: interactive response but no pending prompt")
-            return
-
-        task_id, prompt_type, command = self._pending_interactive
-        self._pending_interactive = None
-
-        log.info(
-            "panel_controller: user responded to interactive prompt task=%s response=%r",
-            task_id, response,
-        )
-
-        if self._bridge:
-            self._bridge.sig_hide_interactive_prompt.emit()
-
-        try:
-            self._bus.publish(
-                "interactive_response",
-                {
-                    "task_id":     task_id,
-                    "response":    response,
-                    "prompt_type": prompt_type,
-                    "command":     command,
-                },
-                source="panel",
-            )
-        except Exception as exc:
-            log.error("panel_controller: failed to publish interactive_response — %s", exc)
-
-    # ── Trust suggestion handlers ──────────────────────────────────────────
-
-    def _on_trust_suggestion(self, event: Any) -> None:
-        """
         PromptTrustLayer threshold reached for a command pattern.
         Show the "Should I automate this?" widget in the panel.
         Runs on asyncio thread — use bridge signal.
@@ -858,7 +815,7 @@ class PanelController:
         try:
             self._bus.publish(
                 "user_response_received",
-                {"task_id": task_id, "choice": choice_normalised},
+                {"task_id": task_id, "response": "CONFIRM" if choice_normalised == "allow" else "DENY"},
                 source="panel",
             )
         except Exception as exc:
