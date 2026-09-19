@@ -99,13 +99,15 @@ class ResourceContentionDetector:
                 return 0
             
             resources = list(self.task_resources[task_id])
-            count = 0
-            for resource in resources:
-                self.release_resource(task_id, resource)
-                count += 1
-            
-            logger.info(f"Task {task_id} released {count} resources")
-            return count
+        
+        # Release resources outside the lock to avoid deadlock
+        count = 0
+        for resource in resources:
+            self.release_resource(task_id, resource)
+            count += 1
+        
+        logger.info(f"Task {task_id} released {count} resources")
+        return count
     
     def check_contention(self, task_id: str, resource: str) -> bool:
         """Check if acquiring a resource would cause contention.
