@@ -38,6 +38,9 @@ class TimeoutManager:
         self.active_timeouts: Dict[str, Dict[str, Any]] = {}
         self.timeout_callbacks: Dict[str, Callable] = {}
         self._lock = threading.Lock()
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._check_interval = 1.0  # Check every second
         
         logger.info(f"TimeoutManager initialized with config: {self.timeout_config}")
     
@@ -178,7 +181,7 @@ class TimeoutManager:
         Returns:
             List of expired timeout keys
         """
-        now = datetime.now(UTC)()
+        now = datetime.now(UTC)
         expired = []
         
         with self._lock:
@@ -201,6 +204,67 @@ class TimeoutManager:
             logger.info(f"Expired timeouts: {expired}")
         
         return expired
+    
+    def start_watchdog(self) -> None:
+        """Start the background watchdog thread for timeout checking.
+        
+        This starts a background thread that periodically checks for expired timeouts
+        and executes their callbacks. This is the actual implementation of the
+        automatic timeout checking that was previously a stub.
+        """
+        if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
+            logger.warning("Watchdog thread is already running")
+            return
+        
+        self._stop_event.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="TimeoutWatchdog",
+            daemon=True
+        )
+        self._watchdog_thread.start()
+        logger.info("Timeout watchdog thread started")
+    
+    def stop_watchdog(self) -> None:
+        """Stop the background watchdog thread.
+        
+        This stops the background thread that checks for expired timeouts.
+        """
+        if self._watchdog_thread is None:
+            logger.warning("No watchdog thread to stop")
+            return
+        
+        self._stop_event.set()
+        self._watchdog_thread.join(timeout=5.0)
+        
+        if self._watchdog_thread.is_alive():
+            logger.warning("Watchdog thread did not stop gracefully")
+        else:
+            logger.info("Timeout watchdog thread stopped")
+        
+        self._watchdog_thread = None
+    
+    def _watchdog_loop(self) -> None:
+        """Watchdog loop that periodically checks for expired timeouts.
+        
+        This runs in a background thread and calls check_timeouts() at regular intervals.
+        """
+        logger.info("Watchdog loop started")
+        
+        while not self._stop_event.is_set():
+            try:
+                # Check for expired timeouts
+                expired = self.check_timeouts()
+                
+                # Sleep for the check interval
+                self._stop_event.wait(self._check_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in watchdog loop: {e}")
+                # Sleep briefly to avoid tight error loop
+                self._stop_event.wait(self._check_interval)
+        
+        logger.info("Watchdog loop stopped")
     
     def get_active_timeouts(self, task_id: Optional[str] = None) -> list:
         """Get active timeouts.
