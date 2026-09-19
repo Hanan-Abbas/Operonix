@@ -98,7 +98,31 @@ def build_operonix_graph():
         # Define edges
         workflow.set_entry_point("intake")
         workflow.add_edge("intake", "observe")
-        workflow.add_edge("observe", "analyze_intent")
+        
+        # Conditional edge from observe: check if context validation passed
+        def should_continue_or_recover_from_observe(state: OperonixState) -> str:
+            """Determine if workflow should continue or recover based on context validation."""
+            # Check if context validation failed
+            if state.context and isinstance(state.context, dict):
+                validation = state.context.get("validation")
+                if validation and isinstance(validation, dict):
+                    is_valid = validation.get("is_valid", True)
+                    if not is_valid:
+                        # Context validation failed - route to recovery
+                        logger.warning(f"Context validation failed for task {state.task.task_id}: {validation.get('reason')}")
+                        return "recover"
+            
+            # Context validation passed or not available - continue
+            return "analyze_intent"
+        
+        workflow.add_conditional_edges(
+            "observe",
+            should_continue_or_recover_from_observe,
+            {
+                "analyze_intent": "analyze_intent",
+                "recover": "recover"
+            }
+        )
         workflow.add_edge("analyze_intent", "retrieve_knowledge")
         workflow.add_edge("retrieve_knowledge", "create_plan")
         workflow.add_edge("create_plan", "route")
