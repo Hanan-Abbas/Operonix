@@ -184,3 +184,108 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     state.update_timestamp()
     
     return {"knowledge": state.knowledge}
+
+
+def _expand_query(user_input: str, intent) -> list[str]:
+    """Expand the query for better RAG retrieval.
+    
+    This function generates multiple query variations to improve retrieval:
+    - Original user input
+    - Intent name
+    - Synonyms/related terms (simplified)
+    - Query decomposition (simplified)
+    
+    Args:
+        user_input: Original user input
+        intent: Intent object
+        
+    Returns:
+        List of expanded queries
+    """
+    queries = [user_input]
+    
+    # Add intent name as a query
+    if intent:
+        queries.append(intent.name)
+    
+    # Add simplified variations (basic keyword extraction)
+    words = user_input.split()
+    if len(words) > 2:
+        # Add bigrams
+        for i in range(len(words) - 1):
+            queries.append(f"{words[i]} {words[i+1]}")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_queries = []
+    for q in queries:
+        if q.lower() not in seen:
+            seen.add(q.lower())
+            unique_queries.append(q)
+    
+    return unique_queries
+
+
+def _deduplicate_results(results: list) -> list:
+    """Deduplicate results based on content or ID.
+    
+    Args:
+        results: List of results to deduplicate
+        
+    Returns:
+        Deduplicated list of results
+    """
+    if not results:
+        return []
+    
+    seen = set()
+    unique_results = []
+    
+    for result in results:
+        # Use string representation as a simple deduplication key
+        # In a real implementation, this would use proper ID fields
+        result_key = str(result)
+        if result_key not in seen:
+            seen.add(result_key)
+            unique_results.append(result)
+    
+    return unique_results
+
+
+def _rerank_results(results: list, query: str) -> list:
+    """Re-rank results based on relevance to query.
+    
+    This is a simplified re-ranking implementation.
+    In a real implementation, this would use more sophisticated
+    ranking algorithms (e.g., cross-encoder, learning-to-rank).
+    
+    Args:
+        results: List of results to re-rank
+        query: Original query string
+        
+    Returns:
+        Re-ranked list of results
+    """
+    if not results:
+        return []
+    
+    # Simple relevance scoring based on keyword overlap
+    query_words = set(query.lower().split())
+    
+    def relevance_score(result):
+        """Calculate simple relevance score for a result."""
+        result_str = str(result).lower()
+        result_words = set(result_str.split())
+        
+        # Calculate overlap
+        overlap = len(query_words & result_words)
+        
+        # Normalize by result length to prefer concise matches
+        length_penalty = len(result_str) / 1000.0
+        
+        return overlap - length_penalty
+    
+    # Sort by relevance score (descending)
+    ranked = sorted(results, key=relevance_score, reverse=True)
+    
+    return ranked
