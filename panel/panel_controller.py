@@ -712,10 +712,11 @@ class PanelController:
         )
         if self._bridge:
             self._bridge.sig_show_interactive_prompt.emit(payload)
-        PromptTrustLayer threshold reached for a command pattern.
-        Show the "Should I automate this?" widget in the panel.
-        Runs on asyncio thread — use bridge signal.
-        """
+            """
+            PromptTrustLayer threshold reached for a command pattern.
+            Show the "Should I automate this?" widget in the panel.
+            Runs on asyncio thread — use bridge signal.
+            """
         payload = event.data if hasattr(event, "data") else event
         if not isinstance(payload, dict):
             return
