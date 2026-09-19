@@ -101,6 +101,7 @@ from core.config_validator import validated_config
 from voice.stt import SpeechToText
 from plugins import start_plugin_system
 from graph.resume_manager import get_resume_manager
+from graph.timeout_manager import get_timeout_manager
 
 logger = logging.getLogger("LifecycleManager")
 
@@ -390,6 +391,14 @@ class LifecycleManager:
             logger.info("🔄 ResumeManager: Initialized with EventBus integration.")
         except Exception as exc:
             logger.error("Failed to initialize ResumeManager: %s", exc)
+
+        # Initialize Timeout Manager and start watchdog thread for automatic timeout checking
+        try:
+            timeout_manager = get_timeout_manager()
+            timeout_manager.start_watchdog()
+            logger.info("⏱️ TimeoutManager: Initialized with watchdog thread started.")
+        except Exception as exc:
+            logger.error("Failed to initialize TimeoutManager: %s", exc)
 
         logger.info("✨ All modules synchronised and listening to the Event Bus.")
         self._register_signal_handlers(loop)
