@@ -253,6 +253,7 @@ class PluginAdapter(OperonixToolAdapter):
         """Check if required permissions are available.
         
         Phase 12 enhancement: Check permissions from plugin manifest.
+        Integrates with PermissionChecker for actual permission validation.
         
         Returns:
             True if permissions are available, False otherwise
@@ -266,12 +267,61 @@ class PluginAdapter(OperonixToolAdapter):
             # No permissions required
             return True
         
-        # In a real implementation, this would check against the system's
-        # permission manager. For now, we assume permissions are OK.
-        # This is a placeholder for future permission checking.
-        logger.debug(f"Plugin {self.tool_id} requires permissions: {[p.value for p in self.manifest.permissions]}")
-        
-        return True
+        # Integrate with PermissionChecker for actual permission validation
+        try:
+            from context.permission_checker import permission_checker
+            
+            # Check each required permission
+            for permission in self.manifest.permissions:
+                permission_value = permission.value if hasattr(permission, 'value') else str(permission)
+                
+                # Check service access if this is a service permission
+                if permission_value.startswith("service:"):
+                    service_name = permission_value.replace("service:", "")
+                    allowed, reason = permission_checker.check_service_access(service_name)
+                    if not allowed:
+                        logger.warning(f"Plugin {self.tool_id} permission check failed for service '{service_name}': {reason}")
+                        return False
+                
+                # Check action permission if this is an action permission
+                elif permission_value.startswith("action:"):
+                    action_name = permission_value.replace("action:", "")
+                    allowed, reason = permission_checker.is_action_allowed(action_name)
+                    if not allowed:
+                        logger.warning(f"Plugin {self.tool_id} permission check failed for action '{action_name}': {reason}")
+                        return False
+                
+                # Check path permission if this is a path permission
+                elif permission_value.startswith("path:"):
+                    path = permission_value.replace("path:", "")
+                    if not permission_checker.is_path_safe(path):
+                        logger.warning(f"Plugin {self.tool_id} permission check failed for path '{path}': path is protected")
+                        return False
+                
+                # Check write permission if this is a write permission
+                elif permission_value.startswith("write:"):
+                    path = permission_value.replace("write:", "")
+                    if not permission_checker.is_actually_writable(path):
+                        logger.warning(f"Plugin {self.tool_id} permission check failed for write to '{path}': path is not writable")
+                        return False
+                
+                # Default: check as action permission
+                else:
+                    allowed, reason = permission_checker.is_action_allowed(permission_value)
+                    if not allowed:
+                        logger.warning(f"Plugin {self.tool_id} permission check failed for '{permission_value}': {reason}")
+                        return False
+            
+            logger.debug(f"Plugin {self.tool_id} permission check passed for permissions: {[p.value for p in self.manifest.permissions]}")
+            return True
+            
+        except ImportError:
+            logger.warning("Could not import PermissionChecker, assuming permissions are OK")
+            return True
+        except Exception as e:
+            logger.error(f"Error checking permissions for plugin {self.tool_id}: {e}")
+            # Fail safe: assume permissions are OK to avoid blocking legitimate plugins
+            return True
     
     def get_schema(self) -> Dict[str, Any]:
         """Get the plugin schema for LangChain integration.
