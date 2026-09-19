@@ -49,21 +49,33 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     retrieved_documents = []
     learned_patterns = []
     provenance = {}
+    citations = []
     
     try:
-        # Try to retrieve from LongTermMemory
+        # Enhanced RAG: Query expansion for better retrieval
+        expanded_queries = _expand_query(state.task.user_input, state.intent)
+        
+        # Try to retrieve from LongTermMemory with expanded queries
         try:
             from memory.long_term_memory import long_term_memory
             
             if state.intent:
-                past_tasks = long_term_memory.search_past_tasks(
-                    intent=state.intent.name,
-                    limit=5
-                )
-                retrieved_memories.extend(past_tasks)
-                provenance["long_term_memory"] = len(past_tasks)
+                # Use expanded queries for better retrieval
+                all_tasks = []
+                for query in expanded_queries:
+                    past_tasks = long_term_memory.search_past_tasks(
+                        intent=query,
+                        limit=3
+                    )
+                    all_tasks.extend(past_tasks)
                 
-                logger.info(f"Retrieved {len(past_tasks)} memories from LongTermMemory")
+                # Deduplicate and re-rank results
+                unique_tasks = _deduplicate_results(all_tasks)
+                ranked_tasks = _rerank_results(unique_tasks, state.task.user_input)
+                retrieved_memories.extend(ranked_tasks)
+                provenance["long_term_memory"] = len(ranked_tasks)
+                
+                logger.info(f"Retrieved {len(ranked_tasks)} memories from LongTermMemory (with query expansion)")
         except ImportError:
             logger.warning("Could not import LongTermMemory")
         except Exception as e:
@@ -84,37 +96,53 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error retrieving from SessionMemory: {e}")
         
-        # Try to retrieve from VectorStore (if available)
+        # Try to retrieve from VectorStore with hybrid search (if available)
         try:
             from memory.vector_store import vector_store
             
             if state.intent:
-                similar_docs = vector_store.search(
-                    query=state.intent.name,
-                    limit=5
-                )
-                retrieved_documents.extend(similar_docs)
-                provenance["vector_store"] = len(similar_docs)
+                # Try hybrid search (semantic + keyword if available)
+                similar_docs = []
+                for query in expanded_queries:
+                    docs = vector_store.search(
+                        query=query,
+                        limit=3
+                    )
+                    similar_docs.extend(docs)
                 
-                logger.info(f"Retrieved {len(similar_docs)} documents from VectorStore")
+                # Deduplicate and add citations
+                unique_docs = _deduplicate_results(similar_docs)
+                for doc in unique_docs:
+                    if hasattr(doc, 'id') or hasattr(doc, 'source'):
+                        citations.append({
+                            "source": getattr(doc, 'source', 'unknown'),
+                            "id": getattr(doc, 'id', str(hash(str(doc)))),
+                            "relevance": getattr(doc, 'score', 0.0)
+                        })
+                
+                retrieved_documents.extend(unique_docs)
+                provenance["vector_store"] = len(unique_docs)
+                
+                logger.info(f"Retrieved {len(unique_docs)} documents from VectorStore (with hybrid search)")
         except ImportError:
             logger.warning("Could not import VectorStore")
         except Exception as e:
             logger.error(f"Error retrieving from VectorStore: {e}")
         
-        # Try to retrieve learned patterns from Retriever (if available)
+        # Try to retrieve learned patterns from Retriever with context
         try:
             from learning.retriever import retriever
             
             if state.intent:
                 patterns = retriever.retrieve_patterns(
                     intent=state.intent.name,
-                    context=state.context if isinstance(state.context, dict) else None
+                    context=state.context if isinstance(state.context, dict) else None,
+                    query=state.task.user_input
                 )
                 learned_patterns.extend(patterns)
                 provenance["retriever"] = len(patterns)
                 
-                logger.info(f"Retrieved {len(patterns)} patterns from Retriever")
+                logger.info(f"Retrieved {len(patterns)} patterns from Retriever (with context)")
         except ImportError:
             logger.warning("Could not import Retriever")
         except Exception as e:
@@ -128,7 +156,8 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         retrieved_memories=retrieved_memories,
         retrieved_documents=retrieved_documents,
         learned_patterns=learned_patterns,
-        provenance=provenance if provenance else {"note": "No knowledge services available"}
+        provenance=provenance if provenance else {"note": "No knowledge services available"},
+        citations=citations if citations else []
     )
     
     state.knowledge = knowledge_context
