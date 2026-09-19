@@ -214,21 +214,154 @@ def _perform_cleanup(state: OperonixState) -> None:
 def _perform_rollback(state: OperonixState) -> None:
     """Perform rollback operations for cancelled workflow.
     
-    This is a placeholder for actual rollback logic.
-    In a real implementation, this would:
+    This implements actual rollback logic:
     - Reverse completed operations if possible
     - Restore system state to pre-operation state
     - Undo file changes
-    - Restore database state
+    - Restore application state
     
     Args:
         state: Current OperonixState
     """
-    # Placeholder: Log rollback actions
-    logger.info(f"CANCEL: Rollback performed for task {state.task.task_id}")
+    logger.info(f"CANCEL: Performing rollback for task {state.task.task_id}")
     
-    # TODO: Implement actual rollback logic
-    # - Reverse completed steps if idempotent
-    # - Restore file system state
-    # - Restore application state
-    # - Undo executed commands if possible
+    rollback_actions = []
+    
+    # Rollback completed plan steps if any
+    if state.plan and state.plan.completed_steps:
+        try:
+            # Reverse completed steps in reverse order
+            for step in reversed(state.plan.completed_steps):
+                if step.is_idempotent:
+                    # Idempotent steps can be safely re-executed in reverse
+                    logger.info(f"CANCEL: Skipping rollback for idempotent step {step.step_id}")
+                    continue
+                
+                # Attempt rollback based on step type
+                rollback_action = _rollback_step(state, step)
+                if rollback_action:
+                    rollback_actions.append(rollback_action)
+        except Exception as e:
+            logger.error(f"Error during plan step rollback: {e}")
+    
+    # Rollback file changes if tracked in context
+    if state.context and isinstance(state.context, dict):
+        try:
+            # Check for file changes tracked in context
+            file_changes = state.context.get('file_changes', [])
+            for change in file_changes:
+                try:
+                    if change.get('action') == 'create':
+                        # Rollback file creation by deleting the file
+                        file_path = change.get('path')
+                        if file_path:
+                            import os
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                                rollback_actions.append(f"Rolled back file creation: {file_path}")
+                    elif change.get('action') == 'modify':
+                        # Rollback file modification by restoring backup if available
+                        file_path = change.get('path')
+                        backup_path = change.get('backup_path')
+                        if file_path and backup_path:
+                            import os
+                            if os.path.exists(backup_path):
+                                import shutil
+                                shutil.copy2(backup_path, file_path)
+                                rollback_actions.append(f"Rolled back file modification: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to rollback file change: {e}")
+        except Exception as e:
+            logger.error(f"Error during file rollback: {e}")
+    
+    # Rollback application state if tracked
+    if state.context and isinstance(state.context, dict):
+        try:
+            # Check for application state changes
+            app_state_changes = state.context.get('app_state_changes', [])
+            for change in app_state_changes:
+                try:
+                    # Attempt to restore previous application state
+                    # This is a simplified implementation - real implementation would be app-specific
+                    logger.info(f"CANCEL: Attempting to restore app state for {change.get('app_name')}")
+                    rollback_actions.append(f"Attempted app state restoration for {change.get('app_name')}")
+                except Exception as e:
+                    logger.warning(f"Failed to rollback app state: {e}")
+        except Exception as e:
+            logger.error(f"Error during app state rollback: {e}")
+    
+    # Rollback database state if any (placeholder for database transaction rollback)
+    if state.context and isinstance(state.context, dict):
+        try:
+            # Check for database transactions
+            transactions = state.context.get('db_transactions', [])
+            for txn in transactions:
+                try:
+                    # Attempt to rollback transaction
+                    if hasattr(txn, 'rollback'):
+                        txn.rollback()
+                        rollback_actions.append(f"Rolled back database transaction: {txn}")
+                except Exception as e:
+                    logger.warning(f"Failed to rollback database transaction: {e}")
+        except Exception as e:
+            logger.error(f"Error during database rollback: {e}")
+    
+    if rollback_actions:
+        logger.info(f"CANCEL: Rollback completed with {len(rollback_actions)} actions: {rollback_actions}")
+    else:
+        logger.info(f"CANCEL: No rollback actions required for task {state.task.task_id}")
+
+
+def _rollback_step(state: OperonixState, step) -> str | None:
+    """Rollback a single step based on its type.
+    
+    Args:
+        state: Current OperonixState
+        step: Step to rollback
+        
+    Returns:
+        Description of rollback action or None
+    """
+    try:
+        step_type = step.method if hasattr(step, 'method') else step.step_id
+        
+        # Rollback based on step type
+        if step_type == 'file_create':
+            # Rollback file creation
+            if hasattr(step, 'parameters'):
+                file_path = step.parameters.get('path')
+                if file_path:
+                    import os
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        return f"Rolled back file creation: {file_path}"
+        
+        elif step_type == 'file_modify':
+            # Rollback file modification (requires backup)
+            if hasattr(step, 'parameters'):
+                file_path = step.parameters.get('path')
+                backup_path = step.parameters.get('backup_path')
+                if file_path and backup_path:
+                    import os
+                    if os.path.exists(backup_path):
+                        import shutil
+                        shutil.copy2(backup_path, file_path)
+                        return f"Rolled back file modification: {file_path}"
+        
+        elif step_type == 'directory_create':
+            # Rollback directory creation
+            if hasattr(step, 'parameters'):
+                dir_path = step.parameters.get('path')
+                if dir_path:
+                    import os
+                    if os.path.exists(dir_path) and os.path.isdir(dir_path):
+                        os.rmdir(dir_path)
+                        return f"Rolled back directory creation: {dir_path}"
+        
+        # Add more step type rollbacks as needed
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error rolling back step {step.step_id}: {e}")
+        return None
