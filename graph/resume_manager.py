@@ -200,7 +200,7 @@ class ResumeManager:
         try:
             # Validate response type
             try:
-                response_type = HumanInterventionType(response.upper())
+                response_type = HumanInterventionType(response.lower())
             except ValueError:
                 valid_responses = [t.value for t in HumanInterventionType]
                 return {
