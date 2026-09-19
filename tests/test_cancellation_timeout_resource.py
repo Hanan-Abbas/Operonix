@@ -42,6 +42,77 @@ def test_timeout_config_defaults():
     assert config.system_watchdog_timeout_seconds == 600
 
 
+def test_timeout_manager_watchdog_start_stop():
+    """Test that the watchdog thread can be started and stopped."""
+    from graph.timeout_manager import TimeoutManager
+    
+    manager = TimeoutManager()
+    
+    # Start watchdog
+    manager.start_watchdog()
+    assert manager._watchdog_thread is not None
+    assert manager._watchdog_thread.is_alive()
+    
+    # Stop watchdog
+    manager.stop_watchdog()
+    assert manager._watchdog_thread is None
+
+
+def test_timeout_manager_watchdog_double_start():
+    """Test that starting watchdog twice doesn't create duplicate threads."""
+    from graph.timeout_manager import TimeoutManager
+    
+    manager = TimeoutManager()
+    
+    # Start watchdog
+    manager.start_watchdog()
+    first_thread = manager._watchdog_thread
+    
+    # Try to start again
+    manager.start_watchdog()
+    second_thread = manager._watchdog_thread
+    
+    # Should be the same thread
+    assert first_thread == second_thread
+    
+    # Cleanup
+    manager.stop_watchdog()
+
+
+def test_timeout_manager_watchdog_timeout_detection():
+    """Test that the watchdog thread detects and executes timeout callbacks."""
+    from graph.timeout_manager import TimeoutManager
+    import time
+    
+    manager = TimeoutManager()
+    manager._check_interval = 0.1  # Check every 100ms for faster test
+    
+    # Track callback execution
+    callback_executed = []
+    
+    def timeout_callback(timeout_key, timeout_info):
+        callback_executed.append(timeout_key)
+    
+    # Start watchdog
+    manager.start_watchdog()
+    
+    # Add a timeout with very short duration
+    manager.start_operation_timeout("test-task", "test-op", timeout_callback)
+    # Manually set expiry to past for immediate timeout
+    with manager._lock:
+        for key, info in manager.active_timeouts.items():
+            info["expires_at"] = manager.active_timeouts[key]["started_at"]
+    
+    # Wait for watchdog to detect timeout
+    time.sleep(0.5)
+    
+    # Stop watchdog
+    manager.stop_watchdog()
+    
+    # Callback should have been executed
+    assert len(callback_executed) > 0
+
+
 # ─── CANCELLATION REQUEST TESTS ─────────────────────────────────────────────
 
 def test_cancellation_request_domain_object():
