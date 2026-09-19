@@ -94,14 +94,16 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
             "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None,
             "window_title": state.context.get("window_title") if not is_recovery_observation else None,
             "app_name": state.context.get("app_name") if not is_recovery_observation else None,
-            "cwd": state.context.get("cwd") if not is_recovery_observation else None
+            "cwd": state.context.get("cwd") if not is_recovery_observation else None,
+            "validation": state.context.get("validation") if not is_recovery_observation else None
         }
     )
     
     state.add_history_event("observe_completed", {
         "task_id": state.task.task_id,
         "is_recovery_observation": is_recovery_observation,
-        "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None
+        "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None,
+        "validation": state.context.get("validation") if not is_recovery_observation else None
     })
     
     state.update_timestamp()
@@ -221,15 +223,60 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         try:
             from context.context_validator import context_validator
             
-            validation_result = context_validator.validate_context(context_data)
-            if validation_result:
-                context_data["validation"] = {
-                    "is_valid": validation_result.get("is_valid", True),
-                    "validation_errors": validation_result.get("errors", []),
-                    "validation_warnings": validation_result.get("warnings", [])
-                }
+            # Use the async validate_action_context method for proper validation
+            # Since we're in a sync context, we'll run it in the event loop if available
+            import asyncio
+            try:
+                # Try to get existing event loop
+                loop = asyncio.get_running_loop()
+                # If loop is running, we can't use asyncio.run
+                # Create a new event loop for this validation
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    validation_result = new_loop.run_until_complete(
+                        context_validator.validate_action_context(
+                            state.task.user_input,
+                            context_data
+                        )
+                    )
+                    is_valid, reason = validation_result
+                    context_data["validation"] = {
+                        "is_valid": is_valid,
+                        "reason": reason,
+                        "validation_errors": [] if is_valid else [reason],
+                        "validation_warnings": []
+                    }
+                finally:
+                    new_loop.close()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
+                # No running loop, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    validation_result = loop.run_until_complete(
+                        context_validator.validate_action_context(
+                            state.task.user_input,
+                            context_data
+                        )
+                    )
+                    is_valid, reason = validation_result
+                    context_data["validation"] = {
+                        "is_valid": is_valid,
+                        "reason": reason,
+                        "validation_errors": [] if is_valid else [reason],
+                        "validation_warnings": []
+                    }
+                finally:
+                    loop.close()
+            
+            # Log validation result
+            if context_data["validation"]["is_valid"]:
+                logger.info(f"Context validation passed: {context_data['validation']['reason']}")
+            else:
+                logger.warning(f"Context validation failed: {context_data['validation']['reason']}")
                 
-                logger.debug(f"Context validation: {context_data['validation']}")
         except ImportError:
             logger.warning("Could not import ContextValidator")
         except Exception as e:
