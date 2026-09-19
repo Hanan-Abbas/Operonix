@@ -113,6 +113,123 @@ def test_timeout_manager_watchdog_timeout_detection():
     assert len(callback_executed) > 0
 
 
+# ─── RESOURCE CONTENTION DETECTION TESTS ─────────────────────────────────────
+
+def test_resource_contention_detector_initialization():
+    """Test that ResourceContentionDetector can be initialized."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    assert detector.resource_owners == {}
+    assert detector.task_resources == {}
+
+
+def test_resource_acquisition():
+    """Test that resources can be acquired by tasks."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # Acquire resource
+    result = detector.acquire_resource("task-1", "file:/tmp/test.txt")
+    
+    assert result is True
+    assert "file:/tmp/test.txt" in detector.resource_owners
+    assert "task-1" in detector.resource_owners["file:/tmp/test.txt"]
+
+
+def test_resource_contention_detection():
+    """Test that resource contention is detected."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # Task 1 acquires resource
+    detector.acquire_resource("task-1", "file:/tmp/test.txt")
+    
+    # Task 2 tries to acquire same resource - should fail
+    result = detector.acquire_resource("task-2", "file:/tmp/test.txt")
+    
+    assert result is False
+
+
+def test_resource_release():
+    """Test that resources can be released."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # Acquire resource
+    detector.acquire_resource("task-1", "file:/tmp/test.txt")
+    
+    # Release resource
+    detector.release_resource("task-1", "file:/tmp/test.txt")
+    
+    assert "file:/tmp/test.txt" not in detector.resource_owners
+    assert "task-1" not in detector.task_resources
+
+
+def test_release_all_task_resources():
+    """Test that all resources for a task can be released."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # Acquire multiple resources
+    detector.acquire_resource("task-1", "file:/tmp/test1.txt")
+    detector.acquire_resource("task-1", "file:/tmp/test2.txt")
+    detector.acquire_resource("task-1", "file:/tmp/test3.txt")
+    
+    # Release all
+    count = detector.release_all_resources("task-1")
+    
+    assert count == 3
+    assert "task-1" not in detector.task_resources
+
+
+def test_check_contention():
+    """Test checking for contention before acquisition."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # Task 1 acquires resource
+    detector.acquire_resource("task-1", "file:/tmp/test.txt")
+    
+    # Check if task 2 would cause contention
+    would_contend = detector.check_contention("task-2", "file:/tmp/test.txt")
+    
+    assert would_contend is True
+    
+    # Check if task 1 would cause contention (should be False)
+    would_contend = detector.check_contention("task-1", "file:/tmp/test.txt")
+    
+    assert would_contend is False
+
+
+def test_detect_conflicts():
+    """Test detection of all current conflicts."""
+    from graph.cancellation import ResourceContentionDetector
+    
+    detector = ResourceContentionDetector()
+    
+    # No conflicts initially
+    conflicts = detector.detect_conflicts()
+    assert len(conflicts) == 0
+    
+    # Create conflict by having multiple owners (manually for test)
+    detector.resource_owners["file:/tmp/test.txt"] = {"task-1", "task-2"}
+    
+    # Detect conflicts
+    conflicts = detector.detect_conflicts()
+    
+    assert len(conflicts) == 1
+    assert "file:/tmp/test.txt" in conflicts
+    assert "task-1" in conflicts["file:/tmp/test.txt"]
+    assert "task-2" in conflicts["file:/tmp/test.txt"]
+
+
 # ─── CANCELLATION REQUEST TESTS ─────────────────────────────────────────────
 
 def test_cancellation_request_domain_object():
