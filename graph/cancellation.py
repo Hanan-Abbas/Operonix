@@ -8,7 +8,8 @@ Per migration plan Phase 8: Cancellation, Timeout & Resource Control
 from __future__ import annotations
 
 import logging
-from typing import Dict, Any, Optional
+import threading
+from typing import Dict, Any, Optional, Set
 from datetime import datetime
 
 from migration.domain_contracts import CancellationRequest, CancellationReason, AbortDecision, AbortSemantics
@@ -16,6 +17,148 @@ from migration.graph_state import OperonixState
 from graph.timeout_manager import get_timeout_manager
 
 logger = logging.getLogger("Graph.Cancellation")
+
+
+class ResourceContentionDetector:
+    """Detector for resource contention between workflows.
+    
+    This class tracks which resources are being used by which tasks
+    and detects when multiple workflows try to access the same physical resource.
+    """
+    
+    def __init__(self):
+        """Initialize resource contention detector."""
+        self.resource_owners: Dict[str, Set[str]] = {}  # resource -> set of task_ids
+        self.task_resources: Dict[str, Set[str]] = {}  # task_id -> set of resources
+        self._lock = threading.Lock()
+        
+        logger.info("ResourceContentionDetector initialized")
+    
+    def acquire_resource(self, task_id: str, resource: str) -> bool:
+        """Attempt to acquire a resource for a task.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier (e.g., file path, device name, etc.)
+            
+        Returns:
+            True if resource acquired, False if contention detected
+        """
+        with self._lock:
+            # Check if resource is already owned by another task
+            if resource in self.resource_owners:
+                existing_owners = self.resource_owners[resource]
+                if task_id not in existing_owners and len(existing_owners) > 0:
+                    # Resource contention detected
+                    logger.warning(f"Resource contention detected: {resource} owned by {existing_owners}, requested by {task_id}")
+                    return False
+            
+            # Acquire resource
+            if resource not in self.resource_owners:
+                self.resource_owners[resource] = set()
+            self.resource_owners[resource].add(task_id)
+            
+            if task_id not in self.task_resources:
+                self.task_resources[task_id] = set()
+            self.task_resources[task_id].add(resource)
+            
+            logger.debug(f"Task {task_id} acquired resource: {resource}")
+            return True
+    
+    def release_resource(self, task_id: str, resource: str) -> None:
+        """Release a resource from a task.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier
+        """
+        with self._lock:
+            if resource in self.resource_owners:
+                self.resource_owners[resource].discard(task_id)
+                if not self.resource_owners[resource]:
+                    del self.resource_owners[resource]
+            
+            if task_id in self.task_resources:
+                self.task_resources[task_id].discard(resource)
+                if not self.task_resources[task_id]:
+                    del self.task_resources[task_id]
+            
+            logger.debug(f"Task {task_id} released resource: {resource}")
+    
+    def release_all_resources(self, task_id: str) -> int:
+        """Release all resources held by a task.
+        
+        Args:
+            task_id: Task identifier
+            
+        Returns:
+            Number of resources released
+        """
+        with self._lock:
+            if task_id not in self.task_resources:
+                return 0
+            
+            resources = list(self.task_resources[task_id])
+            count = 0
+            for resource in resources:
+                self.release_resource(task_id, resource)
+                count += 1
+            
+            logger.info(f"Task {task_id} released {count} resources")
+            return count
+    
+    def check_contention(self, task_id: str, resource: str) -> bool:
+        """Check if acquiring a resource would cause contention.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier
+            
+        Returns:
+            True if contention would occur, False otherwise
+        """
+        with self._lock:
+            if resource in self.resource_owners:
+                existing_owners = self.resource_owners[resource]
+                return task_id not in existing_owners and len(existing_owners) > 0
+            return False
+    
+    def get_resource_owners(self, resource: str) -> Set[str]:
+        """Get owners of a resource.
+        
+        Args:
+            resource: Resource identifier
+            
+        Returns:
+            Set of task IDs that own the resource
+        """
+        with self._lock:
+            return self.resource_owners.get(resource, set()).copy()
+    
+    def get_task_resources(self, task_id: str) -> Set[str]:
+        """Get resources held by a task.
+        
+        Args:
+            task_id: Task identifier
+            
+        Returns:
+            Set of resource identifiers held by the task
+        """
+        with self._lock:
+            return self.task_resources.get(task_id, set()).copy()
+    
+    def detect_conflicts(self) -> Dict[str, Set[str]]:
+        """Detect all current resource conflicts.
+        
+        Returns:
+            Dict mapping resource to set of conflicting task IDs
+        """
+        conflicts = {}
+        with self._lock:
+            for resource, owners in self.resource_owners.items():
+                if len(owners) > 1:
+                    conflicts[resource] = owners.copy()
+        return conflicts
 
 
 class CancellationService:
@@ -26,6 +169,7 @@ class CancellationService:
         self.active_cancellations: Dict[str, CancellationRequest] = {}
         self.abort_decisions: Dict[str, AbortDecision] = {}
         self.timeout_manager = get_timeout_manager()
+        self.resource_detector = ResourceContentionDetector()
         
         logger.info("CancellationService initialized")
     
@@ -181,6 +325,63 @@ class CancellationService:
         )
         
         return self.cancel_workflow(state, cancellation)
+    
+    def try_acquire_resource(self, task_id: str, resource: str) -> bool:
+        """Try to acquire a resource for a task.
+        
+        This method uses the resource contention detector to check if the resource
+        can be safely acquired without causing contention.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier
+            
+        Returns:
+            True if resource acquired, False if contention detected
+        """
+        return self.resource_detector.acquire_resource(task_id, resource)
+    
+    def release_task_resource(self, task_id: str, resource: str) -> None:
+        """Release a resource from a task.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier
+        """
+        self.resource_detector.release_resource(task_id, resource)
+    
+    def release_all_task_resources(self, task_id: str) -> int:
+        """Release all resources held by a task.
+        
+        This is typically called when a task completes or is cancelled.
+        
+        Args:
+            task_id: Task identifier
+            
+        Returns:
+            Number of resources released
+        """
+        return self.resource_detector.release_all_resources(task_id)
+    
+    def check_resource_contention(self, task_id: str, resource: str) -> bool:
+        """Check if acquiring a resource would cause contention.
+        
+        Args:
+            task_id: Task identifier
+            resource: Resource identifier
+            
+        Returns:
+            True if contention would occur, False otherwise
+        """
+        return self.resource_detector.check_contention(task_id, resource)
+    
+    def detect_all_resource_conflicts(self) -> Dict[str, Set[str]]:
+        """Detect all current resource conflicts.
+        
+        Returns:
+            Dict mapping resource to set of conflicting task IDs
+        """
+        return self.resource_detector.detect_conflicts()
     
     def get_cancellation(self, task_id: str) -> Optional[CancellationRequest]:
         """Get cancellation request for a task.
