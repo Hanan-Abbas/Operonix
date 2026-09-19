@@ -81,34 +81,15 @@ async def get_confirmation_by_task(task_id: str) -> Dict[str, Any]:
     Returns:
         Dict with confirmation details
     """
-    checkpointing_service = get_checkpointing_service()
+    resume_manager = get_resume_manager()
     
     try:
-        # Get latest checkpoint for task
-        checkpoint = checkpointing_service.get_latest_checkpoint(task_id)
+        confirmation = resume_manager.get_confirmation(task_id)
         
-        if not checkpoint:
-            raise HTTPException(status_code=404, detail=f"No checkpoint found for task {task_id}")
+        if not confirmation:
+            raise HTTPException(status_code=404, detail=f"No pending confirmation found for task {task_id}")
         
-        # Check if state is paused
-        state_dict = checkpoint.workflow_state
-        if not state_dict.get('paused', False):
-            raise HTTPException(status_code=400, detail=f"Task {task_id} is not paused")
-        
-        # Extract confirmation info
-        confirmation_data = state_dict.get('confirmation')
-        if not confirmation_data:
-            raise HTTPException(status_code=404, detail=f"No confirmation data for task {task_id}")
-        
-        return {
-            "task_id": task_id,
-            "intervention_type": confirmation_data.get('intervention_type'),
-            "reason": confirmation_data.get('reason'),
-            "context": confirmation_data.get('context', {}),
-            "checkpoint_identifier": checkpoint.checkpoint_identifier,
-            "requested_at": confirmation_data.get('requested_at'),
-            "options": confirmation_data.get('options', [])
-        }
+        return confirmation
         
     except HTTPException:
         raise
@@ -134,76 +115,19 @@ async def respond_to_confirmation(request: HumanResponseRequest) -> Dict[str, An
     Returns:
         Dict with resume status
     """
-    checkpointing_service = get_checkpointing_service()
+    resume_manager = get_resume_manager()
     
     try:
-        # Validate response type
-        try:
-            response_type = HumanInterventionType(request.response.upper())
-        except ValueError:
-            valid_responses = [t.value for t in HumanInterventionType]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid response '{request.response}'. Valid responses: {valid_responses}"
-            )
+        result = resume_manager.resume_workflow(
+            request.task_id,
+            request.response,
+            request.response_data
+        )
         
-        # Get latest checkpoint for task
-        checkpoint = checkpointing_service.get_latest_checkpoint(request.task_id)
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("message"))
         
-        if not checkpoint:
-            raise HTTPException(status_code=404, detail=f"No checkpoint found for task {request.task_id}")
-        
-        # Check if state is paused
-        state_dict = checkpoint.workflow_state
-        if not state_dict.get('paused', False):
-            raise HTTPException(status_code=400, detail=f"Task {request.task_id} is not paused")
-        
-        # Restore state from checkpoint
-        logger.info(f"Restoring state from checkpoint {checkpoint.checkpoint_identifier}")
-        state = checkpointing_service.restore_state(checkpoint)
-        
-        if not state:
-            raise HTTPException(status_code=500, detail="Failed to restore state from checkpoint")
-        
-        # Apply human response
-        logger.info(f"Applying human response {response_type.value} to task {request.task_id}")
-        state_update = resume_from_confirmation(state, response_type)
-        
-        # Add response data if provided
-        if request.response_data:
-            if state.confirmation:
-                state.confirmation.response_data = request.response_data
-        
-        # Resume graph execution
-        logger.info(f"Resuming graph execution for task {request.task_id}")
-        
-        try:
-            from graph.graph import graph_runner
-            if not graph_runner or not graph_runner.is_available():
-                raise HTTPException(status_code=503, detail="Graph runner not available")
-            
-            # Resume graph from confirmation node
-            # We need to continue execution from where it left off
-            # LangGraph doesn't have built-in resume from checkpoint, so we re-invoke
-            # with the restored state
-            final_state = await graph_runner.run_task(state.task)
-            
-            logger.info(f"Task {request.task_id} resumed and completed")
-            
-            return {
-                "status": "success",
-                "message": f"Task {request.task_id} resumed with response {response_type.value}",
-                "task_id": request.task_id,
-                "response": response_type.value,
-                "final_state": {
-                    "success": final_state.final.success if final_state.final else None,
-                    "response": final_state.final.response if final_state.final else None
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to resume graph execution: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to resume graph: {str(e)}")
+        return result
         
     except HTTPException:
         raise
@@ -223,25 +147,15 @@ async def cancel_confirmation(task_id: str) -> Dict[str, Any]:
     Returns:
         Dict with cancellation status
     """
-    checkpointing_service = get_checkpointing_service()
+    resume_manager = get_resume_manager()
     
     try:
-        # Get latest checkpoint for task
-        checkpoint = checkpointing_service.get_latest_checkpoint(task_id)
+        result = resume_manager.cancel_confirmation(task_id)
         
-        if not checkpoint:
-            raise HTTPException(status_code=404, detail=f"No checkpoint found for task {task_id}")
+        if result.get("status") == "error":
+            raise HTTPException(status_code=404, detail=result.get("message"))
         
-        # Delete checkpoint
-        checkpointing_service.delete_checkpoint(checkpoint.checkpoint_identifier)
-        
-        logger.info(f"Cancelled confirmation for task {task_id}, checkpoint deleted")
-        
-        return {
-            "status": "success",
-            "message": f"Confirmation for task {task_id} cancelled",
-            "task_id": task_id
-        }
+        return result
         
     except HTTPException:
         raise
