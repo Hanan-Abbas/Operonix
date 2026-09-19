@@ -8,8 +8,8 @@
 ## Summary Statistics
 
 - **Total Stubs Identified:** 18
-- **Resolved:** 12
-- **Active:** 6
+- **Resolved:** 14
+- **Active:** 4
 - **Deferred to Phase 15:** 6 (legacy retirement items)
 
 **Last Updated:** 2026-09-19 (Updated based on actual test results - 603 unit tests passing, 5 integration tests passing, 5 real scenario tests passing, 19 resume manager tests passing, 38 graph node tests passing, 31 tool adapter tests passing)
@@ -136,10 +136,15 @@
 - All 19 unit tests passing
 
 ### 5. Cancel Node Placeholder (Phase 8)
-**Status:** ❌ ACTIVE STUB  
+**Status:** ✅ RESOLVED  
 **Migration File:** `PHASE_8_COMPLETION.md`  
-**Location:** `graph/graph.py`  
-**Description:** Cancel node in graph is a placeholder (lambda state: state). In real implementation, this would integrate with CancellationService to handle cleanup, rollback, and resource release.
+**Location:** `graph/nodes/cancel.py`  
+**Description:** Cancel node now integrates with CancellationService and implements actual cleanup and rollback logic.  
+**Resolution:** 
+- Implemented actual cleanup logic (temp files, resources, connections, locks)
+- Implemented actual rollback logic (plan steps, file changes, app state, database transactions)
+- Added step-specific rollback for file_create, file_modify, directory_create
+- All 38 graph node tests passing
 
 ### 6. Timeout Callback Execution (Phase 8)
 **Status:** ❌ ACTIVE STUB  
@@ -154,10 +159,15 @@
 **Description:** Resource contention is handled via cancellation request, but automatic detection of resource contention is not implemented. In real implementation, this would detect when multiple workflows try to access the same physical resource.
 
 ### 8. Context Validation Logic (Phase 11)
-**Status:** ❌ ACTIVE STUB  
+**Status:** ✅ RESOLVED  
 **Migration File:** `PHASE_11_COMPLETION.md`  
 **Location:** `graph/nodes/observe.py`  
-**Description:** ContextValidator integration is present but the validation logic is not fully implemented. The service is called but the validation results are not used to block execution.
+**Description:** ContextValidator integration now fully implemented with validation logic enforcement.  
+**Resolution:** 
+- Integrated ContextValidator.validate_action_context with proper async handling
+- Added conditional edge in graph to route to recovery if context validation fails
+- Validation results now used to block execution when context is invalid
+- All 38 graph node tests passing
 
 ### 9. Permission Checking in PluginAdapter (Phase 12)
 **Status:** ✅ RESOLVED  
