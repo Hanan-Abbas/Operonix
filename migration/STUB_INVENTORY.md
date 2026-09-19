@@ -147,10 +147,16 @@
 - All 38 graph node tests passing
 
 ### 6. Timeout Callback Execution (Phase 8)
-**Status:** ❌ ACTIVE STUB  
+**Status:** ✅ RESOLVED  
 **Migration File:** `PHASE_8_COMPLETION.md`  
 **Location:** `graph/timeout_manager.py`  
-**Description:** TimeoutManager has callback execution logic, but actual timeout checking (check_timeouts()) is not automatically triggered in background thread. In real implementation, this would be run in watchdog thread.
+**Description:** TimeoutManager now has automatic timeout checking in background watchdog thread.  
+**Resolution:** 
+- Implemented start_watchdog() method to start background thread
+- Implemented stop_watchdog() method to stop background thread
+- Implemented _watchdog_loop() to periodically check for expired timeouts
+- Integrated watchdog startup in lifecycle_manager
+- All 3 new watchdog tests passing
 
 ### 7. Resource Contention Detection (Phase 8)
 **Status:** ❌ ACTIVE STUB  
