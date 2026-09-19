@@ -16,9 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from migration.domain_contracts import HumanInterventionType
-from graph.checkpointing import get_checkpointing_service
-from graph.nodes.confirmation import resume_from_confirmation
-from migration.graph_state import OperonixState
+from graph.resume_manager import get_resume_manager
 
 logger = logging.getLogger("ConfirmationRoute")
 
@@ -58,45 +56,10 @@ async def list_pending_confirmations() -> Dict[str, Any]:
     Returns:
         Dict with list of pending confirmations
     """
-    checkpointing_service = get_checkpointing_service()
+    resume_manager = get_resume_manager()
     
     try:
-        # Get all checkpoints
-        import os
-        checkpoint_dir = checkpointing_service.checkpoint_dir
-        if not os.path.exists(checkpoint_dir):
-            return {"confirmations": [], "count": 0}
-        
-        pending_confirmations = []
-        
-        # Scan checkpoint files for paused workflows
-        for filename in os.listdir(checkpoint_dir):
-            if not filename.endswith('.json'):
-                continue
-            
-            try:
-                checkpoint_id = filename[:-5]  # Remove .json
-                checkpoint = checkpointing_service.load_checkpoint(checkpoint_id)
-                
-                if checkpoint and checkpoint.workflow_state:
-                    # Check if state is paused
-                    state_dict = checkpoint.workflow_state
-                    if state_dict.get('paused', False):
-                        # Extract confirmation info
-                        confirmation_data = state_dict.get('confirmation')
-                        if confirmation_data:
-                            pending_confirmations.append({
-                                "task_id": checkpoint.task_id,
-                                "intervention_type": confirmation_data.get('intervention_type'),
-                                "reason": confirmation_data.get('reason'),
-                                "context": confirmation_data.get('context', {}),
-                                "checkpoint_identifier": checkpoint.checkpoint_identifier,
-                                "requested_at": confirmation_data.get('requested_at')
-                            })
-            except Exception as e:
-                logger.warning(f"Failed to load checkpoint {filename}: {e}")
-                continue
-        
+        pending_confirmations = resume_manager.get_pending_confirmations()
         return {
             "confirmations": pending_confirmations,
             "count": len(pending_confirmations)
