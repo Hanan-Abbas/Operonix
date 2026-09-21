@@ -19,6 +19,11 @@ import time
 from datetime import datetime
 from typing import List, Dict, Any
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Configure logging
 logging.basicConfig(
@@ -74,6 +79,7 @@ class ResourceContentionTester:
         try:
             from graph.runtime_adapter import RuntimeGraphAdapter
             from migration.feature_flags import flags
+            from migration.domain_contracts import TaskSource
             
             self.adapter = RuntimeGraphAdapter()
             
@@ -91,8 +97,6 @@ class ResourceContentionTester:
     
     async def execute_resource_task(self, resource_type: str, task_index: int) -> ContentionResult:
         """Execute a task that competes for a specific resource."""
-        from migration.domain_contracts import TaskSource
-        
         # Define tasks that compete for specific resources
         resource_tasks = {
             "filesystem": f"read file /tmp/test_file_{task_index % 5}.txt",
