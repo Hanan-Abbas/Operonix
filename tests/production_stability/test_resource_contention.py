@@ -25,6 +25,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# Import required modules
+from migration.domain_contracts import TaskSource
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -79,7 +82,6 @@ class ResourceContentionTester:
         try:
             from graph.runtime_adapter import RuntimeGraphAdapter
             from migration.feature_flags import flags
-            from migration.domain_contracts import TaskSource
             
             self.adapter = RuntimeGraphAdapter()
             
