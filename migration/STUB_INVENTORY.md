@@ -191,32 +191,57 @@
 
 **Note:** Phase 15 should only be executed after the graph is demonstrably stable in production use.
 
-### 1. Legacy Workflow Execution
+### Legacy Integration Stubs (Bridging New Graph with Legacy System)
+
+**Rationale for Deferral:** All high/medium priority stubs are resolved. Graph is stable and tested (622 tests passing). Legacy integration is low priority and only needed for fallback during transition. Current placeholder provides adequate fallback for development. Phase 15 will handle both integration AND retirement.
+
+### 1. Legacy Workflow Integration (runtime_adapter.py)
+**Status:** ⏳ DEFERRED TO PHASE 15  
+**Migration File:** `PHASE_1_COMPLETION.md`  
+**Location:** `graph/runtime_adapter.py` - `_execute_with_legacy()`  
+**Description:** Stub that returns placeholder result. Actual integration with legacy orchestrator deferred to Phase 15.  
+**Note:** Current placeholder provides adequate fallback for development.
+
+### 2. Legacy Orchestrator Integration
+**Status:** ⏳ DEFERRED TO PHASE 15  
+**Migration File:** `PHASE_14_COMPLETION.md`  
+**Description:** Legacy orchestrator integration to be implemented in Phase 15 as part of legacy retirement process.
+
+### 3. Legacy Executor Integration
+**Status:** ⏳ DEFERRED TO PHASE 15  
+**Migration File:** `PHASE_14_COMPLETION.md`  
+**Description:** Legacy executor integration to be implemented in Phase 15 as part of legacy retirement process.
+
+---
+
+### Legacy Retirement Stubs (Removing Legacy System After Graph is Proven)
+
+### 4. Legacy Workflow Execution
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** Legacy workflow execution in orchestrator.py to be retired after graph is stable.
 
-### 2. Duplicated Routing Logic
+### 5. Duplicated Routing Logic
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** Duplicated routing logic across multiple modules to be consolidated/removed.
 
-### 3. DecisionEngine Retirement
+### 6. DecisionEngine Retirement
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** DecisionEngine module to be retired after graph routing is proven.
 
-### 4. Duplicated ToolSelector Logic
+### 7. Duplicated ToolSelector Logic
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** Duplicated ToolSelector routing logic to be removed.
 
-### 5. Redundant CapabilityMapper Routing
+### 8. Redundant CapabilityMapper Routing
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** Redundant CapabilityMapper routing logic to be consolidated.
 
-### 6. active_tasks as Workflow Authority
+### 9. active_tasks as Workflow Authority
 **Status:** ⏳ DEFERRED TO PHASE 15  
 **Migration File:** `PHASE_14_COMPLETION.md`  
 **Description:** active_tasks dict in orchestrator to be retired after graph state becomes authoritative.
