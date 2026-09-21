@@ -20,6 +20,11 @@ import tracemalloc
 from datetime import datetime
 from typing import List, Dict, Any
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Configure logging
 logging.basicConfig(
@@ -76,6 +81,7 @@ class ConcurrentExecutionTester:
         try:
             from graph.runtime_adapter import RuntimeGraphAdapter
             from migration.feature_flags import flags
+            from migration.domain_contracts import TaskSource
             
             self.adapter = RuntimeGraphAdapter()
             
@@ -93,8 +99,6 @@ class ConcurrentExecutionTester:
     
     async def execute_single_task(self, task_input: str, task_index: int) -> TaskResult:
         """Execute a single task and return result."""
-        from migration.domain_contracts import TaskSource
-        
         task_request = self.adapter.create_task_request(
             user_input=task_input,
             source=TaskSource.API,
