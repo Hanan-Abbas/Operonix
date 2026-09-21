@@ -21,6 +21,11 @@ import gc
 from datetime import datetime
 from typing import List, Dict, Any
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Configure logging
 logging.basicConfig(
@@ -77,6 +82,7 @@ class MemoryLeakDetectionTester:
         try:
             from graph.runtime_adapter import RuntimeGraphAdapter
             from migration.feature_flags import flags
+            from migration.domain_contracts import TaskSource
             
             self.adapter = RuntimeGraphAdapter()
             
@@ -94,8 +100,6 @@ class MemoryLeakDetectionTester:
     
     async def execute_task(self, task_index: int):
         """Execute a single task."""
-        from migration.domain_contracts import TaskSource
-        
         task_request = self.adapter.create_task_request(
             user_input="check system status",
             source=TaskSource.API,
