@@ -103,12 +103,6 @@
 - Conditional edge added in graph to route to recovery if context validation fails
 - All 38 graph node tests passing
 
-### 2. Legacy Workflow Integration (Phase 1)
-**Status:** ❌ ACTIVE STUB  
-**Migration File:** `PHASE_1_COMPLETION.md`  
-**Location:** `graph/runtime_adapter.py` - `_execute_with_legacy()`  
-**Description:** Stub that returns placeholder result. Actual integration with legacy orchestrator deferred to later phases.  
-**Note:** This may be intentionally deferred to Phase 15 (Legacy Retirement).
 
 ### 3. Retrieve Knowledge Node (Phase 4)
 **Status:** ✅ RESOLVED  
