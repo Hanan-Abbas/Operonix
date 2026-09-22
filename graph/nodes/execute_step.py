@@ -247,6 +247,8 @@ def _execute_with_executor(
         
         execution_time = time.time() - start_time
         
+        execution_time = time.time() - start_time
+        
         # Convert executor result to ExecutionResult
         return ExecutionResult(
             execution_id=execution_id,
