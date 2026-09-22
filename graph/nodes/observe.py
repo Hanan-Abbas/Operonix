@@ -223,53 +223,47 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         try:
             from context.context_validator import context_validator
             
-            # Use the async validate_action_context method for proper validation
-            # Since we're in a sync context, we'll run it in the event loop if available
-            import asyncio
+            # Simplified validation: use synchronous fallback if async not available
+            # This avoids complex event loop management
             try:
-                # Try to get existing event loop
+                # Try to use async validation if available and we have an event loop
+                import asyncio
                 loop = asyncio.get_running_loop()
-                # If loop is running, we can't use asyncio.run
-                # Create a new event loop for this validation
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                try:
-                    validation_result = new_loop.run_until_complete(
+                
+                # If we have a running loop, we can safely use asyncio.run in a thread
+                # This is cleaner than creating/destroying event loops
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        asyncio.run,
                         context_validator.validate_action_context(
                             state.task.user_input,
                             context_data
                         )
                     )
-                    is_valid, reason = validation_result
-                    context_data["validation"] = {
-                        "is_valid": is_valid,
-                        "reason": reason,
-                        "validation_errors": [] if is_valid else [reason],
-                        "validation_warnings": []
-                    }
-                finally:
-                    new_loop.close()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                # No running loop, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    validation_result = loop.run_until_complete(
-                        context_validator.validate_action_context(
-                            state.task.user_input,
-                            context_data
-                        )
-                    )
-                    is_valid, reason = validation_result
-                    context_data["validation"] = {
-                        "is_valid": is_valid,
-                        "reason": reason,
-                        "validation_errors": [] if is_valid else [reason],
-                        "validation_warnings": []
-                    }
-                finally:
-                    loop.close()
+                    validation_result = future.result(timeout=5.0)  # 5 second timeout
+                    
+                is_valid, reason = validation_result
+                context_data["validation"] = {
+                    "is_valid": is_valid,
+                    "reason": reason,
+                    "validation_errors": [] if is_valid else [reason],
+                    "validation_warnings": []
+                }
+                    
+            except (RuntimeError, concurrent.futures.TimeoutError):
+                # No event loop or timeout, use simplified synchronous validation
+                logger.debug("Using simplified synchronous context validation")
+                is_valid, reason = _simplified_context_validation(
+                    state.task.user_input,
+                    context_data
+                )
+                context_data["validation"] = {
+                    "is_valid": is_valid,
+                    "reason": reason,
+                    "validation_errors": [] if is_valid else [reason],
+                    "validation_warnings": []
+                }
             
             # Log validation result
             if context_data["validation"]["is_valid"]:
@@ -278,14 +272,72 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
                 logger.warning(f"Context validation failed: {context_data['validation']['reason']}")
                 
         except ImportError:
-            logger.warning("Could not import ContextValidator")
+            logger.warning("Could not import ContextValidator, using simplified validation")
+            # Fallback to simplified validation
+            is_valid, reason = _simplified_context_validation(
+                state.task.user_input,
+                context_data
+            )
+            context_data["validation"] = {
+                "is_valid": is_valid,
+                "reason": reason,
+                "validation_errors": [] if is_valid else [reason],
+                "validation_warnings": []
+            }
         except Exception as e:
-            logger.error(f"Error validating context: {e}")
+            logger.error(f"Error validating context: {e}, using simplified validation")
+            # Fallback to simplified validation on error
+            is_valid, reason = _simplified_context_validation(
+                state.task.user_input,
+                context_data
+            )
+            context_data["validation"] = {
+                "is_valid": is_valid,
+                "reason": reason,
+                "validation_errors": [] if is_valid else [reason],
+                "validation_warnings": []
+            }
         
     except Exception as e:
         logger.error(f"Error gathering context snapshot: {e}")
     
     return context_data
+
+
+def _simplified_context_validation(user_input: str, context_data: Dict[str, Any]) -> tuple[bool, str]:
+    """Simplified synchronous context validation fallback.
+    
+    This provides basic validation without complex async operations.
+    
+    Args:
+        user_input: User input text
+        context_data: Current context data
+        
+    Returns:
+        Tuple of (is_valid, reason)
+    """
+    # Basic validation checks
+    forbidden_patterns = [r"node_modules", r"\.env$", r"\.git"]
+    import re
+    import os
+    
+    # Check for forbidden patterns in user input
+    for pattern in forbidden_patterns:
+        if re.search(pattern, user_input, re.IGNORECASE):
+            return False, f"Access to restricted pattern: {pattern}"
+    
+    # Check context data for issues
+    if context_data.get("cwd"):
+        cwd = context_data["cwd"]
+        for pattern in forbidden_patterns:
+            if re.search(pattern, cwd, re.IGNORECASE):
+                return False, f"Current directory contains restricted pattern: {pattern}"
+    
+    # Check if we have valid context
+    if not context_data.get("window_title") or context_data.get("window_title") == "Unknown":
+        return False, "No valid window context available"
+    
+    return True, "Context validation passed"
 
 
 def _check_postconditions(state: OperonixState) -> bool:
