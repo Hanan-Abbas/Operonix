@@ -529,6 +529,89 @@ class LifecycleManager:
                 },
                 source="lifecycle_manager"
             )
+    
+    async def _execute_graph_task_with_fallback(self, task_request, original_event) -> None:
+        """Execute a task through the graph workflow with graceful fallback to legacy.
+        
+        This implements the feature flag-based routing with fallback:
+        1. Try to execute through graph
+        2. On failure, fall back to legacy orchestrator
+        3. Publish appropriate events for observability
+        
+        Args:
+            task_request: TaskRequest to execute
+            original_event: Original EventBus event for fallback
+        """
+        try:
+            # Try to execute through graph
+            result = await runtime_adapter.execute_task(task_request, use_graph=True)
+            
+            # Publish graph success event
+            bus.publish(
+                "graph_task_completed",
+                {
+                    "task_id": task_request.task_id,
+                    "success": result.success,
+                    "response": result.response,
+                    "paused": result.paused,
+                    "error": result.error,
+                    "execution_method": "graph"
+                },
+                source="lifecycle_manager"
+            )
+            
+            logger.info(f"Graph task {task_request.task_id} completed: success={result.success}")
+            
+        except Exception as graph_error:
+            logger.warning(f"Graph execution failed for {task_request.task_id}, falling back to legacy: {graph_error}")
+            
+            # Publish graph failure event
+            bus.publish(
+                "graph_task_failed",
+                {
+                    "task_id": task_request.task_id,
+                    "error": str(graph_error),
+                    "fallback_triggered": True
+                },
+                source="lifecycle_manager"
+            )
+            
+            # Fallback to legacy orchestrator
+            try:
+                # Re-emit the original event to let legacy orchestrator handle it
+                await bus.emit(
+                    "user_input_received",
+                    original_event.data,
+                    source="lifecycle_manager_fallback"
+                )
+                
+                logger.info(f"Task {task_request.task_id} fell back to legacy orchestrator")
+                
+                # Publish fallback success event
+                bus.publish(
+                    "legacy_task_completed",
+                    {
+                        "task_id": task_request.task_id,
+                        "fallback_reason": str(graph_error),
+                        "execution_method": "legacy"
+                    },
+                    source="lifecycle_manager"
+                )
+                
+            except Exception as fallback_error:
+                logger.error(f"Legacy fallback also failed for {task_request.task_id}: {fallback_error}")
+                
+                # Publish complete failure event
+                bus.publish(
+                    "task_failed",
+                    {
+                        "task_id": task_request.task_id,
+                        "graph_error": str(graph_error),
+                        "legacy_error": str(fallback_error),
+                        "execution_method": "none"
+                    },
+                    source="lifecycle_manager"
+                )
 
     def _register_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
         def force_exit_handler() -> None:
