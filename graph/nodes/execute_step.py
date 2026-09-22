@@ -199,12 +199,11 @@ def _execute_with_executor(
         # Convert step to executor format
         step_dict = _convert_step_to_executor_format(step)
         
-        # Run async executor - handle existing event loop
+        # Run async executor - simplified async handling
+        # Use a clean async execution in a thread to avoid event loop conflicts
+        import concurrent.futures
         try:
-            loop = asyncio.get_running_loop()
-            # Event loop is already running, create a task
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor_pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor_pool:
                 future = executor_pool.submit(
                     asyncio.run,
                     executor._execute_with_decision(
@@ -215,21 +214,36 @@ def _execute_with_executor(
                         decision=executor_decision
                     )
                 )
-                success, result, method_used = future.result()
-        except RuntimeError:
-            # No event loop running, use run_until_complete
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            success, result, method_used = loop.run_until_complete(
-                executor._execute_with_decision(
-                    task_id=task_id,
-                    step_index=0,
-                    step=step_dict,
-                    context=context or {},
-                    decision=executor_decision
-                )
+                # Add timeout to prevent hanging
+                success, result, method_used = future.result(timeout=60.0)  # 60 second timeout
+        except concurrent.futures.TimeoutError:
+            logger.error(f"Executor execution timed out for task {task_id}")
+            execution_time = time.time() - start_time
+            return ExecutionResult(
+                execution_id=execution_id,
+                step_id=step.step_id if step else "unknown",
+                success=False,
+                method_used="timeout",
+                execution_status=TaskStatus.FAILED,
+                result_data={
+                    "error": "Executor execution timed out",
+                    "execution_time": execution_time
+                }
             )
-            loop.close()
+        except Exception as exec_error:
+            logger.error(f"Executor execution error: {exec_error}")
+            execution_time = time.time() - start_time
+            return ExecutionResult(
+                execution_id=execution_id,
+                step_id=step.step_id if step else "unknown",
+                success=False,
+                method_used="executor_error",
+                execution_status=TaskStatus.FAILED,
+                result_data={
+                    "error": str(exec_error),
+                    "execution_time": execution_time
+                }
+            )
         
         execution_time = time.time() - start_time
         
