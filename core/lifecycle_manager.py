@@ -102,6 +102,7 @@ from voice.stt import SpeechToText
 from plugins import start_plugin_system
 from graph.resume_manager import get_resume_manager
 from graph.timeout_manager import get_timeout_manager
+from graph.runtime_adapter import runtime_adapter
 
 logger = logging.getLogger("LifecycleManager")
 
@@ -400,6 +401,25 @@ class LifecycleManager:
         except Exception as exc:
             logger.error("Failed to initialize TimeoutManager: %s", exc)
 
+        # Initialize RuntimeAdapter for LangGraph integration
+        try:
+            # RuntimeAdapter is already initialized as a singleton
+            # Just verify it's available and log status
+            graph_status = runtime_adapter.get_graph_status()
+            logger.info("🔄 RuntimeAdapter: Initialized with graph status:")
+            logger.info(f"  - Graph Enabled: {graph_status['graph_enabled']}")
+            logger.info(f"  - Graph Available: {graph_status['graph_available']}")
+            logger.info(f"  - Migration Phase: {graph_status['migration_phase']}")
+            
+            if graph_status['graph_enabled'] and graph_status['graph_available']:
+                logger.info("✅ LangGraph workflow is ACTIVE and will handle tasks")
+                # Set up EventBus bridge for graph task routing
+                self._setup_graph_task_routing()
+            else:
+                logger.info("ℹ️ LangGraph workflow is DISABLED - using legacy orchestrator")
+        except Exception as exc:
+            logger.error("Failed to initialize RuntimeAdapter: %s", exc)
+
         logger.info("✨ All modules synchronised and listening to the Event Bus.")
         self._register_signal_handlers(loop)
 
@@ -408,6 +428,103 @@ class LifecycleManager:
             {"timestamp": datetime.now().isoformat()},
             source="lifecycle",
         )
+
+    def _setup_graph_task_routing(self) -> None:
+        """Set up EventBus bridge for routing tasks to LangGraph workflow.
+        
+        This subscribes to user_input_received events and routes them to the
+        RuntimeAdapter when USE_LANGGRAPH is enabled, allowing the graph to
+        handle tasks instead of the legacy orchestrator.
+        """
+        from migration.feature_flags import flags
+        
+        if not flags.USE_LANGGRAPH:
+            logger.info("Graph task routing disabled by feature flag")
+            return
+        
+        def handle_graph_task(event) -> None:
+            """Handle user input by routing to graph workflow."""
+            try:
+                user_input = event.data.get("text", "").strip()
+                source = event.data.get("source", "unknown")
+                
+                if not user_input:
+                    return
+                
+                # Convert source to TaskSource
+                from migration.domain_contracts import TaskSource
+                source_map = {
+                    "voice": TaskSource.VOICE,
+                    "panel": TaskSource.PANEL,
+                    "api": TaskSource.API,
+                    "cli": TaskSource.CLI,
+                    "unknown": TaskSource.API
+                }
+                task_source = source_map.get(source.lower(), TaskSource.API)
+                
+                # Create task request
+                task_request = runtime_adapter.create_task_request(
+                    user_input=user_input,
+                    source=task_source,
+                    metadata={
+                        "original_event": event.data,
+                        "graph_routed": True
+                    }
+                )
+                
+                # Execute task through graph (async, so create task)
+                import asyncio
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(self._execute_graph_task(task_request))
+                
+                logger.info(f"Task {task_request.task_id} routed to LangGraph workflow")
+                
+            except Exception as e:
+                logger.error(f"Error routing task to graph: {e}")
+                # On graph routing failure, let legacy orchestrator handle it
+                # by not consuming the event
+        
+        # Subscribe to user_input_received events
+        # We subscribe with high priority to intercept before legacy orchestrator
+        bus.subscribe("user_input_received", handle_graph_task, priority=10)
+        logger.info("🔗 EventBus bridge: user_input_received → LangGraph workflow")
+    
+    async def _execute_graph_task(self, task_request) -> None:
+        """Execute a task through the graph workflow asynchronously.
+        
+        Args:
+            task_request: TaskRequest to execute
+        """
+        try:
+            # Execute through graph
+            result = await runtime_adapter.execute_task(task_request, use_graph=True)
+            
+            # Publish result to EventBus for observability
+            bus.publish(
+                "graph_task_completed",
+                {
+                    "task_id": task_request.task_id,
+                    "success": result.success,
+                    "response": result.response,
+                    "paused": result.paused,
+                    "error": result.error
+                },
+                source="lifecycle_manager"
+            )
+            
+            logger.info(f"Graph task {task_request.task_id} completed: success={result.success}")
+            
+        except Exception as e:
+            logger.error(f"Graph task execution failed for {task_request.task_id}: {e}")
+            # Publish failure event
+            bus.publish(
+                "graph_task_failed",
+                {
+                    "task_id": task_request.task_id,
+                    "error": str(e)
+                },
+                source="lifecycle_manager"
+            )
 
     def _register_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
         def force_exit_handler() -> None:
