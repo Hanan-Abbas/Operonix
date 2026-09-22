@@ -109,6 +109,27 @@ def _mode_manager():
         return None
 
 
+def _get_graph_status() -> Dict[str, Any]:
+    """Get LangGraph workflow status for monitoring."""
+    try:
+        from graph.runtime_adapter import runtime_adapter
+        from migration.feature_flags import flags
+        
+        return {
+            "status": "active" if runtime_adapter.is_graph_enabled() else "disabled",
+            "available": runtime_adapter.is_graph_enabled(),
+            "migration_phase": flags.get_migration_phase(),
+            "feature_flags": flags.get_all_flags(),
+        }
+    except Exception as exc:
+        logger.debug("Could not get graph status: %s", exc)
+        return {
+            "status": "error",
+            "error": str(exc),
+            "available": False
+        }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints — Info
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,27 +192,6 @@ async def system_status() -> Dict[str, Any]:
         },
         "graph": graph_status,
     }
-
-
-def _get_graph_status() -> Dict[str, Any]:
-    """Get LangGraph workflow status for monitoring."""
-    try:
-        from graph.runtime_adapter import runtime_adapter
-        from migration.feature_flags import flags
-        
-        return {
-            "status": "active" if runtime_adapter.is_graph_enabled() else "disabled",
-            "available": runtime_adapter.is_graph_enabled(),
-            "migration_phase": flags.get_migration_phase(),
-            "feature_flags": flags.get_all_flags(),
-        }
-    except Exception as exc:
-        logger.debug("Could not get graph status: %s", exc)
-        return {
-            "status": "error",
-            "error": str(exc),
-            "available": False
-        }
 
 
 @router.get("/metrics")
