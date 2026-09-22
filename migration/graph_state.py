@@ -14,7 +14,7 @@ Per migration plan §3:
 from __future__ import annotations
 
 from typing import Any, Optional, Dict, List
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ConfigDict
 
 from migration.domain_contracts import (
