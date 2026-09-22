@@ -78,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(plugins_router)
     app.include_router(system_router)
     app.include_router(confirmation_router)
+    app.include_router(tasks_router)
 
     # ── WebSocket ─────────────────────────────────────────────────────────
     @app.websocket("/ws/dashboard")
