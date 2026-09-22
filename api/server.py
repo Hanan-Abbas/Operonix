@@ -33,6 +33,7 @@ from api.routes.logs    import router as logs_router
 from api.routes.plugins import router as plugins_router
 from api.routes.system  import router as system_router
 from api.routes.confirmation import router as confirmation_router
+from api.routes.tasks import router as tasks_router
 
 # ── WebSocket manager ────────────────────────────────────────────────────────
 from api.websocket import manager as ws_manager, websocket_handler
