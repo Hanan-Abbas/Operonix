@@ -153,6 +153,9 @@ async def system_status() -> Dict[str, Any]:
 
     from api.routes.health import system_state
 
+    # Add graph status if available
+    graph_status = _get_graph_status()
+
     return {
         "timestamp":       datetime.now(timezone.utc).isoformat(),
         "overall":         "healthy" if system_state.event_bus_running else "degraded",
@@ -164,8 +167,31 @@ async def system_status() -> Dict[str, Any]:
             "event_bus":    "running" if system_state.event_bus_running    else "down",
             "orchestrator": "running" if system_state.orchestrator_running else "down",
             "executor":     "running" if system_state.executor_running     else "down",
+            "graph":        graph_status.get("status", "not_available"),
         },
+        "graph": graph_status,
     }
+
+
+def _get_graph_status() -> Dict[str, Any]:
+    """Get LangGraph workflow status for monitoring."""
+    try:
+        from graph.runtime_adapter import runtime_adapter
+        from migration.feature_flags import flags
+        
+        return {
+            "status": "active" if runtime_adapter.is_graph_enabled() else "disabled",
+            "available": runtime_adapter.is_graph_enabled(),
+            "migration_phase": flags.get_migration_phase(),
+            "feature_flags": flags.get_all_flags(),
+        }
+    except Exception as exc:
+        logger.debug("Could not get graph status: %s", exc)
+        return {
+            "status": "error",
+            "error": str(exc),
+            "available": False
+        }
 
 
 @router.get("/metrics")
