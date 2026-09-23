@@ -780,6 +780,46 @@ class PanelController:
         except Exception as exc:
             log.error("panel_controller: failed to publish mode switch — %s", exc)
 
+    def _on_interactive_prompt_responded(self, response: str) -> None:
+        """
+        User responded to an interactive prompt (y/n or free-text) in the panel.
+
+        Publishes user_response_received on the EventBus so the waiting
+        ProcessBridge can resume with the user's response.
+
+        This slot runs on the Qt thread (connected to a renderer signal) so
+        we use bus.publish() which is thread-safe.
+        """
+        pending = self._pending_interactive
+        if not pending:
+            log.warning(
+                "panel_controller: interactive_prompt_responded('%s') but no pending prompt — ignored",
+                response,
+            )
+            return
+
+        task_id, prompt_type, command = pending
+        self._pending_interactive = None
+
+        log.info(
+            "panel_controller: user responded '%s' to interactive prompt for task [%s]",
+            response,
+            task_id,
+        )
+
+        try:
+            self._bus.publish(
+                "user_response_received",
+                {
+                    "task_id": task_id,
+                    "response": response,
+                    "prompt_type": prompt_type,
+                    "command": command,
+                },
+            )
+        except Exception as exc:
+            log.error("panel_controller: failed to publish user_response_received — %s", exc)
+
     def _on_confirmation_respond(self, choice: str) -> None:
         """
         User clicked Allow or Deny in the panel confirmation banner.
