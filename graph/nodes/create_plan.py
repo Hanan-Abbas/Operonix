@@ -223,29 +223,25 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
             {"task_id": state.task.task_id, "user_input": state.task.user_input}
         )
         
-        # Use existing intent parser and capability mapper for command generation
+        # Use existing intent parser for command generation
         # This integrates with the existing Operonix system instead of duplicating logic
         try:
             from brain.intent_parser import intent_parser
-            from brain.capability_mapper import capability_mapper
             
             # Let the existing system resolve the intent to capabilities and commands
             # This avoids duplicating logic that already exists in the tools/capabilities system
-            resolved_intent = intent_parser.resolve_intent(
-                state.task.user_input,
-                context=state.context if isinstance(state.context, dict) else {}
-            )
+            parsed_intent = intent_parser.parse(state.task.user_input)
             
-            if resolved_intent:
+            if parsed_intent and parsed_intent.get("intent"):
                 # Use the existing system's resolution
                 step = PlanStep(
                     step_id=str(uuid.uuid4()),
                     action="execute",
                     parameters={
                         "user_input": state.task.user_input,
-                        "intent": resolved_intent.get("intent"),
-                        "parameters": resolved_intent.get("parameters", {}),
-                        "capability": resolved_intent.get("capability")
+                        "intent": parsed_intent.get("intent"),
+                        "parameters": parsed_intent.get("parameters", {}),
+                        "profile_hint": parsed_intent.get("profile_hint")
                     },
                     objective=f"Execute intent: {state.task.user_input}",
                     idempotency=PlanStepIdempotency.CONDITIONAL,
@@ -268,7 +264,7 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
                     reversibility=True
                 )
         except ImportError:
-            logger.warning("Could not import intent_parser/capability_mapper, using fallback")
+            logger.warning("Could not import intent_parser, using fallback")
             # Fallback to simple step without integration
             step = PlanStep(
                 step_id=str(uuid.uuid4()),
