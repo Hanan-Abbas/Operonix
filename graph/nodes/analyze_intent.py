@@ -121,7 +121,16 @@ Respond in JSON format with keys: intent_name, confidence, parameters."""
         }
         
         import asyncio
-        result = asyncio.run(model_service.generate_structured_output(messages, schema))
+        try:
+            # Try to get the current running loop
+            loop = asyncio.get_running_loop()
+            # If we have a running loop, we can't use asyncio.run()
+            # Use synchronous fallback instead
+            logger.warning("Running in async context, using synchronous fallback for intent analysis")
+            return _analyze_intent_placeholder(state)
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            result = asyncio.run(model_service.generate_structured_output(messages, schema))
         
         # Create IntentResult from LangChain response
         intent_result = IntentResult(
