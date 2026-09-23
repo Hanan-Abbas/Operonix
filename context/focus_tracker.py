@@ -35,6 +35,50 @@ class FocusTracker:
                 "actual_window": current_title
             }, source="focus_tracker")
 
+    def get_current_focus(self):
+        """Synchronous wrapper for getting current focus information.
+        
+        Returns a dict with focus information for compatibility with observe.py.
+        This is a synchronous version that can be called from non-async contexts.
+        """
+        try:
+            import asyncio
+            # Try to get the current running loop
+            try:
+                loop = asyncio.get_running_loop()
+                # If we have a running loop, we need to run the async method
+                # This is a simple fallback - in production you'd want proper async handling
+                title = "Unknown"
+            except RuntimeError:
+                # No running loop, use synchronous approach
+                title = self._get_sync_foreground_title()
+            
+            return {
+                "element": title,
+                "window": title,
+                "timestamp": None
+            }
+        except Exception as e:
+            return {
+                "element": "Error",
+                "window": "Error",
+                "timestamp": None
+            }
+
+    def _get_sync_foreground_title(self):
+        """Synchronous foreground window detection."""
+        try:
+            if self.os_name == "Windows":
+                import win32gui
+                return win32gui.GetWindowText(win32gui.GetForegroundWindow())
+            elif self.os_name == "Linux":
+                import subprocess
+                return subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"]).decode().strip()
+            # MacOS logic would go here
+            return "Unknown"
+        except Exception:
+            return "Error detection"
+
     async def _get_current_foreground_title(self):
         """OS-specific foreground window detection."""
         try:
