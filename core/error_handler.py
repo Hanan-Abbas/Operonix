@@ -2,8 +2,14 @@ import inspect
 import logging
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 
 
 class AIOSException(Exception):
@@ -14,7 +20,7 @@ class AIOSException(Exception):
         self.message = message
         self.component = component
         self.details = details or {}
-        self.timestamp = datetime.now(UTC)().isoformat()
+        self.timestamp = datetime.now(UTC).isoformat()
 
 
 class ErrorHandler:
@@ -54,7 +60,7 @@ class ErrorHandler:
         func_name = caller.f_code.co_name if caller else "unknown"
 
         error_data = {
-            "timestamp": datetime.now(UTC)().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "component": component,
             "function": func_name,
             "error_type": error_type,
