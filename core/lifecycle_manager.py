@@ -71,6 +71,9 @@ import sys
 from datetime import datetime
 from typing import Any                         # ← fixes NameError in setup_global_exception_hooks
 
+# Import UTC compatibility
+from core.datetime_compat import UTC
+
 from api.server import start_server
 from brain.capability_mapper import capability_mapper
 from brain.intent_parser import intent_parser
@@ -489,8 +492,8 @@ class LifecycleManager:
                 # by not consuming the event
         
         # Subscribe to user_input_received events
-        # We subscribe with high priority to intercept before legacy orchestrator
-        bus.subscribe("user_input_received", handle_graph_task, priority=10)
+        # We subscribe to intercept before legacy orchestrator
+        bus.subscribe("user_input_received", handle_graph_task)
         logger.info("🔗 EventBus bridge: user_input_received → LangGraph workflow (with fallback)")
     
     async def _execute_graph_task(self, task_request) -> None:
