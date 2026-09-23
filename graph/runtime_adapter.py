@@ -19,6 +19,12 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
+
 from migration.graph_state import OperonixState
 from migration.domain_contracts import TaskRequest, TaskSource, FinalResult
 from migration.feature_flags import flags
