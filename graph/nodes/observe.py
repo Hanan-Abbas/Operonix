@@ -184,18 +184,18 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         
         # Phase 11: Try to get app classification from AppClassifier
         try:
-            from context.app_classifier import app_classifier
+            from context.app_classifier import classifier
             
             if context_data.get("window_title"):
-                classification = app_classifier.classify_app(
+                classification = classifier.classify_app(
                     context_data["window_title"],
                     context_data.get("app_name")
                 )
                 if classification:
-                    context_data["app_type"] = classification.get("app_type", context_data["app_type"])
-                    context_data["app_category"] = classification.get("category")
+                    context_data["app_type"] = classification.category if hasattr(classification, 'category') else context_data["app_type"]
+                    context_data["app_category"] = classification.category if hasattr(classification, 'category') else None
                     # Convert string confidence to float for Pydantic validation
-                    app_confidence = classification.get("confidence", 0.0)
+                    app_confidence = classification.confidence if hasattr(classification, 'confidence') else 0.0
                     context_data["app_confidence"] = _convert_confidence_to_float(app_confidence)
                     
                     logger.debug(f"App classification: {context_data['app_type']}")
