@@ -428,19 +428,16 @@ def _execute_placeholder(
         result = f"Placeholder execution for: {command}"
         success = True
     
-    execution_time = time.time() - start_time
-    
-    method_type = routing_decision.selected_candidate.method_type if routing_decision else "unknown"
-    
     return ExecutionResult(
         execution_id=execution_id,
-        step_id=step.step_id,
-        success=True,
+        step_id=step.step_id if step else "unknown",
+        success=success,
         method_used=method_type,
-        execution_status=TaskStatus.COMPLETED,
+        execution_status=TaskStatus.COMPLETED if success else TaskStatus.FAILED,
         result_data={
-            "note": "Placeholder execution (Executor unavailable)",
-            "execution_time": execution_time
+            "result": result,
+            "execution_time": execution_time,
+            "command": command
         }
     )
 
