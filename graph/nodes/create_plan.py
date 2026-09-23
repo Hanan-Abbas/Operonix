@@ -122,7 +122,15 @@ def _is_complex_request(user_input: str) -> bool:
             import asyncio
             
             if model_service.is_available():
-                return asyncio.run(_detect_complexity_with_langchain(user_input))
+                try:
+                    # Try to get the current running loop
+                    loop = asyncio.get_running_loop()
+                    # If we have a running loop, we can't use asyncio.run()
+                    logger.warning("Running in async context, using synchronous fallback for complexity detection")
+                    # Fall through to heuristic below
+                except RuntimeError:
+                    # No running loop, safe to use asyncio.run()
+                    return asyncio.run(_detect_complexity_with_langchain(user_input))
         except Exception as e:
             logger.warning(f"LangChain complexity detection failed: {e}, falling back to heuristic")
     
