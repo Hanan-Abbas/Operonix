@@ -187,13 +187,16 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
             from context.app_classifier import classifier
             
             if context_data.get("window_title"):
-                classification = classifier.classify_app(
-                    context_data["window_title"],
-                    context_data.get("app_name")
-                )
-                if classification:
-                    context_data["app_type"] = classification.category if hasattr(classification, 'category') else context_data["app_type"]
-                    context_data["app_category"] = classification.category if hasattr(classification, 'category') else None
+                try:
+                    # Try synchronous classify first
+                    classification = classifier.classify(context_data["window_title"])
+                except Exception:
+                    # If sync fails, skip classification for now
+                    classification = None
+                    
+                if classification and hasattr(classification, 'category'):
+                    context_data["app_type"] = classification.category
+                    context_data["app_category"] = classification.category
                     # Convert string confidence to float for Pydantic validation
                     app_confidence = classification.confidence if hasattr(classification, 'confidence') else 0.0
                     context_data["app_confidence"] = _convert_confidence_to_float(app_confidence)
