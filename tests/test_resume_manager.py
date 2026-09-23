@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 import asyncio
 from unittest.mock import Mock, MagicMock, patch
-from datetime import UTC
+from datetime import timezone
 
 from migration.domain_contracts import HumanInterventionType, HumanIntervention, TaskRequest, TaskSource, CheckpointState
 from migration.graph_state import OperonixState
