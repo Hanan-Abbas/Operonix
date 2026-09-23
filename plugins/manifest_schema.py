@@ -12,7 +12,15 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Compatibility for Python < 3.11
+
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
+
 from enum import Enum
 from typing import Any
 
@@ -80,8 +88,8 @@ class PluginManifest:
     last_reviewed: str = ""
 
     # Timestamps
-    created_at: str = field(default_factory=lambda: datetime.now(UTC)().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now(UTC)().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     # Services this plugin is allowed to use (from capability registry)
     allowed_services: list[str] = field(default_factory=list)
@@ -126,7 +134,7 @@ class PluginManifest:
 
     def save(self, plugin_dir: str):
         """Write manifest.json into the plugin's directory."""
-        self.updated_at = datetime.now(UTC)().isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
         path = os.path.join(plugin_dir, "manifest.json")
         os.makedirs(plugin_dir, exist_ok=True)
         with open(path, "w") as f:
