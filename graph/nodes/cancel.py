@@ -76,7 +76,7 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
     
     # Create final result indicating cancellation
     from migration.domain_contracts import FinalResult
-    from datetime import UTC, datetime
+    from datetime import timezone, datetime
     
     final_result = FinalResult(
         success=False,
