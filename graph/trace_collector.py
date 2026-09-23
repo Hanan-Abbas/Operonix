@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 from migration.domain_contracts import TraceEvent, TraceEventType, ExecutionTrace
 from migration.graph_state import OperonixState
