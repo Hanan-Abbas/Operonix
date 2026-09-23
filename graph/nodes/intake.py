@@ -35,8 +35,11 @@ def intake_node(state: OperonixState) -> Dict[str, Any]:
     """
     logger.info(f"INTAKE: Processing task {state.task.task_id}")
     
-    # Phase 9: Collect trace event for request
+    # Phase 9: Initialize trace collection
     trace_collector = get_trace_collector()
+    trace_collector.start_trace(state.task.task_id)
+    
+    # Collect trace event for request
     trace_collector.collect_request(
         task_id=state.task.task_id,
         user_input=state.task.user_input,
