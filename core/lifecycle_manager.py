@@ -406,6 +406,7 @@ class LifecycleManager:
 
         # Initialize RuntimeAdapter for LangGraph integration
         try:
+            logger.info("🔄 Initializing RuntimeAdapter for LangGraph integration...")
             # RuntimeAdapter is already initialized as a singleton
             # Just verify it's available and log status
             graph_status = runtime_adapter.get_graph_status()
@@ -422,6 +423,8 @@ class LifecycleManager:
                 logger.info("ℹ️ LangGraph workflow is DISABLED - using legacy orchestrator")
         except Exception as exc:
             logger.error("Failed to initialize RuntimeAdapter: %s", exc)
+            import traceback
+            logger.error(traceback.format_exc())
 
         logger.info("✨ All modules synchronised and listening to the Event Bus.")
         self._register_signal_handlers(loop)
