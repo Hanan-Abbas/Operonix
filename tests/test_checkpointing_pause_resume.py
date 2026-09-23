@@ -11,7 +11,7 @@ import pytest
 import tempfile
 import shutil
 from pathlib import Path
-from datetime import UTC
+from datetime import timezone
 
 
 # ─── CHECKPOINTING SERVICE TESTS ─────────────────────────────────────────────
