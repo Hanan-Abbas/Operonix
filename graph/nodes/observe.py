@@ -111,6 +111,22 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
     return {"context": state.context}
 
 
+def _convert_confidence_to_float(confidence_str: str) -> float:
+    """Convert string confidence values to float for Pydantic validation.
+    
+    Args:
+        confidence_str: String confidence value ("high", "medium", "low")
+        
+    Returns:
+        Float confidence value (0.0-1.0)
+    """
+    confidence_map = {
+        "high": 0.9,
+        "medium": 0.6,
+        "low": 0.3
+    }
+    return confidence_map.get(str(confidence_str).lower(), 0.5)
+
 def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
     """Gather context snapshot using actual context services.
     
