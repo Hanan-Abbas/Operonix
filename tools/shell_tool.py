@@ -113,7 +113,10 @@ class ShellTool:
 
         try:
             if action in ("execute", "run_command", "git_op",
-                          "check_status", "execute_script", "navigate"):
+                          "check_status", "execute_script", "navigate", "execute_intent"):
+                # Map execute_intent to execute for compatibility
+                if action == "execute_intent":
+                    action = "execute"
                 return await self._dispatch_with_profile(action, args)
 
             if action == "create_dir":
