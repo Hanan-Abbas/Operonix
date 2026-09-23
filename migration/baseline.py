@@ -14,7 +14,13 @@ import subprocess
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import datetime, UTC
+from datetime import datetime, 
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 
 logger = logging.getLogger("Baseline")
 
