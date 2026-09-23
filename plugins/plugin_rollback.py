@@ -19,6 +19,13 @@ from pathlib import Path
 from debugging.rollback_manager import rollback_manager
 from plugins.manifest_schema import PluginManifest, PluginStatus
 
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
+
 logger = logging.getLogger("PluginRollback")
 
 
@@ -52,7 +59,7 @@ class PluginRollbackManager:
             "plugin_name": plugin_name,
             "plugin_backup": "",
             "manifest_backup": "",
-            "timestamp": datetime.now(UTC)().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         if os.path.exists(plugin_file):
@@ -131,7 +138,7 @@ class PluginRollbackManager:
             manifest.previous_versions.append(old_version)
 
         manifest.changelog.append(
-            f"[{datetime.now(UTC)().strftime('%Y-%m-%d')}] v{old_version} → v{new_version}: {reason}"
+            f"[{datetime.now(UTC).strftime('%Y-%m-%d')}] v{old_version} → v{new_version}: {reason}"
         )
         manifest.version = new_version
         manifest.save(plugin_dir)
