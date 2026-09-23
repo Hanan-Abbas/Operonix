@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
-from datetime import UTC
+from datetime import timezone
 
 from migration.domain_contracts import HumanInterventionType
 from migration.graph_state import OperonixState
