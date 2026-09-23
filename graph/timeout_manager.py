@@ -11,9 +11,15 @@ import logging
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 
 from migration.domain_contracts import TimeoutConfig, CancellationRequest, CancellationReason
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 
 logger = logging.getLogger("Graph.TimeoutManager")
 
