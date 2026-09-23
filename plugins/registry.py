@@ -45,7 +45,16 @@ from datetime import datetime
 from typing import Any
 
 from core.event_bus import bus
-from plugins.manifest_schema import PluginManifest, PluginStatus, BasePlugin
+from plugins.manifest_schema import PluginManifest
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
+
+from plugins.manifest_schema import PluginStatus, BasePlugin
 
 logger = logging.getLogger("PluginRegistry")
 
@@ -62,7 +71,7 @@ class PluginEntry:
         self.manifest   = manifest
         self.instance   = instance
         self.plugin_dir = plugin_dir
-        self.loaded_at  = datetime.now(UTC)().isoformat()
+        self.loaded_at  = datetime.now(UTC).isoformat()
 
     @property
     def name(self) -> str:
@@ -293,7 +302,7 @@ class PluginRegistry:
                 return False
             entry.manifest.status  = status
             entry.manifest.trusted = (status == PluginStatus.TRUSTED)
-            entry.manifest.last_reviewed = datetime.now(UTC)().isoformat()
+            entry.manifest.last_reviewed = datetime.now(UTC).isoformat()
             if entry.plugin_dir or plugin_dir:
                 entry.manifest.save(entry.plugin_dir or plugin_dir)
 
@@ -328,7 +337,7 @@ class PluginRegistry:
                 entry.manifest.total_successes += 1
             else:
                 entry.manifest.total_failures += 1
-            entry.manifest.last_run_at = datetime.now(UTC)().isoformat()
+            entry.manifest.last_run_at = datetime.now(UTC).isoformat()
             if entry.plugin_dir:
                 entry.manifest.save(entry.plugin_dir)
 
