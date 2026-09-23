@@ -132,6 +132,44 @@ class VectorStore:
             self.logger.error(f"Error querying vector store: {e}")
             return []
 
+    def search(self, query: str, limit: int = 3):
+        """Search method for graph integration compatibility.
+        
+        Args:
+            query: Search query text
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of matching documents with metadata
+        """
+        if not self.collection:
+            self.logger.warning("Search attempted before Vector Store started.")
+            return []
+
+        try:
+            results = self.collection.query(
+                query_texts=[query], n_results=limit
+            )
+
+            documents = []
+            if results and "documents" in results and results["documents"]:
+                for i, doc_list in enumerate(results["documents"]):
+                    for j, doc in enumerate(doc_list):
+                        doc_obj = {
+                            "content": doc,
+                            "id": f"doc_{i}_{j}",
+                            "score": 1.0 - (results["distances"][i][j] if results.get("distances") else 0.0)
+                        }
+                        if results.get("metadatas") and results["metadatas"][i] and results["metadatas"][i][j]:
+                            doc_obj["metadata"] = results["metadatas"][i][j]
+                        documents.append(doc_obj)
+
+            return documents
+
+        except Exception as e:
+            self.logger.error(f"Error searching vector store: {e}")
+            return []
+
     # -----------------------------------------------------------------
     # 🔄 NEW METHOD 1: Teach the DB what your official capabilities are
     # -----------------------------------------------------------------
