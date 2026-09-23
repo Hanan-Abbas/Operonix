@@ -13,6 +13,12 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional, Literal, Dict, List
 from datetime import datetime, timezone
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
