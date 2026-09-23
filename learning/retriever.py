@@ -104,6 +104,46 @@ class Retriever:
                 self.logger.error("Failed to load pattern store: %s", exc)
         return {}
 
+    def retrieve_patterns(self, intent: str, context: dict = None, query: str = None) -> list:
+        """Retrieve patterns for graph integration compatibility.
+        
+        Args:
+            intent: Intent to search for
+            context: Optional context information
+            query: Optional query string
+            
+        Returns:
+            List of matching patterns
+        """
+        patterns = self._load_patterns()
+        
+        if intent not in patterns or not patterns[intent]:
+            self.logger.debug("No saved patterns found for intent: '%s'", intent)
+            return []
+        
+        # Return all patterns for the intent, sorted by usage count
+        matched_patterns = []
+        for pattern in patterns[intent]:
+            if isinstance(pattern, dict):
+                pattern_obj = {
+                    "steps": pattern.get("steps", pattern),
+                    "usage_count": pattern.get("usage_count", 1),
+                    "metadata": pattern
+                }
+            else:
+                pattern_obj = {
+                    "steps": pattern,
+                    "usage_count": 1,
+                    "metadata": {}
+                }
+            matched_patterns.append(pattern_obj)
+        
+        # Sort by usage count (descending)
+        matched_patterns.sort(key=lambda p: p.get("usage_count", 1), reverse=True)
+        
+        self.logger.info(f"Retrieved {len(matched_patterns)} patterns for intent '{intent}'")
+        return matched_patterns
+
 
 # Global instance
 retriever = Retriever()
