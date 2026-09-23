@@ -169,7 +169,9 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
                 context_data["app_type"] = snapshot.get("app_type", "unknown")
                 context_data["cwd"] = snapshot.get("cwd")
                 context_data["window_pid"] = snapshot.get("window_pid")
-                context_data["confidence"] = snapshot.get("confidence", 0.0)
+                # Convert string confidence to float for Pydantic validation
+                confidence_value = snapshot.get("confidence", 0.0)
+                context_data["confidence"] = _convert_confidence_to_float(confidence_value)
                 context_data["sub_context"] = snapshot.get("sub_context")
                 
                 logger.info(f"Context snapshot from WindowDetector: {context_data['window_title']}")
@@ -192,7 +194,9 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
                 if classification:
                     context_data["app_type"] = classification.get("app_type", context_data["app_type"])
                     context_data["app_category"] = classification.get("category")
-                    context_data["app_confidence"] = classification.get("confidence", 0.0)
+                    # Convert string confidence to float for Pydantic validation
+                    app_confidence = classification.get("confidence", 0.0)
+                    context_data["app_confidence"] = _convert_confidence_to_float(app_confidence)
                     
                     logger.debug(f"App classification: {context_data['app_type']}")
         except ImportError:
