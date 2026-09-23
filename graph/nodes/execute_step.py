@@ -386,11 +386,11 @@ def _execute_placeholder(
     context: Dict[str, Any] = None,
     execution_id: str = "placeholder"
 ) -> ExecutionResult:
-    """Execute with placeholder logic - delegate to existing executor system.
+    """Execute with placeholder logic - delegate to existing orchestrator system.
     
     Instead of duplicating execution logic, this delegates to the existing
-    Operonix executor system which already knows how to handle intents,
-    commands, and tool routing.
+    Operonix orchestrator system which already knows how to handle intents,
+    commands, and tool routing through the proper flow.
     
     Args:
         step: Current plan step
@@ -408,26 +408,37 @@ def _execute_placeholder(
     step_parameters = getattr(step, 'parameters', {}) or {}
     user_input = step_parameters.get("user_input", "")
     intent = step_parameters.get("intent", "unknown")
+    parameters = step_parameters.get("parameters", {})
     
-    # Delegate to existing executor system instead of duplicating logic
+    # Delegate to existing orchestrator system instead of duplicating logic
     try:
         from core.event_bus import bus
         
-        # Publish task creation event to trigger existing executor flow
+        # Use the proper event that triggers the full orchestrator flow
+        # This includes IntentParser → CapabilityMapper → DecisionEngine → Executor
         task_id = execution_id
-        bus.publish("text_query_received", {
+        
+        # Build the proper event payload that the orchestrator expects
+        event_payload = {
             "text": user_input,
             "source": "graph",
             "task_id": task_id
-        }, source="graph_execute")
+        }
+        
+        # If we have parsed intent parameters, include them for the existing system
+        if intent and parameters:
+            event_payload["intent"] = intent
+            event_payload["parameters"] = parameters
+        
+        bus.publish("text_query_received", event_payload, source="graph_execute")
         
         # Wait for execution to complete (simplified for now)
         # In a full integration, we'd wait for the execution_complete event
-        time.sleep(0.5)  # Give executor time to process
+        time.sleep(1.0)  # Give orchestrator time to process
         
         # For now, return a success result indicating delegation
         success = True
-        result = f"Delegated to existing executor system for: {user_input}"
+        result = f"Delegated to existing orchestrator system for: {user_input}"
         
     except ImportError:
         logger.warning("Could not import EventBus, using simple placeholder")
@@ -436,9 +447,9 @@ def _execute_placeholder(
         success = True
         result = f"Placeholder execution for: {user_input} (intent: {intent})"
     except Exception as e:
-        logger.error(f"Error delegating to executor: {e}")
+        logger.error(f"Error delegating to orchestrator: {e}")
         success = False
-        result = f"Executor delegation error: {e}"
+        result = f"Orchestrator delegation error: {e}"
     
     execution_time = time.time() - start_time
     
@@ -454,7 +465,8 @@ def _execute_placeholder(
             "result": result,
             "execution_time": execution_time,
             "user_input": user_input,
-            "intent": intent
+            "intent": intent,
+            "parameters": parameters
         }
     )
 
