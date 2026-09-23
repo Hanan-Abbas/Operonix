@@ -325,11 +325,18 @@ def _translate_routing_decision(
         step_parameters = getattr(step, 'parameters', {}) or {}
         step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
         
+        # For shell execution, use the command from parameters if available
+        shell_command = step_parameters.get("command") if method_type == MethodType.SHELL else None
+        if shell_command:
+            shell_argv = tuple(str(shell_command).split())
+        else:
+            shell_argv = tuple(str(step_action).split())
+        
         # Create payload for each method type
         payload = LayeredPayload(
             plugin_kwargs=MappingProxyType(step_parameters) if method_type == MethodType.PLUGIN else None,
             api_body=MappingProxyType(step_parameters) if method_type == MethodType.API else None,
-            shell_argv=tuple(str(step_action).split()) if method_type == MethodType.SHELL else None,
+            shell_argv=shell_argv if method_type == MethodType.SHELL else None,
             ui_action=MappingProxyType({"action": step_action, **step_parameters}) if method_type == MethodType.UI else None
         )
         
@@ -360,9 +367,15 @@ def _convert_step_to_executor_format(step) -> Dict[str, Any]:
     Returns:
         Dict in executor step format
     """
+    step_parameters = getattr(step, 'parameters', {}) or {}
+    step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
+    
+    # Use command from parameters if available, otherwise use action
+    command = step_parameters.get("command", step_action)
+    
     return {
-        "action": getattr(step, 'action', None) or getattr(step, 'objective', ''),
-        "args": getattr(step, 'parameters', {}) or {},
+        "action": command,  # Use the actual command
+        "args": step_parameters,
         "step_id": getattr(step, 'step_id', 'unknown')
     }
 
@@ -387,11 +400,33 @@ def _execute_placeholder(
         ExecutionResult with placeholder outcome
     """
     import time
+    import subprocess
     
     start_time = time.time()
     
-    # Simulate execution
-    time.sleep(0.1)
+    step_parameters = getattr(step, 'parameters', {}) or {}
+    command = step_parameters.get("command") or getattr(step, 'action', '')
+    
+    success = False
+    result = ""
+    
+    # Try to actually execute the command if it's a shell command
+    if command and isinstance(command, str) and command != "execute_intent":
+        try:
+            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+            success = result.returncode == 0
+            result = result.stdout if success else result.stderr
+        except subprocess.TimeoutExpired:
+            result = "Command timed out"
+            success = False
+        except Exception as e:
+            result = f"Command execution error: {e}"
+            success = False
+    else:
+        # Simulate execution for non-shell commands
+        time.sleep(0.1)
+        result = f"Placeholder execution for: {command}"
+        success = True
     
     execution_time = time.time() - start_time
     
