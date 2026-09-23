@@ -6,14 +6,12 @@ Create plan node: Planning integration with deterministic/AI split.
 Per migration plan §4.2, node 4:
 "create_plan — simple → deterministic plan; complex → LangChain-backed plan.
 The graph owns current step, completed steps, workflow position.
-The planner owns what the steps are."
+The planner owns what the steps are.
 """
 from __future__ import annotations
 
 import logging
 import uuid
-import subprocess
-import platform
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
@@ -21,78 +19,6 @@ from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, Plan
 from graph.trace_collector import get_trace_collector
 
 logger = logging.getLogger("Graph.CreatePlan")
-
-
-def _generate_executable_command(intent_name: str, parameters: Dict[str, Any]) -> str:
-    """Generate an executable shell command based on intent and parameters.
-    
-    Args:
-        intent_name: Name of the intent (e.g., "open_application")
-        parameters: Intent parameters
-        
-    Returns:
-        Executable shell command string
-    """
-    intent_name = intent_name.lower()
-    
-    # Handle different intents
-    if intent_name == "open_application":
-        # Extract application name from parameters
-        application = parameters.get("application") or parameters.get("app") or parameters.get("resolved_args", {}).get("application")
-        if application:
-            # Generate platform-specific command to open application
-            system = platform.system()
-            if system == "Linux":
-                return f"xdg-open {application}" if "." in application else f"{application}"
-            elif system == "Darwin":  # macOS
-                return f"open {application}"
-            elif system == "Windows":
-                return f"start {application}"
-            else:
-                return application
-        return "echo 'No application specified'"
-    
-    elif intent_name == "create_file":
-        file_path = parameters.get("file_path") or parameters.get("path")
-        content = parameters.get("content", "")
-        if file_path:
-            if content:
-                return f"echo '{content}' > {file_path}"
-            return f"touch {file_path}"
-        return "echo 'No file path specified'"
-    
-    elif intent_name == "delete_file":
-        file_path = parameters.get("file_path") or parameters.get("path")
-        if file_path:
-            return f"rm {file_path}"
-        return "echo 'No file path specified'"
-    
-    elif intent_name == "search_web":
-        query = parameters.get("query") or parameters.get("search_term")
-        if query:
-            system = platform.system()
-            if system == "Linux":
-                return f"xdg-open 'https://www.google.com/search?q={query}'"
-            elif system == "Darwin":
-                return f"open 'https://www.google.com/search?q={query}'"
-            elif system == "Windows":
-                return f"start https://www.google.com/search?q={query}"
-        return "echo 'No search query specified'"
-    
-    elif intent_name == "execute_command":
-        command = parameters.get("command") or parameters.get("cmd")
-        if command:
-            return command
-        return "echo 'No command specified'"
-    
-    # Default: return a generic command based on parameters
-    if parameters:
-        # Try to find a reasonable command from parameters
-        for key, value in parameters.items():
-            if isinstance(value, str) and value:
-                return value
-    
-    return f"echo 'Executing intent: {intent_name}'"
 
 
 def create_plan_node(state: OperonixState) -> Dict[str, Any]:
@@ -297,25 +223,66 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
             {"task_id": state.task.task_id, "user_input": state.task.user_input}
         )
         
-        # Generate executable command based on intent
-        executable_command = _generate_executable_command(state.intent.name if state.intent else "unknown", resolved_args)
-        
-        # Generate static steps using existing Planner logic
-        # This is a simplified integration - full integration would need async context
-        # For now, we create a single step with executable command
-        step = PlanStep(
-            step_id=str(uuid.uuid4()),
-            action="execute",
-            parameters={
-                "command": executable_command,
-                "intent": state.intent.name if state.intent else "unknown",
-                "resolved_args": resolved_args
-            },
-            objective=f"Execute intent: {state.task.user_input}",
-            idempotency=PlanStepIdempotency.CONDITIONAL,
-            side_effect=PlanStepSideEffect.LOCAL,
-            reversibility=True
-        )
+        # Use existing intent parser and capability mapper for command generation
+        # This integrates with the existing Operonix system instead of duplicating logic
+        try:
+            from brain.intent_parser import intent_parser
+            from brain.capability_mapper import capability_mapper
+            
+            # Let the existing system resolve the intent to capabilities and commands
+            # This avoids duplicating logic that already exists in the tools/capabilities system
+            resolved_intent = intent_parser.resolve_intent(
+                state.task.user_input,
+                context=state.context if isinstance(state.context, dict) else {}
+            )
+            
+            if resolved_intent:
+                # Use the existing system's resolution
+                step = PlanStep(
+                    step_id=str(uuid.uuid4()),
+                    action="execute",
+                    parameters={
+                        "user_input": state.task.user_input,
+                        "intent": resolved_intent.get("intent"),
+                        "parameters": resolved_intent.get("parameters", {}),
+                        "capability": resolved_intent.get("capability")
+                    },
+                    objective=f"Execute intent: {state.task.user_input}",
+                    idempotency=PlanStepIdempotency.CONDITIONAL,
+                    side_effect=PlanStepSideEffect.LOCAL,
+                    reversibility=True
+                )
+            else:
+                # Fallback to simple step if intent resolution fails
+                step = PlanStep(
+                    step_id=str(uuid.uuid4()),
+                    action="execute",
+                    parameters={
+                        "user_input": state.task.user_input,
+                        "intent": state.intent.name if state.intent else "unknown",
+                        "parameters": state.intent.parameters if state.intent else {}
+                    },
+                    objective=f"Execute intent: {state.task.user_input}",
+                    idempotency=PlanStepIdempotency.CONDITIONAL,
+                    side_effect=PlanStepSideEffect.LOCAL,
+                    reversibility=True
+                )
+        except ImportError:
+            logger.warning("Could not import intent_parser/capability_mapper, using fallback")
+            # Fallback to simple step without integration
+            step = PlanStep(
+                step_id=str(uuid.uuid4()),
+                action="execute",
+                parameters={
+                    "user_input": state.task.user_input,
+                    "intent": state.intent.name if state.intent else "unknown",
+                    "parameters": state.intent.parameters if state.intent else {}
+                },
+                objective=f"Execute intent: {state.task.user_input}",
+                idempotency=PlanStepIdempotency.CONDITIONAL,
+                side_effect=PlanStepSideEffect.LOCAL,
+                reversibility=True
+            )
         
         logger.info(f"Generated simple plan using brain/planner.py integration")
         return Plan(steps=[step])
@@ -323,17 +290,12 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
     except ImportError:
         logger.warning("Could not import brain/planner.py, using fallback simple plan")
         # Fallback to simple plan without Planner integration
-        # Generate executable command based on intent
-        executable_command = _generate_executable_command(
-            state.intent.name if state.intent else "unknown",
-            state.intent.parameters if state.intent else {}
-        )
-        
+        # Pass through to existing execution system which has the command generation logic
         step = PlanStep(
             step_id=str(uuid.uuid4()),
             action="execute",
             parameters={
-                "command": executable_command,
+                "user_input": state.task.user_input,
                 "intent": state.intent.name if state.intent else "unknown",
                 "parameters": state.intent.parameters if state.intent else {}
             },
