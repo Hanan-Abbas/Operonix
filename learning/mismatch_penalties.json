@@ -1,5 +1,8 @@
 {
     "open_application": {
+        "shell": 2
+    },
+    "open firefox app": {
         "shell": 1
     }
 }
