@@ -697,6 +697,17 @@ class Candidate(BaseModel):
     # Overall score
     overall_score: float = Field(default=0.0, ge=0.0, le=1.0)
     
+    # Alias for compatibility (used in some parts of the codebase)
+    @property
+    def score(self) -> float:
+        """Alias for overall_score for backward compatibility."""
+        return self.overall_score
+    
+    @score.setter
+    def score(self, value: float) -> None:
+        """Setter for score alias."""
+        self.overall_score = value
+    
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
