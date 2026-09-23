@@ -13,9 +13,15 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 
 from migration.domain_contracts import ResourceOwnership, ResourceType
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 
 logger = logging.getLogger("Graph.ResourceManager")
 
@@ -160,7 +166,7 @@ class ResourceManager:
         Returns:
             Number of ownerships cleaned up
         """
-        now = datetime.now(UTC)()
+        now = datetime.now(UTC)
         expired_count = 0
         
         ownerships_to_expire = [
