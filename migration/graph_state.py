@@ -15,6 +15,12 @@ from __future__ import annotations
 
 from typing import Any, Optional, Dict, List
 from datetime import datetime, timezone
+
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 from pydantic import BaseModel, Field, ConfigDict
 
 from migration.domain_contracts import (
