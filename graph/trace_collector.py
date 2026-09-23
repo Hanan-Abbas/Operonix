@@ -15,6 +15,12 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 
+# Compatibility for Python < 3.11
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
+
 from migration.domain_contracts import TraceEvent, TraceEventType, ExecutionTrace
 from migration.graph_state import OperonixState
 
@@ -68,8 +74,10 @@ class TraceCollector:
             ExecutionTrace
         """
         if task_id not in self.active_traces:
-            logger.warning(f"No active trace found for task: {task_id}")
-            return None
+            # Auto-start trace if not exists (for compatibility)
+            logger.debug(f"No active trace found for task: {task_id}, auto-starting")
+            self.start_trace(task_id)
+            return self.active_traces.get(task_id)
         
         trace = self.active_traces[task_id]
         trace.completed_at = datetime.now(UTC)
@@ -93,8 +101,9 @@ class TraceCollector:
             TraceEvent if trace exists, None otherwise
         """
         if task_id not in self.active_traces:
-            logger.warning(f"No active trace found for task: {task_id}")
-            return None
+            # Auto-start trace if not exists (for compatibility)
+            logger.debug(f"No active trace found for task: {task_id}, auto-starting")
+            self.start_trace(task_id)
         
         trace = self.active_traces[task_id]
         event = TraceEvent(
