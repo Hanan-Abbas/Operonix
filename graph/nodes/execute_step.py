@@ -20,6 +20,7 @@ from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskSt
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.async_helpers import run_async_safely
+from graph.state_helpers import get_safe_field, get_plan_step, get_routing_method, get_execution_success
 
 logger = logging.getLogger("Graph.ExecuteStep")
 
@@ -45,14 +46,14 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("execute_step_started", {
         "task_id": state.task.task_id,
-        "step_id": state.plan.current_step.step_id if state.plan and state.plan.current_step else None,
-        "method": state.routing.selected_candidate.method_type if state.routing else None
+        "step_id": get_safe_field(state, 'plan.current_step.step_id', None),
+        "method": get_routing_method(state, None)
     })
     
     # Executor Integration: Use actual executor modules
     try:
         # Get current step
-        current_step = state.plan.current_step if state.plan and state.plan.current_step else None
+        current_step = get_plan_step(state)
         
         if not current_step:
             logger.warning("No current step to execute")
@@ -88,9 +89,9 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         # Create error execution result
         execution_result = ExecutionResult(
             execution_id="error_exec",
-            step_id=state.plan.current_step.step_id if state.plan and state.plan.current_step else "unknown",
+            step_id=get_safe_field(state, 'plan.current_step.step_id', "unknown"),
             success=False,
-            method_used=state.routing.selected_candidate.method_type if state.routing else "unknown",
+            method_used=get_routing_method(state, "unknown"),
             execution_status=TaskStatus.FAILED,
             result_data={"error": str(e)}
         )
@@ -121,7 +122,7 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         execution_time = state.execution.result_data.get("execution_time", 0.0)
         
         # Get intent from state
-        intent = state.intent.name if state.intent else "unknown"
+        intent = get_safe_field(state, 'intent.name', "unknown")
         
         # Collect performance feedback
         learning_integration.collect_performance_feedback(
@@ -139,8 +140,8 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         logger.error(f"Error collecting performance feedback: {e}")
     
     # Update plan progress if execution succeeded
-    if state.execution.success and state.plan and state.plan.current_step:
-        step_id = state.plan.current_step.step_id
+    if get_execution_success(state) and get_plan_step(state):
+        step_id = get_plan_step(state).step_id
         state.plan.current_step_index += 1
         if step_id not in state.plan.completed_steps:
             state.plan.completed_steps.append(step_id)
