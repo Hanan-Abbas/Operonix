@@ -17,6 +17,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import ContextSnapshot
 from graph.trace_collector import get_trace_collector
 from graph.async_helpers import run_async_safely
+from graph.state_helpers import get_safe_field
 
 logger = logging.getLogger("Graph.Observe")
 
@@ -71,11 +72,11 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         
         # Store postcondition check result in state for recovery decision
         # For recovery, we add postcondition data to the existing context
-        if state.context is None:
+        if get_safe_field(state, 'context', None) is None:
             state.context = ContextSnapshot()
         
         # Store postcondition check in ui_state (dict field of ContextSnapshot)
-        if state.context.ui_state is None:
+        if get_safe_field(state, 'context.ui_state', None) is None:
             state.context.ui_state = {}
         state.context.ui_state["postcondition_check"] = postcondition_check
         
@@ -97,7 +98,7 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
     
     if is_recovery_observation:
         # Recovery observation: get postcondition check from ui_state
-        postcondition_check = state.context.ui_state.get("postcondition_check") if state.context and state.context.ui_state else None
+        postcondition_check = get_safe_field(state, 'context.ui_state.postcondition_check', None)
         observation_data = {
             "is_recovery_observation": is_recovery_observation,
             "postcondition_check": postcondition_check
@@ -109,12 +110,12 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         }
     else:
         # Initial observation: use ContextSnapshot attributes
-        validation_data = state.context.ui_state.get("validation") if state.context and state.context.ui_state else None
+        validation_data = get_safe_field(state, 'context.ui_state.validation', None)
         observation_data = {
             "is_recovery_observation": is_recovery_observation,
-            "window_title": state.context.window_title if state.context else None,
-            "app_name": state.context.app if state.context else None,
-            "cwd": state.context.cwd if state.context else None,
+            "window_title": get_safe_field(state, 'context.window_title', None),
+            "app_name": get_safe_field(state, 'context.app', None),
+            "cwd": get_safe_field(state, 'context.cwd', None),
             "validation": validation_data
         }
         history_data = {
@@ -409,7 +410,7 @@ def _check_postconditions(state: OperonixState) -> bool:
     expected_outcome = current_step.expected_outcome if hasattr(current_step, 'expected_outcome') else current_step.objective
     
     # Basic postcondition check: if we have a verification result, check its status
-    if state.verification and state.verification.status == "VERIFIED":
+    if get_safe_field(state, 'verification.status', None) == "VERIFIED":
         logger.info(f"Postconditions already verified for step {current_step.step_id}")
         return True
     
