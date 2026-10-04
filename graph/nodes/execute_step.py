@@ -18,6 +18,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskStatus
 from graph.trace_collector import get_trace_collector
+from graph.context_helpers import context_to_dict
 
 logger = logging.getLogger("Graph.ExecuteStep")
 
@@ -69,10 +70,12 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         routing_decision = state.routing
         
         # Perform execution with actual Executor
+        # Convert ContextSnapshot to dict for executor compatibility
+        context_dict = context_to_dict(state.context) if state.context else None
         execution_result = _execute_with_executor(
             current_step,
             routing_decision,
-            state.context if isinstance(state.context, dict) else None,
+            context_dict,
             state.task.task_id
         )
         
