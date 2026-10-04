@@ -254,8 +254,8 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
                     action="execute",
                     parameters={
                         "user_input": state.task.user_input,
-                        "intent": state.intent.name if state.intent else "unknown",
-                        "parameters": state.intent.parameters if state.intent else {}
+                        "intent": get_intent_name(state, "unknown"),
+                        "parameters": get_safe_field(state, 'intent.parameters', {})
                     },
                     objective=f"Execute intent: {state.task.user_input}",
                     idempotency=PlanStepIdempotency.CONDITIONAL,
