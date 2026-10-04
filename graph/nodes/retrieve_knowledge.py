@@ -17,6 +17,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import KnowledgeContext
 from graph.trace_collector import get_trace_collector
+from graph.context_helpers import context_to_dict
 
 logger = logging.getLogger("Graph.RetrieveKnowledge")
 
@@ -134,9 +135,11 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
             from learning.retriever import retriever
             
             if state.intent:
+                # Convert ContextSnapshot to dict for service compatibility
+                context_dict = context_to_dict(state.context) if state.context else None
                 patterns = retriever.retrieve_patterns(
                     intent=state.intent.name,
-                    context=state.context if isinstance(state.context, dict) else None,
+                    context=context_dict,
                     query=state.task.user_input
                 )
                 learned_patterns.extend(patterns)
