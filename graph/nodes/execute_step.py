@@ -19,6 +19,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskStatus
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
+from graph.async_helpers import run_async_safely
 
 logger = logging.getLogger("Graph.ExecuteStep")
 
@@ -202,36 +203,16 @@ def _execute_with_executor(
         # Convert step to executor format
         step_dict = _convert_step_to_executor_format(step)
         
-        # Run async executor - simplified async handling
-        # Use a clean async execution in a thread to avoid event loop conflicts
-        import concurrent.futures
+        # Run async executor using run_async_safely
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor_pool:
-                future = executor_pool.submit(
-                    asyncio.run,
-                    executor._execute_with_decision(
-                        task_id=task_id,
-                        step_index=0,
-                        step=step_dict,
-                        context=context or {},
-                        decision=executor_decision
-                    )
-                )
-                # Add timeout to prevent hanging
-                success, result, method_used = future.result(timeout=60.0)  # 60 second timeout
-        except concurrent.futures.TimeoutError:
-            logger.error(f"Executor execution timed out for task {task_id}")
-            execution_time = time.time() - start_time
-            return ExecutionResult(
-                execution_id=execution_id,
-                step_id=step.step_id if step else "unknown",
-                success=False,
-                method_used="timeout",
-                execution_status=TaskStatus.FAILED,
-                result_data={
-                    "error": "Executor execution timed out",
-                    "execution_time": execution_time
-                }
+            success, result, method_used = run_async_safely(
+                executor._execute_with_decision,
+                task_id=task_id,
+                step_index=0,
+                step=step_dict,
+                context=context or {},
+                decision=executor_decision,
+                timeout=60.0
             )
         except Exception as exec_error:
             logger.error(f"Executor execution error: {exec_error}")
@@ -247,8 +228,6 @@ def _execute_with_executor(
                     "execution_time": execution_time
                 }
             )
-        
-        execution_time = time.time() - start_time
         
         execution_time = time.time() - start_time
         
