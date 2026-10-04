@@ -17,6 +17,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
 from graph.trace_collector import get_trace_collector
+from graph.async_helpers import run_async_safely
 
 logger = logging.getLogger("Graph.CreatePlan")
 
@@ -120,18 +121,15 @@ def _is_complex_request(user_input: str) -> bool:
     if flags.USE_LANGCHAIN_MODELS:
         try:
             from ai.models.model_service import model_service
-            import asyncio
             
             if model_service.is_available():
-                try:
-                    # Try to get the current running loop
-                    loop = asyncio.get_running_loop()
-                    # If we have a running loop, we can't use asyncio.run()
-                    logger.warning("Running in async context, using synchronous fallback for complexity detection")
-                    # Fall through to heuristic below
-                except RuntimeError:
-                    # No running loop, safe to use asyncio.run()
-                    return asyncio.run(_detect_complexity_with_langchain(user_input))
+                # Use run_async_safely to call async LangChain from sync context
+                is_complex = run_async_safely(
+                    _detect_complexity_with_langchain,
+                    user_input,
+                    timeout=30.0
+                )
+                return is_complex
         except Exception as e:
             logger.warning(f"LangChain complexity detection failed: {e}, falling back to heuristic")
     
@@ -323,8 +321,12 @@ def _generate_complex_plan(state: OperonixState) -> Plan:
     # Use LangChain for plan generation if enabled
     if flags.USE_LANGCHAIN_MODELS:
         try:
-            import asyncio
-            plan = asyncio.run(_generate_plan_with_langchain(state))
+            # Use run_async_safely to call async LangChain from sync context
+            plan = run_async_safely(
+                _generate_plan_with_langchain,
+                state,
+                timeout=30.0
+            )
             if plan:
                 return plan
         except Exception as e:
