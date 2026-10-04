@@ -18,6 +18,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
 from graph.trace_collector import get_trace_collector
 from graph.async_helpers import run_async_safely
+from graph.state_helpers import get_safe_field, get_intent_name
 
 logger = logging.getLogger("Graph.CreatePlan")
 
@@ -49,7 +50,7 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("create_plan_started", {
         "task_id": state.task.task_id,
-        "intent": state.intent.name if state.intent else None
+        "intent": get_intent_name(state, None)
     })
     
     # Determine if request is simple or complex
@@ -215,9 +216,9 @@ def _generate_simple_plan(state: OperonixState) -> Plan:
         
         # Resolve args using existing Planner logic
         resolved_args = planner._resolve_args_for_intent(
-            state.intent.name if state.intent else "unknown",
-            state.intent.parameters if state.intent else {},
-            state.context if hasattr(state, 'context') else {},
+            get_intent_name(state, "unknown"),
+            get_safe_field(state, 'intent.parameters', {}),
+            get_safe_field(state, 'context', {}),
             {"task_id": state.task.task_id, "user_input": state.task.user_input}
         )
         
