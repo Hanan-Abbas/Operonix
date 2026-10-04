@@ -16,6 +16,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import ContextSnapshot
 from graph.trace_collector import get_trace_collector
+from graph.async_helpers import run_async_safely
 
 logger = logging.getLogger("Graph.Observe")
 
@@ -69,8 +70,14 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         postcondition_check = _check_postconditions(state)
         
         # Store postcondition check result in state for recovery decision
-        state.context = state.context or {}
-        state.context["postcondition_check"] = postcondition_check
+        # For recovery, we add postcondition data to the existing context
+        if state.context is None:
+            state.context = ContextSnapshot()
+        
+        # Store postcondition check in ui_state (dict field of ContextSnapshot)
+        if state.context.ui_state is None:
+            state.context.ui_state = {}
+        state.context.ui_state["postcondition_check"] = postcondition_check
         
         logger.info(f"OBSERVE: Postcondition check result: {postcondition_check}")
     else:
@@ -83,28 +90,45 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         # Store context snapshot in state
         state.context = context_snapshot
         
-        logger.info(f"OBSERVE: Context snapshot gathered: window={context_snapshot.get('window_title')}, app={context_snapshot.get('app_name')}")
+        logger.info(f"OBSERVE: Context snapshot gathered: window={context_snapshot.window_title}, app={context_snapshot.app}")
     
     # Phase 9: Collect trace event for observation
     trace_collector = get_trace_collector()
+    
+    if is_recovery_observation:
+        # Recovery observation: get postcondition check from ui_state
+        postcondition_check = state.context.ui_state.get("postcondition_check") if state.context and state.context.ui_state else None
+        observation_data = {
+            "is_recovery_observation": is_recovery_observation,
+            "postcondition_check": postcondition_check
+        }
+        history_data = {
+            "task_id": state.task.task_id,
+            "is_recovery_observation": is_recovery_observation,
+            "postcondition_check": postcondition_check
+        }
+    else:
+        # Initial observation: use ContextSnapshot attributes
+        validation_data = state.context.ui_state.get("validation") if state.context and state.context.ui_state else None
+        observation_data = {
+            "is_recovery_observation": is_recovery_observation,
+            "window_title": state.context.window_title if state.context else None,
+            "app_name": state.context.app if state.context else None,
+            "cwd": state.context.cwd if state.context else None,
+            "validation": validation_data
+        }
+        history_data = {
+            "task_id": state.task.task_id,
+            "is_recovery_observation": is_recovery_observation,
+            "validation": validation_data
+        }
+    
     trace_collector.collect_observation(
         task_id=state.task.task_id,
-        observation_data={
-            "is_recovery_observation": is_recovery_observation,
-            "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None,
-            "window_title": state.context.get("window_title") if not is_recovery_observation else None,
-            "app_name": state.context.get("app_name") if not is_recovery_observation else None,
-            "cwd": state.context.get("cwd") if not is_recovery_observation else None,
-            "validation": state.context.get("validation") if not is_recovery_observation else None
-        }
+        observation_data=observation_data
     )
     
-    state.add_history_event("observe_completed", {
-        "task_id": state.task.task_id,
-        "is_recovery_observation": is_recovery_observation,
-        "postcondition_check": state.context.get("postcondition_check") if is_recovery_observation else None,
-        "validation": state.context.get("validation") if not is_recovery_observation else None
-    })
+    state.add_history_event("observe_completed", history_data)
     
     state.update_timestamp()
     
@@ -127,7 +151,7 @@ def _convert_confidence_to_float(confidence_str: str) -> float:
     }
     return confidence_map.get(str(confidence_str).lower(), 0.5)
 
-def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
+def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
     """Gather context snapshot using actual context services.
     
     Phase 11 enhancement: Full integration with all context services.
@@ -142,20 +166,19 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         state: Current OperonixState
         
     Returns:
-        Dict with context snapshot data
+        ContextSnapshot object with context data
     """
-    context_data = {
-        "window_title": "Unknown",
-        "app_name": "Unknown",
-        "app_type": "unknown",
-        "cwd": None,
-        "window_pid": None,
-        "confidence": 0.0,
-        "sub_context": None,
-        "state": {},
-        "focus": {},
-        "validation": {}
-    }
+    from migration.domain_contracts import ContextSnapshot
+    
+    # Initialize context data with defaults
+    window_title = "Unknown"
+    app_name = "Unknown"
+    app_type = "unknown"
+    cwd = None
+    confidence = 0.0
+    sub_context = None
+    ui_state = {}
+    permissions = []
     
     try:
         # Try to get context from WindowDetector
@@ -164,17 +187,15 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
             
             if hasattr(window_detector, '_last_external_snapshot') and window_detector._last_external_snapshot:
                 snapshot = window_detector._last_external_snapshot
-                context_data["window_title"] = snapshot.get("window_title", "Unknown")
-                context_data["app_name"] = snapshot.get("app_name", "Unknown")
-                context_data["app_type"] = snapshot.get("app_type", "unknown")
-                context_data["cwd"] = snapshot.get("cwd")
-                context_data["window_pid"] = snapshot.get("window_pid")
-                # Convert string confidence to float for Pydantic validation
+                window_title = snapshot.get("window_title", "Unknown")
+                app_name = snapshot.get("app_name", "Unknown")
+                app_type = snapshot.get("app_type", "unknown")
+                cwd = snapshot.get("cwd")
                 confidence_value = snapshot.get("confidence", 0.0)
-                context_data["confidence"] = _convert_confidence_to_float(confidence_value)
-                context_data["sub_context"] = snapshot.get("sub_context")
+                confidence = _convert_confidence_to_float(confidence_value)
+                sub_context = snapshot.get("sub_context")
                 
-                logger.info(f"Context snapshot from WindowDetector: {context_data['window_title']}")
+                logger.info(f"Context snapshot from WindowDetector: {window_title}")
             else:
                 logger.warning("WindowDetector has no snapshot available")
         except ImportError:
@@ -186,22 +207,17 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         try:
             from context.app_classifier import classifier
             
-            if context_data.get("window_title"):
+            if window_title:
                 try:
                     # Try synchronous classify first
-                    classification = classifier.classify(context_data["window_title"])
+                    classification = classifier.classify(window_title)
                 except Exception:
                     # If sync fails, skip classification for now
                     classification = None
                     
                 if classification and hasattr(classification, 'category'):
-                    context_data["app_type"] = classification.category
-                    context_data["app_category"] = classification.category
-                    # Convert string confidence to float for Pydantic validation
-                    app_confidence = classification.confidence if hasattr(classification, 'confidence') else 0.0
-                    context_data["app_confidence"] = _convert_confidence_to_float(app_confidence)
-                    
-                    logger.debug(f"App classification: {context_data['app_type']}")
+                    app_type = classification.category
+                    logger.debug(f"App classification: {app_type}")
         except ImportError:
             logger.warning("Could not import AppClassifier")
         except Exception as e:
@@ -211,12 +227,9 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
         try:
             from context.state_extractor import state_extractor
             
-            if context_data.get("window_title"):
-                heuristics = state_extractor._get_heuristics(
-                    context_data["window_title"],
-                    context_data.get("app_type")
-                )
-                context_data["state"].update(heuristics)
+            if window_title:
+                heuristics = state_extractor._get_heuristics(window_title, app_type)
+                ui_state.update(heuristics)
                 
                 logger.debug(f"State heuristics: {heuristics}")
         except ImportError:
@@ -230,78 +243,68 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
             
             focus_info = focus_tracker.get_current_focus()
             if focus_info:
-                context_data["focus"] = {
+                ui_state["focus"] = {
                     "focused_element": focus_info.get("element"),
                     "focused_window": focus_info.get("window"),
                     "focus_timestamp": focus_info.get("timestamp")
                 }
                 
-                logger.debug(f"Focus info: {context_data['focus']}")
+                logger.debug(f"Focus info: {ui_state['focus']}")
         except ImportError:
             logger.warning("Could not import FocusTracker")
         except Exception as e:
             logger.error(f"Error getting focus info: {e}")
         
         # Phase 11: Try to validate context with ContextValidator
+        validation_data = {"is_valid": True, "reason": "Context validation skipped", "validation_errors": [], "validation_warnings": []}
         try:
             from context.context_validator import context_validator
             
-            # Simplified validation: use synchronous fallback if async not available
-            # This avoids complex event loop management
-            try:
-                # Try to use async validation if available and we have an event loop
-                import asyncio
-                loop = asyncio.get_running_loop()
-                
-                # If we have a running loop, we can safely use asyncio.run in a thread
-                # This is cleaner than creating/destroying event loops
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        context_validator.validate_action_context(
-                            state.task.user_input,
-                            context_data
-                        )
-                    )
-                    validation_result = future.result(timeout=5.0)  # 5 second timeout
-                    
-                is_valid, reason = validation_result
-                context_data["validation"] = {
-                    "is_valid": is_valid,
-                    "reason": reason,
-                    "validation_errors": [] if is_valid else [reason],
-                    "validation_warnings": []
-                }
-                    
-            except (RuntimeError, concurrent.futures.TimeoutError):
-                # No event loop or timeout, use simplified synchronous validation
-                logger.debug("Using simplified synchronous context validation")
-                is_valid, reason = _simplified_context_validation(
-                    state.task.user_input,
-                    context_data
-                )
-                context_data["validation"] = {
-                    "is_valid": is_valid,
-                    "reason": reason,
-                    "validation_errors": [] if is_valid else [reason],
-                    "validation_warnings": []
-                }
+            # Build temporary dict for validation (services expect dict)
+            temp_context_dict = {
+                "window_title": window_title,
+                "app_name": app_name,
+                "app_type": app_type,
+                "cwd": cwd,
+                "confidence": confidence
+            }
+            
+            # Use run_async_safely to call async validator from sync context
+            validation_result = run_async_safely(
+                context_validator.validate_action_context,
+                state.task.user_input,
+                temp_context_dict,
+                timeout=5.0
+            )
+            
+            is_valid, reason = validation_result
+            validation_data = {
+                "is_valid": is_valid,
+                "reason": reason,
+                "validation_errors": [] if is_valid else [reason],
+                "validation_warnings": []
+            }
             
             # Log validation result
-            if context_data["validation"]["is_valid"]:
-                logger.info(f"Context validation passed: {context_data['validation']['reason']}")
+            if validation_data["is_valid"]:
+                logger.info(f"Context validation passed: {validation_data['reason']}")
             else:
-                logger.warning(f"Context validation failed: {context_data['validation']['reason']}")
+                logger.warning(f"Context validation failed: {validation_data['reason']}")
                 
         except ImportError:
             logger.warning("Could not import ContextValidator, using simplified validation")
-            # Fallback to simplified validation
+            temp_context_dict = {
+                "window_title": window_title,
+                "app_name": app_name,
+                "app_type": app_type,
+                "cwd": cwd,
+                "confidence": confidence
+            }
             is_valid, reason = _simplified_context_validation(
                 state.task.user_input,
-                context_data
+                temp_context_dict
             )
-            context_data["validation"] = {
+            validation_data = {
                 "is_valid": is_valid,
                 "reason": reason,
                 "validation_errors": [] if is_valid else [reason],
@@ -309,22 +312,42 @@ def _gather_context_snapshot(state: OperonixState) -> Dict[str, Any]:
             }
         except Exception as e:
             logger.error(f"Error validating context: {e}, using simplified validation")
-            # Fallback to simplified validation on error
+            temp_context_dict = {
+                "window_title": window_title,
+                "app_name": app_name,
+                "app_type": app_type,
+                "cwd": cwd,
+                "confidence": confidence
+            }
             is_valid, reason = _simplified_context_validation(
                 state.task.user_input,
-                context_data
+                temp_context_dict
             )
-            context_data["validation"] = {
+            validation_data = {
                 "is_valid": is_valid,
                 "reason": reason,
                 "validation_errors": [] if is_valid else [reason],
                 "validation_warnings": []
             }
         
+        # Store validation data in ui_state for access
+        ui_state["validation"] = validation_data
+        
     except Exception as e:
         logger.error(f"Error gathering context snapshot: {e}")
     
-    return context_data
+    # Create and return ContextSnapshot object
+    return ContextSnapshot(
+        active_window=window_title,
+        app=app_name,
+        app_type=app_type,
+        window_title=window_title,
+        cwd=cwd,
+        sub_context=sub_context,
+        ui_state=ui_state,
+        permissions=permissions,
+        confidence=confidence
+    )
 
 
 def _simplified_context_validation(user_input: str, context_data: Dict[str, Any]) -> tuple[bool, str]:
@@ -334,7 +357,7 @@ def _simplified_context_validation(user_input: str, context_data: Dict[str, Any]
     
     Args:
         user_input: User input text
-        context_data: Current context data
+        context_data: Current context data (dict)
         
     Returns:
         Tuple of (is_valid, reason)
@@ -418,8 +441,8 @@ def _check_postconditions(state: OperonixState) -> bool:
         # Check for application/window
         if "open" in objective_lower and ("app" in objective_lower or "application" in objective_lower):
             # Check if the app is already in the current window
-            if context_snapshot.get("app_name") and context_snapshot["app_name"].lower() in objective_lower:
-                logger.info(f"Postcondition met: app {context_snapshot['app_name']} is already open")
+            if context_snapshot.app and context_snapshot.app.lower() in objective_lower:
+                logger.info(f"Postcondition met: app {context_snapshot.app} is already open")
                 return True
         
         # Check for directory
