@@ -364,7 +364,7 @@ Respond in JSON format with key: steps (array of step objects)."""
         },
         {
             "role": "user",
-            "content": f"User request: {state.task.user_input}\nIntent: {state.intent.name if state.intent else 'unknown'}\nParameters: {state.intent.parameters if state.intent else {}}"
+            "content": f"User request: {state.task.user_input}\nIntent: {get_intent_name(state, 'unknown')}\nParameters: {get_safe_field(state, 'intent.parameters', {})}"
         }
     ]
     
@@ -434,8 +434,8 @@ def _generate_placeholder_complex_plan(state: OperonixState) -> Plan:
         step_id=str(uuid.uuid4()),
         action="execute_intent",
         arguments={
-            "intent": state.intent.name if state.intent else "unknown",
-            "parameters": state.intent.parameters if state.intent else {}
+            "intent": get_intent_name(state, "unknown"),
+            "parameters": get_safe_field(state, 'intent.parameters', {})
         },
         objective=f"Execute intent: {state.task.user_input}",
         idempotency="conditional",
