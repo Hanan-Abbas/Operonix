@@ -21,6 +21,7 @@ from graph.candidate_discovery import get_candidate_discovery_service
 from graph.candidate_evaluation import get_candidate_evaluation_service
 from graph.ranking_policy import get_ranking_policy_service
 from graph.context_helpers import context_to_dict
+from graph.state_helpers import get_safe_field, get_plan_step
 
 logger = logging.getLogger("Graph.Route")
 
@@ -46,7 +47,7 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("route_started", {
         "task_id": state.task.task_id,
-        "current_step": state.plan.current_step.step_id if state.plan and state.plan.current_step else None
+        "current_step": get_safe_field(state, 'plan.current_step.step_id', None)
     })
     
     # Debug logging
