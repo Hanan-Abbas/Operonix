@@ -14,6 +14,7 @@ from migration.graph_state import OperonixState
 from graph.cancellation import get_cancellation_service
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
+from graph.state_helpers import get_safe_field
 
 logger = logging.getLogger("Graph.Cancel")
 
@@ -52,7 +53,7 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
     cancellation_service = get_cancellation_service()
     
     # Process cancellation if not already processed
-    if state.cancellation and not state.cancelled:
+    if get_safe_field(state, 'cancellation', None) and not state.cancelled:
         logger.info(f"CANCEL: Processing cancellation request {state.cancellation.cancellation_id}")
         
         # Use cancellation service to cancel workflow
@@ -63,15 +64,16 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
         state.cancellation = state_update.get('cancellation', state.cancellation)
         state.abort_decision = state_update.get('abort_decision', state.abort_decision)
         
-        logger.info(f"CANCEL: Workflow cancelled with semantics: {state.abort_decision.semantics.value if state.abort_decision else 'unknown'}")
+        logger.info(f"CANCEL: Workflow cancelled with semantics: {get_safe_field(state, 'abort_decision.semantics.value', 'unknown')}")
     
     # Perform cleanup based on abort semantics
-    if state.abort_decision:
-        if state.abort_decision.cleanup_required:
+    abort_decision = get_safe_field(state, 'abort_decision', None)
+    if abort_decision:
+        if abort_decision.cleanup_required:
             logger.info(f"CANCEL: Performing cleanup for task {state.task.task_id}")
             _perform_cleanup(state)
         
-        if state.abort_decision.rollback_required:
+        if abort_decision.rollback_required:
             logger.info(f"CANCEL: Performing rollback for task {state.task.task_id}")
             _perform_rollback(state)
     
@@ -81,8 +83,8 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
     
     final_result = FinalResult(
         success=False,
-        response=f"Task {state.task.task_id} was cancelled: {state.cancellation.reason.value if state.cancellation else 'unknown'}",
-        error=f"Cancelled: {state.abort_decision.reason if state.abort_decision else 'unknown'}",
+        response=f"Task {state.task.task_id} was cancelled: {get_safe_field(state, 'cancellation.reason.value', 'unknown')}",
+        error=f"Cancelled: {get_safe_field(state, 'abort_decision.reason', 'unknown')}",
         task_id=state.task.task_id,
         completed_at=datetime.now(UTC)
     )
@@ -94,19 +96,19 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
     trace_collector.collect_cancellation(
         task_id=state.task.task_id,
         cancellation_data={
-            "cancellation_id": state.cancellation.cancellation_id if state.cancellation else None,
-            "reason": state.cancellation.reason.value if state.cancellation else None,
-            "abort_semantics": state.abort_decision.semantics.value if state.abort_decision else None,
-            "cleanup_performed": state.abort_decision.cleanup_required if state.abort_decision else False,
-            "rollback_performed": state.abort_decision.rollback_required if state.abort_decision else False
+            "cancellation_id": get_safe_field(state, 'cancellation.cancellation_id', None),
+            "reason": get_safe_field(state, 'cancellation.reason.value', None),
+            "abort_semantics": get_safe_field(state, 'abort_decision.semantics.value', None),
+            "cleanup_performed": get_safe_field(state, 'abort_decision.cleanup_required', False),
+            "rollback_performed": get_safe_field(state, 'abort_decision.rollback_required', False)
         }
     )
     
     state.add_history_event("cancel_completed", {
         "task_id": state.task.task_id,
-        "abort_semantics": state.abort_decision.semantics.value if state.abort_decision else None,
-        "cleanup_performed": state.abort_decision.cleanup_required if state.abort_decision else False,
-        "rollback_performed": state.abort_decision.rollback_required if state.abort_decision else False
+        "abort_semantics": get_safe_field(state, 'abort_decision.semantics.value', None),
+        "cleanup_performed": get_safe_field(state, 'abort_decision.cleanup_required', False),
+        "rollback_performed": get_safe_field(state, 'abort_decision.rollback_required', False)
     })
     
     state.update_timestamp()
@@ -159,7 +161,7 @@ def _perform_cleanup(state: OperonixState) -> None:
         logger.error(f"Error during temp file cleanup: {e}")
     
     # Release resource ownership if tracked in state
-    if state.context is not None:
+    if get_safe_field(state, 'context', None) is not None:
         try:
             from context.resource_manager import resource_manager
             
@@ -175,7 +177,7 @@ def _perform_cleanup(state: OperonixState) -> None:
             logger.error(f"Error releasing resources: {e}")
     
     # Close connections if any (placeholder for connection pool cleanup)
-    if state.context is not None and state.context.ui_state is not None:
+    if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
         try:
             # Check for any open connections in context ui_state
             connections = state.context.ui_state.get('open_connections', [])
@@ -191,7 +193,7 @@ def _perform_cleanup(state: OperonixState) -> None:
             logger.error(f"Error closing connections: {e}")
     
     # Release locks if any
-    if state.context is not None:
+    if get_safe_field(state, 'context', None) is not None:
         try:
             from context.lock_manager import lock_manager
             
@@ -229,7 +231,7 @@ def _perform_rollback(state: OperonixState) -> None:
     rollback_actions = []
     
     # Rollback completed plan steps if any
-    if state.plan and state.plan.completed_steps:
+    if get_safe_field(state, 'plan.completed_steps', None):
         try:
             # Reverse completed steps in reverse order
             for step in reversed(state.plan.completed_steps):
@@ -246,7 +248,7 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during plan step rollback: {e}")
     
     # Rollback file changes if tracked in context
-    if state.context is not None and state.context.ui_state is not None:
+    if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
         try:
             # Check for file changes tracked in context ui_state
             file_changes = state.context.ui_state.get('file_changes', [])
@@ -276,7 +278,7 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during file rollback: {e}")
     
     # Rollback application state if tracked
-    if state.context is not None and state.context.ui_state is not None:
+    if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
         try:
             # Check for application state changes in ui_state
             app_state_changes = state.context.ui_state.get('app_state_changes', [])
