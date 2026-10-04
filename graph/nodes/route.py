@@ -20,6 +20,7 @@ from graph.trace_collector import get_trace_collector
 from graph.candidate_discovery import get_candidate_discovery_service
 from graph.candidate_evaluation import get_candidate_evaluation_service
 from graph.ranking_policy import get_ranking_policy_service
+from graph.context_helpers import context_to_dict
 
 logger = logging.getLogger("Graph.Route")
 
@@ -68,10 +69,12 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
             method_decision = _create_fallback_decision(state)
         else:
             # Discover candidates
+            # Convert ContextSnapshot to dict for service compatibility
+            context_dict = context_to_dict(state.context) if state.context else None
             candidates = discovery_service.discover_candidates(
                 plan_step=state.plan.current_step,
                 intent=state.intent,
-                context=state.context if isinstance(state.context, dict) else None
+                context=context_dict
             )
             
             logger.info(f"Discovered {len(candidates)} candidates")
@@ -81,7 +84,7 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
                 candidates=candidates,
                 plan_step=state.plan.current_step,
                 intent=state.intent,
-                context=state.context if isinstance(state.context, dict) else None
+                context=context_dict
             )
             
             logger.info(f"Evaluated {len(evaluations)} candidates")
