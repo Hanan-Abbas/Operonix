@@ -15,6 +15,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect, TaskStatus
 from graph.trace_collector import get_trace_collector
+from graph.context_helpers import context_to_dict
 
 logger = logging.getLogger("Graph.VerifyStep")
 
@@ -49,7 +50,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     
     if not state.execution:
         # No execution result, verification is uncertain
-        observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
+        observed_context = state.context if state.context is not None else ContextSnapshot()
         verification_result = VerificationResult(
             status="UNCERTAIN",
             observed_context=observed_context,
@@ -59,21 +60,7 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
         )
     elif not executor_success:
         # Executor failed, verification fails
-        observed_context = state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot()
-        # Ensure sub_context is a string, not a dict
-        if hasattr(observed_context, 'sub_context') and (observed_context.sub_context is None or isinstance(observed_context.sub_context, dict)):
-            # Create a new ContextSnapshot with corrected sub_context
-            observed_context = ContextSnapshot(
-                active_window=observed_context.active_window if hasattr(observed_context, 'active_window') else None,
-                app=observed_context.app if hasattr(observed_context, 'app') else None,
-                app_type=observed_context.app_type if hasattr(observed_context, 'app_type') else None,
-                window_title=observed_context.window_title if hasattr(observed_context, 'window_title') else None,
-                cwd=observed_context.cwd if hasattr(observed_context, 'cwd') else None,
-                sub_context=None,
-                ui_state=observed_context.ui_state if hasattr(observed_context, 'ui_state') else {},
-                permissions=observed_context.permissions if hasattr(observed_context, 'permissions') else [],
-                confidence=observed_context.confidence if hasattr(observed_context, 'confidence') else 0.0
-            )
+        observed_context = state.context if state.context is not None else ContextSnapshot()
         
         # Distinguish between execution status failure and success flag failure
         if state.execution.execution_status != TaskStatus.COMPLETED:
@@ -139,7 +126,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     if not state.plan or state.plan.current_step_index >= len(state.plan.steps):
         return VerificationResult(
             status="UNCERTAIN",
-            observed_context=state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot(),
+            observed_context=state.context if state.context is not None else ContextSnapshot(),
             expected_state={},
             actual_state={},
             reason="No plan or invalid step index"
@@ -155,7 +142,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
             # We cannot determine if the operation had partial effect
             return VerificationResult(
                 status="UNCERTAIN_OUTCOME",
-                observed_context=state.context if hasattr(state, 'context') and state.context is not None else ContextSnapshot(),
+                observed_context=state.context if state.context is not None else ContextSnapshot(),
                 expected_state={},
                 actual_state={},
                 reason=f"Non-idempotent or high side-effect operation failed, outcome uncertain (idempotency={current_step.idempotency}, side_effect={current_step.side_effect})"
@@ -169,13 +156,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         from graph.nodes.observe import _gather_context_snapshot
         
         context_snapshot = _gather_context_snapshot(state)
-        observed_context = ContextSnapshot(
-            window_title=context_snapshot.get("window_title", "Unknown"),
-            app=context_snapshot.get("app_name", "Unknown"),
-            app_type=context_snapshot.get("app_type", "unknown"),
-            cwd=context_snapshot.get("cwd"),
-            sub_context=None
-        )
+        observed_context = context_snapshot  # Now directly use ContextSnapshot
         
         # Verify postconditions based on step objective
         # This is a simplified implementation - a full implementation would parse
@@ -203,12 +184,12 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         
         # Check for application/window
         elif "open" in objective_lower and ("app" in objective_lower or "application" in objective_lower):
-            if context_snapshot.get("app_name") and context_snapshot["app_name"].lower() in objective_lower:
+            if context_snapshot.app and context_snapshot.app.lower() in objective_lower:
                 verification_passed = True
-                verification_reason = f"App {context_snapshot['app_name']} is open as expected"
+                verification_reason = f"App {context_snapshot.app} is open as expected"
             else:
                 verification_passed = False
-                verification_reason = f"App not found in current window (current: {context_snapshot.get('app_name')})"
+                verification_reason = f"App not found in current window (current: {context_snapshot.app})"
         
         # Check for directory
         elif "directory" in objective_lower or "folder" in objective_lower:
@@ -291,7 +272,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         
         return VerificationResult(
             status=verification_status,
-            observed_context=state.context if hasattr(state, 'context') else ContextSnapshot(),
+            observed_context=state.context if state.context is not None else ContextSnapshot(),
             expected_state={"outcome": expected_outcome},
             actual_state=state.execution.result_data if state.execution and isinstance(state.execution.result_data, dict) else {},
             reason=verification_reason
