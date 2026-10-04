@@ -154,18 +154,9 @@ class LearningIntegration:
                     def __init__(self, data):
                         self.data = data
                 
-                # Use asyncio.run_coroutine_threadsafe if we have a loop, otherwise skip async learning
-                try:
-                    import asyncio
-                    loop = asyncio.get_running_loop()
-                    # We're in an async context, create a task
-                    asyncio.create_task(self.learner._learn_from_routing_mismatch(MockEvent(event_data)))
-                except RuntimeError:
-                    # No running loop, skip async learning for now
-                    logger.debug("No event loop available, skipping async learning")
-                except Exception as e:
-                    logger.debug(f"Could not schedule async learning: {e}")
-                
+                # Skip async learning in sync context
+                # Learning is optional and can be deferred to background processes
+                logger.debug("Skipping async learning in sync context")
                 logger.info(f"Recorded routing mismatch: {intent} -> {method_type}")
             except Exception as e:
                 logger.error(f"Error recording routing mismatch: {e}")
