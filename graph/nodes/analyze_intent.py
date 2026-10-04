@@ -17,6 +17,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import IntentResult
 from migration.feature_flags import flags
 from graph.trace_collector import get_trace_collector
+from graph.async_helpers import run_async_safely
 
 logger = logging.getLogger("Graph.AnalyzeIntent")
 
@@ -120,17 +121,13 @@ Respond in JSON format with keys: intent_name, confidence, parameters."""
             }
         }
         
-        import asyncio
-        try:
-            # Try to get the current running loop
-            loop = asyncio.get_running_loop()
-            # If we have a running loop, we can't use asyncio.run()
-            # Use synchronous fallback instead
-            logger.warning("Running in async context, using synchronous fallback for intent analysis")
-            return _analyze_intent_placeholder(state)
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run()
-            result = asyncio.run(model_service.generate_structured_output(messages, schema))
+        # Use run_async_safely to call async LangChain from sync context
+        result = run_async_safely(
+            model_service.generate_structured_output,
+            messages,
+            schema,
+            timeout=30.0
+        )
         
         # Create IntentResult from LangChain response
         intent_result = IntentResult(
