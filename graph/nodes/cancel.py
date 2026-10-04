@@ -13,6 +13,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from graph.cancellation import get_cancellation_service
 from graph.trace_collector import get_trace_collector
+from graph.context_helpers import context_to_dict
 
 logger = logging.getLogger("Graph.Cancel")
 
@@ -158,7 +159,7 @@ def _perform_cleanup(state: OperonixState) -> None:
         logger.error(f"Error during temp file cleanup: {e}")
     
     # Release resource ownership if tracked in state
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None:
         try:
             from context.resource_manager import resource_manager
             
@@ -174,10 +175,10 @@ def _perform_cleanup(state: OperonixState) -> None:
             logger.error(f"Error releasing resources: {e}")
     
     # Close connections if any (placeholder for connection pool cleanup)
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None and state.context.ui_state is not None:
         try:
-            # Check for any open connections in context
-            connections = state.context.get('open_connections', [])
+            # Check for any open connections in context ui_state
+            connections = state.context.ui_state.get('open_connections', [])
             for conn in connections:
                 try:
                     # Generic close attempt - in real implementation would be connection-specific
@@ -190,7 +191,7 @@ def _perform_cleanup(state: OperonixState) -> None:
             logger.error(f"Error closing connections: {e}")
     
     # Release locks if any
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None:
         try:
             from context.lock_manager import lock_manager
             
@@ -245,10 +246,10 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during plan step rollback: {e}")
     
     # Rollback file changes if tracked in context
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None and state.context.ui_state is not None:
         try:
-            # Check for file changes tracked in context
-            file_changes = state.context.get('file_changes', [])
+            # Check for file changes tracked in context ui_state
+            file_changes = state.context.ui_state.get('file_changes', [])
             for change in file_changes:
                 try:
                     if change.get('action') == 'create':
@@ -275,10 +276,10 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during file rollback: {e}")
     
     # Rollback application state if tracked
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None and state.context.ui_state is not None:
         try:
-            # Check for application state changes
-            app_state_changes = state.context.get('app_state_changes', [])
+            # Check for application state changes in ui_state
+            app_state_changes = state.context.ui_state.get('app_state_changes', [])
             for change in app_state_changes:
                 try:
                     # Attempt to restore previous application state
@@ -291,10 +292,10 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during app state rollback: {e}")
     
     # Rollback database state if any (placeholder for database transaction rollback)
-    if state.context and isinstance(state.context, dict):
+    if state.context is not None and state.context.ui_state is not None:
         try:
-            # Check for database transactions
-            transactions = state.context.get('db_transactions', [])
+            # Check for database transactions in ui_state
+            transactions = state.context.ui_state.get('db_transactions', [])
             for txn in transactions:
                 try:
                     # Attempt to rollback transaction
