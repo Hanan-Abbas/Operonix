@@ -16,6 +16,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import VerificationResult, ContextSnapshot, PlanStepIdempotency, PlanStepSideEffect, TaskStatus
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
+from graph.state_helpers import get_safe_field, get_plan_step
 
 logger = logging.getLogger("Graph.VerifyStep")
 
@@ -42,15 +43,17 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("verify_step_started", {
         "task_id": state.task.task_id,
-        "step_id": state.execution.step_id if state.execution else None
+        "step_id": get_safe_field(state, 'execution.step_id', None)
     })
     
     # Step 1: Check if executor reported success
-    executor_success = state.execution.execution_status == TaskStatus.COMPLETED and state.execution.success if state.execution else False
+    execution_status = get_safe_field(state, 'execution.execution_status', None)
+    execution_success = get_safe_field(state, 'execution.success', False)
+    executor_success = execution_status == TaskStatus.COMPLETED and execution_success
     
-    if not state.execution:
+    if not get_safe_field(state, 'execution', None):
         # No execution result, verification is uncertain
-        observed_context = state.context if state.context is not None else ContextSnapshot()
+        observed_context = get_safe_field(state, 'context', None) or ContextSnapshot()
         verification_result = VerificationResult(
             status="UNCERTAIN",
             observed_context=observed_context,
@@ -60,11 +63,11 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
         )
     elif not executor_success:
         # Executor failed, verification fails
-        observed_context = state.context if state.context is not None else ContextSnapshot()
+        observed_context = get_safe_field(state, 'context', None) or ContextSnapshot()
         
         # Distinguish between execution status failure and success flag failure
-        if state.execution.execution_status != TaskStatus.COMPLETED:
-            reason = f"Executor reported failure: {state.execution.execution_status.value}"
+        if execution_status != TaskStatus.COMPLETED:
+            reason = f"Executor reported failure: {execution_status.value}"
         else:
             reason = "execution result indicates failure"
         
@@ -126,7 +129,7 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     if not state.plan or state.plan.current_step_index >= len(state.plan.steps):
         return VerificationResult(
             status="UNCERTAIN",
-            observed_context=state.context if state.context is not None else ContextSnapshot(),
+            observed_context=get_safe_field(state, 'context', None) or ContextSnapshot(),
             expected_state={},
             actual_state={},
             reason="No plan or invalid step index"
@@ -137,12 +140,13 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
     # Phase 6: Check if step is non-idempotent or has high side-effects
     # If execution failed for such steps, outcome is uncertain
     if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT or current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
-        if state.execution and state.execution.execution_status != TaskStatus.COMPLETED:
+        execution_status = get_safe_field(state, 'execution.execution_status', None)
+        if execution_status and execution_status != TaskStatus.COMPLETED:
             # Non-idempotent or high side-effect operation failed
             # We cannot determine if the operation had partial effect
             return VerificationResult(
                 status="UNCERTAIN_OUTCOME",
-                observed_context=state.context if state.context is not None else ContextSnapshot(),
+                observed_context=get_safe_field(state, 'context', None) or ContextSnapshot(),
                 expected_state={},
                 actual_state={},
                 reason=f"Non-idempotent or high side-effect operation failed, outcome uncertain (idempotency={current_step.idempotency}, side_effect={current_step.side_effect})"
@@ -210,14 +214,15 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
             # Generic verification - check if execution result indicates success
             verification_status = "VERIFIED"
             verification_reason = "No specific postconditions to verify, assuming success"
-            if state.execution:
-                if state.execution.success is False:
-                    verification_reason = f"Execution result indicates failure"
-                    if state.execution.result_data and "error" in state.execution.result_data:
-                        verification_reason += f": {state.execution.result_data['error']}"
-                    
-                    # Check if operation is non-idempotent or has destructive side-effects
-                    current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
+            execution_success = get_safe_field(state, 'execution.success', True)
+            if execution_success is False:
+                verification_reason = f"Execution result indicates failure"
+                result_data = get_safe_field(state, 'execution.result_data', {})
+                if result_data and "error" in result_data:
+                    verification_reason += f": {result_data['error']}"
+                
+                # Check if operation is non-idempotent or has destructive side-effects
+                current_step = get_plan_step(state)
                     if current_step:
                         if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
                             verification_status = "UNCERTAIN_OUTCOME"
@@ -247,14 +252,15 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         # Fallback to basic verification
         verification_status = "VERIFIED"
         verification_reason = "Executor reported success and context verification failed, assuming success"
-        if state.execution:
-            if state.execution.success is False:
-                verification_reason = f"Execution result indicates failure"
-                if state.execution.result_data and "error" in state.execution.result_data:
-                    verification_reason += f": {state.execution.result_data['error']}"
-                
-                # Check if operation is non-idempotent or has destructive side-effects
-                current_step = state.plan.steps[state.plan.current_step_index] if state.plan and state.plan.current_step_index < len(state.plan.steps) else None
+        execution_success = get_safe_field(state, 'execution.success', True)
+        if execution_success is False:
+            verification_reason = f"Execution result indicates failure"
+            result_data = get_safe_field(state, 'execution.result_data', {})
+            if result_data and "error" in result_data:
+                verification_reason += f": {result_data['error']}"
+            
+            # Check if operation is non-idempotent or has destructive side-effects
+            current_step = get_plan_step(state)
                 if current_step:
                     if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
                         verification_status = "UNCERTAIN_OUTCOME"
@@ -272,8 +278,8 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         
         return VerificationResult(
             status=verification_status,
-            observed_context=state.context if state.context is not None else ContextSnapshot(),
+            observed_context=get_safe_field(state, 'context', None) or ContextSnapshot(),
             expected_state={"outcome": expected_outcome},
-            actual_state=state.execution.result_data if state.execution and isinstance(state.execution.result_data, dict) else {},
+            actual_state=get_safe_field(state, 'execution.result_data', {}) if isinstance(get_safe_field(state, 'execution.result_data', {}), dict) else {},
             reason=verification_reason
         )
