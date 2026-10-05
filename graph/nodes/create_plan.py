@@ -19,6 +19,7 @@ from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, Plan
 from graph.trace_collector import get_trace_collector
 from graph.async_helpers import run_async_safely
 from graph.state_helpers import get_safe_field, get_intent_name, validate_state_for_node
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.CreatePlan")
 
@@ -135,7 +136,13 @@ def _is_complex_request(user_input: str) -> bool:
                 )
                 return is_complex
         except Exception as e:
-            logger.warning(f"LangChain complexity detection failed: {e}, falling back to heuristic")
+            # LangChain complexity detection is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "create_plan",
+                fallback_description="falling back to heuristic complexity detection"
+            )
+            # Note: We don't track this error in state as it's a fallback path
     
     # Fallback to simple heuristic
     complex_keywords = ["and", "then", "after", "before", "while", "search", "navigate", "multiple", "sequence"]
@@ -334,7 +341,13 @@ def _generate_complex_plan(state: OperonixState) -> Plan:
             if plan:
                 return plan
         except Exception as e:
-            logger.warning(f"LangChain plan generation failed: {e}, falling back to placeholder")
+            # LangChain plan generation is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "create_plan",
+                fallback_description="falling back to placeholder complex plan"
+            )
+            # Note: We don't track this error in state as it's a fallback path
     
     # Fallback to placeholder multi-step plan
     logger.info("Using placeholder complex plan (LangChain unavailable)")
