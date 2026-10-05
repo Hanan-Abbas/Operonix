@@ -18,7 +18,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import Plan, PlanStep, PlanStepIdempotency, PlanStepSideEffect
 from graph.trace_collector import get_trace_collector
 from graph.async_helpers import run_async_safely
-from graph.state_helpers import get_safe_field, get_intent_name
+from graph.state_helpers import get_safe_field, get_intent_name, validate_state_for_node
 
 logger = logging.getLogger("Graph.CreatePlan")
 
@@ -47,6 +47,9 @@ def create_plan_node(state: OperonixState) -> Dict[str, Any]:
         Dict with updated state including plan
     """
     logger.info(f"CREATE_PLAN: Generating plan for task {state.task.task_id}")
+    
+    # Validate required state fields
+    validate_state_for_node(state, "create_plan", ["task", "intent"])
     
     state.add_history_event("create_plan_started", {
         "task_id": state.task.task_id,
