@@ -15,6 +15,7 @@ from graph.cancellation import get_cancellation_service
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.state_helpers import get_safe_field
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.Cancel")
 
@@ -156,9 +157,15 @@ def _perform_cleanup(state: OperonixState) -> None:
                             os.rmdir(temp_file)
                             cleanup_actions.append(f"Removed temp directory: {temp_file}")
                     except Exception as e:
+                        # Individual file cleanup failures are recoverable
                         logger.warning(f"Failed to clean up {temp_file}: {e}")
     except Exception as e:
-        logger.error(f"Error during temp file cleanup: {e}")
+        # Temp file cleanup is optional, treat as recoverable
+        graph_error = handle_recoverable_error(
+            e,
+            "cancel",
+            fallback_description="skipping temp file cleanup"
+        )
     
     # Release resource ownership if tracked in state
     if get_safe_field(state, 'context', None) is not None:
@@ -174,7 +181,12 @@ def _perform_cleanup(state: OperonixState) -> None:
         except ImportError:
             logger.debug("ResourceManager not available for cleanup")
         except Exception as e:
-            logger.error(f"Error releasing resources: {e}")
+            # Resource cleanup is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping resource cleanup"
+            )
     
     # Close connections if any (placeholder for connection pool cleanup)
     if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
@@ -188,9 +200,15 @@ def _perform_cleanup(state: OperonixState) -> None:
                         conn.close()
                         cleanup_actions.append(f"Closed connection: {conn}")
                 except Exception as e:
+                    # Individual connection failures are recoverable
                     logger.warning(f"Failed to close connection: {e}")
         except Exception as e:
-            logger.error(f"Error closing connections: {e}")
+            # Connection cleanup is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping connection cleanup"
+            )
     
     # Release locks if any
     if get_safe_field(state, 'context', None) is not None:
@@ -206,7 +224,12 @@ def _perform_cleanup(state: OperonixState) -> None:
         except ImportError:
             logger.debug("LockManager not available for cleanup")
         except Exception as e:
-            logger.error(f"Error releasing locks: {e}")
+            # Lock cleanup is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping lock cleanup"
+            )
     
     if cleanup_actions:
         logger.info(f"CANCEL: Cleanup completed with {len(cleanup_actions)} actions: {cleanup_actions}")
@@ -245,7 +268,13 @@ def _perform_rollback(state: OperonixState) -> None:
                 if rollback_action:
                     rollback_actions.append(rollback_action)
         except Exception as e:
-            logger.error(f"Error during plan step rollback: {e}")
+            # Plan rollback is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping plan step rollback"
+            )
+            track_error(state, graph_error)
     
     # Rollback file changes if tracked in context
     if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
