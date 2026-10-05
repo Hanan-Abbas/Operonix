@@ -15,7 +15,7 @@ from graph.cancellation import get_cancellation_service
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.state_helpers import get_safe_field
-from graph.error_helpers import handle_recoverable_error, track_error
+from graph.error_helpers import handle_recoverable_error, track_error, get_error_summary
 
 logger = logging.getLogger("Graph.Cancel")
 
@@ -87,13 +87,15 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
         response=f"Task {state.task.task_id} was cancelled: {get_safe_field(state, 'cancellation.reason.value', 'unknown')}",
         error=f"Cancelled: {get_safe_field(state, 'abort_decision.reason', 'unknown')}",
         task_id=state.task.task_id,
-        completed_at=datetime.now(UTC)
+        completed_at=datetime.now(UTC),
+        errors=state.errors if hasattr(state, 'errors') else []
     )
     
     state.final = final_result
     
     # Collect trace event for cancellation
     trace_collector = get_trace_collector()
+    error_summary = get_error_summary(state)
     trace_collector.collect_cancellation(
         task_id=state.task.task_id,
         cancellation_data={
@@ -101,7 +103,8 @@ def cancel_node(state: OperonixState) -> Dict[str, Any]:
             "reason": get_safe_field(state, 'cancellation.reason.value', None),
             "abort_semantics": get_safe_field(state, 'abort_decision.semantics.value', None),
             "cleanup_performed": get_safe_field(state, 'abort_decision.cleanup_required', False),
-            "rollback_performed": get_safe_field(state, 'abort_decision.rollback_required', False)
+            "rollback_performed": get_safe_field(state, 'abort_decision.rollback_required', False),
+            "error_summary": error_summary
         }
     )
     
