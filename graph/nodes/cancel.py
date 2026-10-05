@@ -294,7 +294,7 @@ def _perform_rollback(state: OperonixState) -> None:
             logger.error(f"Error during app state rollback: {e}")
     
     # Rollback database state if any (placeholder for database transaction rollback)
-    if state.context is not None and state.context.ui_state is not None:
+    if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
         try:
             # Check for database transactions in ui_state
             transactions = state.context.ui_state.get('db_transactions', [])
