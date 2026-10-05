@@ -120,6 +120,13 @@ class FeatureFlags:
     )
     """Enable dry-run mode for testing without actual execution"""
     
+    # DEPRECATED: This flag is deprecated and will be removed in future versions
+    # The graph should own execution and not delegate to orchestrator
+    USE_PLACEHOLDER_DELEGATION: bool = os.getenv("USE_PLACEHOLDER_DELEGATION", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
+    """DEPRECATED: Allow placeholder execution to delegate to orchestrator (NOT RECOMMENDED)"""
+    
     # ─── SAFETY FLAGS ─────────────────────────────────────────────────────────
     
     SAFETY_STRICT_MODE: bool = os.getenv("SAFETY_STRICT_MODE", "true").lower() in (
