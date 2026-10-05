@@ -17,6 +17,7 @@ from migration.domain_contracts import VerificationResult, ContextSnapshot, Plan
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.state_helpers import get_safe_field, get_plan_step
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.VerifyStep")
 
@@ -247,7 +248,13 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
         )
         
     except Exception as e:
-        logger.error(f"Error verifying postconditions with context: {e}")
+        # Context verification is optional, treat as recoverable
+        graph_error = handle_recoverable_error(
+            e,
+            "verify_step",
+            fallback_description="falling back to basic verification"
+        )
+        track_error(state, graph_error)
         
         # Fallback to basic verification
         verification_status = "VERIFIED"
