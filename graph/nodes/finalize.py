@@ -14,6 +14,7 @@ from typing import Dict, Any
 from migration.graph_state import OperonixState
 from migration.domain_contracts import FinalResult
 from graph.trace_collector import get_trace_collector
+from graph.error_helpers import get_error_summary
 
 logger = logging.getLogger("Graph.Finalize")
 
@@ -38,10 +39,21 @@ def finalize_node(state: OperonixState) -> Dict[str, Any]:
     
     # In Phase 1 foundation, we create a simple success result
     # Later phases will build more sophisticated final results
+    
+    # Get error summary from state
+    error_summary = get_error_summary(state)
+    
+    # Determine success based on errors
+    has_errors = error_summary["total_errors"] > 0
+    has_critical_errors = error_summary["by_severity"].get("critical", 0) > 0
+    
     final_result = FinalResult(
-        success=True,
-        response=f"Task {state.task.task_id} completed (Phase 1 foundation)",
-        task_id=state.task.task_id
+        success=not has_critical_errors,
+        partial=has_errors and not has_critical_errors,
+        response=f"Task {state.task.task_id} completed{' with warnings' if has_errors else ''}",
+        error=f"Encountered {error_summary['total_errors']} errors" if has_errors else None,
+        task_id=state.task.task_id,
+        errors=state.errors if hasattr(state, 'errors') else []
     )
     
     state.final = final_result
@@ -54,7 +66,8 @@ def finalize_node(state: OperonixState) -> Dict[str, Any]:
             "success": final_result.success,
             "response": final_result.response,
             "error": final_result.error,
-            "partial": final_result.partial
+            "partial": final_result.partial,
+            "error_summary": error_summary
         }
     )
     
