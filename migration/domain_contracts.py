@@ -360,6 +360,7 @@ class FinalResult(BaseModel):
     completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     paused: bool = False
     checkpoint_identifier: Optional[str] = None
+    errors: List[Dict[str, Any]] = Field(default_factory=list, description="Errors encountered during execution")
     
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
