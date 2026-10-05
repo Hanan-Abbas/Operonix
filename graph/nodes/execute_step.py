@@ -20,7 +20,7 @@ from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskSt
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.async_helpers import run_async_safely
-from graph.state_helpers import get_safe_field, get_plan_step, get_routing_method, get_execution_success
+from graph.state_helpers import get_safe_field, get_plan_step, get_routing_method, get_execution_success, validate_state_for_node
 
 logger = logging.getLogger("Graph.ExecuteStep")
 
