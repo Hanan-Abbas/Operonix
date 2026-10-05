@@ -140,7 +140,12 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         except ImportError:
             logger.warning("Could not import VectorStore")
         except Exception as e:
-            logger.error(f"Error retrieving from VectorStore: {e}")
+            # VectorStore is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "retrieve_knowledge",
+                fallback_description="continuing without VectorStore"
+            )
         
         # Try to retrieve learned patterns from Retriever with context
         try:
@@ -161,10 +166,21 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         except ImportError:
             logger.warning("Could not import Retriever")
         except Exception as e:
-            logger.error(f"Error retrieving from Retriever: {e}")
+            # Retriever is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "retrieve_knowledge",
+                fallback_description="continuing without Retriever"
+            )
         
     except Exception as e:
-        logger.error(f"Error in knowledge retrieval: {e}")
+        # Knowledge retrieval is optional overall, treat as recoverable
+        graph_error = handle_recoverable_error(
+            e,
+            "retrieve_knowledge",
+            fallback_description="returning empty knowledge context"
+        )
+        track_error(state, graph_error)
     
     # Create knowledge context
     knowledge_context = KnowledgeContext(
