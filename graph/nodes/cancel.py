@@ -302,9 +302,15 @@ def _perform_rollback(state: OperonixState) -> None:
                                 shutil.copy2(backup_path, file_path)
                                 rollback_actions.append(f"Rolled back file modification: {file_path}")
                 except Exception as e:
+                    # Individual file rollback failures are recoverable
                     logger.warning(f"Failed to rollback file change: {e}")
         except Exception as e:
-            logger.error(f"Error during file rollback: {e}")
+            # File rollback is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping file rollback"
+            )
     
     # Rollback application state if tracked
     if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
@@ -318,9 +324,15 @@ def _perform_rollback(state: OperonixState) -> None:
                     logger.info(f"CANCEL: Attempting to restore app state for {change.get('app_name')}")
                     rollback_actions.append(f"Attempted app state restoration for {change.get('app_name')}")
                 except Exception as e:
+                    # Individual app state rollback failures are recoverable
                     logger.warning(f"Failed to rollback app state: {e}")
         except Exception as e:
-            logger.error(f"Error during app state rollback: {e}")
+            # App state rollback is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping app state rollback"
+            )
     
     # Rollback database state if any (placeholder for database transaction rollback)
     if get_safe_field(state, 'context', None) is not None and get_safe_field(state, 'context.ui_state', None) is not None:
@@ -334,9 +346,15 @@ def _perform_rollback(state: OperonixState) -> None:
                         txn.rollback()
                         rollback_actions.append(f"Rolled back database transaction: {txn}")
                 except Exception as e:
+                    # Individual transaction rollback failures are recoverable
                     logger.warning(f"Failed to rollback database transaction: {e}")
         except Exception as e:
-            logger.error(f"Error during database rollback: {e}")
+            # Database rollback is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "cancel",
+                fallback_description="skipping database rollback"
+            )
     
     if rollback_actions:
         logger.info(f"CANCEL: Rollback completed with {len(rollback_actions)} actions: {rollback_actions}")
@@ -395,5 +413,6 @@ def _rollback_step(state: OperonixState, step) -> str | None:
         return None
         
     except Exception as e:
-        logger.error(f"Error rolling back step {step.step_id}: {e}")
+        # Individual step rollback failures are recoverable
+        logger.warning(f"Error rolling back step {step.step_id}: {e}")
         return None
