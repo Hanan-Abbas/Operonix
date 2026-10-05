@@ -18,6 +18,7 @@ from migration.graph_state import OperonixState
 from migration.domain_contracts import KnowledgeContext
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
+from graph.state_helpers import get_safe_field, get_intent_name
 
 logger = logging.getLogger("Graph.RetrieveKnowledge")
 
@@ -42,7 +43,7 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("retrieve_knowledge_started", {
         "task_id": state.task.task_id,
-        "intent": state.intent.name if state.intent else None
+        "intent": get_intent_name(state, None)
     })
     
     # Phase 11: Integrate with actual RAG/memory services
@@ -60,7 +61,7 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         try:
             from memory.long_term_memory import long_term_memory
             
-            if state.intent:
+            if get_safe_field(state, 'intent', None):
                 # Use expanded queries for better retrieval
                 all_tasks = []
                 for query in expanded_queries:
@@ -101,7 +102,7 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         try:
             from memory.vector_store import vector_store
             
-            if state.intent:
+            if get_safe_field(state, 'intent', None):
                 # Try hybrid search (semantic + keyword if available)
                 similar_docs = []
                 for query in expanded_queries:
@@ -134,11 +135,11 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         try:
             from learning.retriever import retriever
             
-            if state.intent:
+            if get_safe_field(state, 'intent', None):
                 # Convert ContextSnapshot to dict for service compatibility
-                context_dict = context_to_dict(state.context) if state.context else None
+                context_dict = context_to_dict(get_safe_field(state, 'context', None)) if get_safe_field(state, 'context', None) else None
                 patterns = retriever.retrieve_patterns(
-                    intent=state.intent.name,
+                    intent=get_intent_name(state, "unknown"),
                     context=context_dict,
                     query=state.task.user_input
                 )
