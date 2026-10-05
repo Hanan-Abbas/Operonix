@@ -21,6 +21,7 @@ from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.async_helpers import run_async_safely
 from graph.state_helpers import get_safe_field, get_plan_step, get_routing_method, get_execution_success, validate_state_for_node
+from graph.error_helpers import handle_recoverable_error, handle_non_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.ExecuteStep")
 
@@ -87,7 +88,13 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         state.execution = execution_result
         
     except Exception as e:
-        logger.error(f"Error in execution: {e}")
+        # Classify and track the error
+        graph_error = handle_non_recoverable_error(
+            e,
+            "execute_step",
+            context={"step_id": get_safe_field(state, 'plan.current_step.step_id', "unknown")}
+        )
+        track_error(state, graph_error)
         
         # Create error execution result
         execution_result = ExecutionResult(
@@ -96,7 +103,11 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
             success=False,
             method_used=get_routing_method(state, "unknown"),
             execution_status=TaskStatus.FAILED,
-            result_data={"error": str(e)}
+            result_data={
+                "error": str(e),
+                "error_type": graph_error.error_type,
+                "error_category": graph_error.category.value
+            }
         )
         
         state.execution = execution_result
