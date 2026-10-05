@@ -362,7 +362,13 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         ui_state["validation"] = validation_data
         
     except Exception as e:
-        logger.error(f"Error gathering context snapshot: {e}")
+        # Context gathering is critical, track the error
+        graph_error = handle_non_recoverable_error(
+            e,
+            "observe",
+            context={"window_title": window_title, "app_name": app_name}
+        )
+        track_error(state, graph_error)
     
     # Create and return ContextSnapshot object
     return ContextSnapshot(
