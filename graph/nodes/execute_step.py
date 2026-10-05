@@ -151,7 +151,13 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     except ImportError:
         logger.warning("Could not import learning_integration, skipping performance feedback")
     except Exception as e:
-        logger.error(f"Error collecting performance feedback: {e}")
+        # Learning integration is optional, treat as recoverable
+        graph_error = handle_recoverable_error(
+            e,
+            "execute_step",
+            fallback_description="skipping performance feedback collection"
+        )
+        track_error(state, graph_error)
     
     # Update plan progress if execution succeeded
     if get_execution_success(state) and get_plan_step(state):
