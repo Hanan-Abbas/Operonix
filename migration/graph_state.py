@@ -144,7 +144,14 @@ class OperonixState(BaseModel):
     
     history: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Workflow-run history (step_results, tool_calls, errors, events)"
+        description="Workflow-run history (step_results, tool calls, errors, events)"
+    )
+    
+    # ─── ERRORS ────────────────────────────────────────────────────────────────
+    
+    errors: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of errors encountered during execution with context"
     )
     
     # ─── VERIFICATION ─────────────────────────────────────────────────────────
