@@ -271,7 +271,12 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         except ImportError:
             logger.warning("Could not import FocusTracker")
         except Exception as e:
-            logger.error(f"Error getting focus info: {e}")
+            # FocusTracker is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "observe",
+                fallback_description="continuing without focus info"
+            )
         
         # Phase 11: Try to validate context with ContextValidator
         validation_data = {"is_valid": True, "reason": "Context validation skipped", "validation_errors": [], "validation_warnings": []}
@@ -329,7 +334,12 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
                 "validation_warnings": []
             }
         except Exception as e:
-            logger.error(f"Error validating context: {e}, using simplified validation")
+            # ContextValidator is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "observe",
+                fallback_description="using simplified validation"
+            )
             temp_context_dict = {
                 "window_title": window_title,
                 "app_name": app_name,
