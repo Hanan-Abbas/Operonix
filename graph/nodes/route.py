@@ -22,6 +22,7 @@ from graph.candidate_evaluation import get_candidate_evaluation_service
 from graph.ranking_policy import get_ranking_policy_service
 from graph.context_helpers import context_to_dict
 from graph.state_helpers import get_safe_field, get_plan_step
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.Route")
 
@@ -107,7 +108,13 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
                 method_decision = _create_fallback_decision(state)
         
     except Exception as e:
-        logger.error(f"Error in candidate-based routing: {e}, using fallback")
+        # Candidate-based routing is optional, treat as recoverable
+        graph_error = handle_recoverable_error(
+            e,
+            "route",
+            fallback_description="using fallback routing decision"
+        )
+        track_error(state, graph_error)
         method_decision = _create_fallback_decision(state)
     
     state.routing = method_decision
