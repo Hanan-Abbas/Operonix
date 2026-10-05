@@ -18,6 +18,7 @@ from migration.domain_contracts import ContextSnapshot
 from graph.trace_collector import get_trace_collector
 from graph.async_helpers import run_async_safely
 from graph.state_helpers import get_safe_field
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.Observe")
 
@@ -202,7 +203,13 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         except ImportError:
             logger.warning("Could not import WindowDetector")
         except Exception as e:
-            logger.error(f"Error getting context from WindowDetector: {e}")
+            # WindowDetector is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "observe",
+                fallback_description="continuing without WindowDetector context"
+            )
+            # Note: We don't track individual service errors in observe to avoid noise
         
         # Phase 11: Try to get app classification from AppClassifier
         try:
@@ -222,7 +229,12 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         except ImportError:
             logger.warning("Could not import AppClassifier")
         except Exception as e:
-            logger.error(f"Error getting app classification: {e}")
+            # AppClassifier is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "observe",
+                fallback_description="continuing without app classification"
+            )
         
         # Try to get deep state from StateExtractor
         try:
@@ -236,7 +248,12 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         except ImportError:
             logger.warning("Could not import StateExtractor")
         except Exception as e:
-            logger.error(f"Error getting state from StateExtractor: {e}")
+            # StateExtractor is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "observe",
+                fallback_description="continuing without state extraction"
+            )
         
         # Phase 11: Try to get focus information from FocusTracker
         try:
