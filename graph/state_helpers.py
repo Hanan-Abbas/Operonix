@@ -5,7 +5,7 @@ State Helper Utilities — Operonix Graph
 Helper functions for safe access to OperonixState fields.
 Provides consistent patterns for accessing optional state fields with defaults.
 """
-from __future__ annotations
+from __future__ import annotations
 
 import logging
 from typing import Any, Optional, TypeVar
