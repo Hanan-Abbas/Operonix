@@ -44,6 +44,9 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     """
     logger.info(f"EXECUTE_STEP: Executing step for task {state.task.task_id}")
     
+    # Validate required state fields
+    validate_state_for_node(state, "execute_step", ["task", "plan", "routing"])
+    
     state.add_history_event("execute_step_started", {
         "task_id": state.task.task_id,
         "step_id": get_safe_field(state, 'plan.current_step.step_id', None),
