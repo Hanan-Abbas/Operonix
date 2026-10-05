@@ -19,6 +19,7 @@ from migration.domain_contracts import KnowledgeContext
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.state_helpers import get_safe_field, get_intent_name
+from graph.error_helpers import handle_recoverable_error, track_error
 
 logger = logging.getLogger("Graph.RetrieveKnowledge")
 
@@ -81,7 +82,12 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         except ImportError:
             logger.warning("Could not import LongTermMemory")
         except Exception as e:
-            logger.error(f"Error retrieving from LongTermMemory: {e}")
+            # LongTermMemory is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "retrieve_knowledge",
+                fallback_description="continuing without LongTermMemory"
+            )
         
         # Try to retrieve from SessionMemory
         try:
@@ -96,7 +102,12 @@ def retrieve_knowledge_node(state: OperonixState) -> Dict[str, Any]:
         except ImportError:
             logger.warning("Could not import SessionMemory")
         except Exception as e:
-            logger.error(f"Error retrieving from SessionMemory: {e}")
+            # SessionMemory is optional, treat as recoverable
+            graph_error = handle_recoverable_error(
+                e,
+                "retrieve_knowledge",
+                fallback_description="continuing without SessionMemory"
+            )
         
         # Try to retrieve from VectorStore with hybrid search (if available)
         try:
