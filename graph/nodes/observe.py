@@ -87,7 +87,29 @@ def observe_node(state: OperonixState) -> Dict[str, Any]:
         logger.info("OBSERVE: Initial observation with actual context services")
         
         # Integrate with actual context services
-        context_snapshot = _gather_context_snapshot(state)
+        try:
+            context_snapshot = _gather_context_snapshot(state)
+        except Exception as e:
+            # Context gathering is critical, track the error
+            graph_error = handle_non_recoverable_error(
+                e,
+                "observe",
+                context={"task_id": state.task.task_id}
+            )
+            track_error(state, graph_error)
+            
+            # Create minimal context snapshot on error
+            context_snapshot = ContextSnapshot(
+                active_window="unknown",
+                app="unknown",
+                app_type="unknown",
+                window_title="unknown",
+                cwd="unknown",
+                sub_context={},
+                ui_state={"error": str(e)},
+                permissions=[],
+                confidence=0.0
+            )
         
         # Store context snapshot in state
         state.context = context_snapshot
@@ -362,13 +384,8 @@ def _gather_context_snapshot(state: OperonixState) -> ContextSnapshot:
         ui_state["validation"] = validation_data
         
     except Exception as e:
-        # Context gathering is critical, track the error
-        graph_error = handle_non_recoverable_error(
-            e,
-            "observe",
-            context={"window_title": window_title, "app_name": app_name}
-        )
-        track_error(state, graph_error)
+        # Context gathering is critical, log error
+        logger.error(f"Error gathering context snapshot: {e}")
     
     # Create and return ContextSnapshot object
     return ContextSnapshot(
