@@ -224,20 +224,20 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
                 
                 # Check if operation is non-idempotent or has destructive side-effects
                 current_step = get_plan_step(state)
-                    if current_step:
-                        if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
-                            verification_status = "UNCERTAIN_OUTCOME"
-                            verification_reason = "Non-idempotent operation failed, outcome uncertain"
-                        elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
-                            verification_status = "UNCERTAIN_OUTCOME"
-                            verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
-                        else:
-                            verification_status = "FAILED"
+                if current_step:
+                    if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
+                        verification_status = "UNCERTAIN_OUTCOME"
+                        verification_reason = "Non-idempotent operation failed, outcome uncertain"
+                    elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+                        verification_status = "UNCERTAIN_OUTCOME"
+                        verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
                     else:
                         verification_status = "FAILED"
                 else:
-                    verification_status = "VERIFIED"
-                    verification_reason = "Executor reported success and no specific postconditions to verify"
+                    verification_status = "FAILED"
+            else:
+                verification_status = "VERIFIED"
+                verification_reason = "Executor reported success and no specific postconditions to verify"
         
         return VerificationResult(
             status=verification_status,
@@ -268,20 +268,20 @@ def _verify_postconditions(state: OperonixState) -> VerificationResult:
             
             # Check if operation is non-idempotent or has destructive side-effects
             current_step = get_plan_step(state)
-                if current_step:
-                    if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
-                        verification_status = "UNCERTAIN_OUTCOME"
-                        verification_reason = "Non-idempotent operation failed, outcome uncertain"
-                    elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
-                        verification_status = "UNCERTAIN_OUTCOME"
-                        verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
-                    else:
-                        verification_status = "FAILED"
+            if current_step:
+                if current_step.idempotency == PlanStepIdempotency.NON_IDEMPOTENT:
+                    verification_status = "UNCERTAIN_OUTCOME"
+                    verification_reason = "Non-idempotent operation failed, outcome uncertain"
+                elif current_step.side_effect in [PlanStepSideEffect.DESTRUCTIVE, PlanStepSideEffect.EXTERNAL_COMMIT]:
+                    verification_status = "UNCERTAIN_OUTCOME"
+                    verification_reason = "Destructive/external-commit operation failed, outcome uncertain"
                 else:
                     verification_status = "FAILED"
             else:
-                verification_status = "VERIFIED"
-                verification_reason = "Executor reported success"
+                verification_status = "FAILED"
+        else:
+            verification_status = "VERIFIED"
+            verification_reason = "Executor reported success"
         
         return VerificationResult(
             status=verification_status,
