@@ -160,9 +160,42 @@ def _analyze_intent_placeholder(state: OperonixState) -> IntentResult:
     
     # Simple keyword-based intent detection as fallback
     user_input = state.task.user_input.lower()
+    original_input = state.task.user_input
+    parameters = {"user_input": original_input}
     
     if "open" in user_input and ("app" in user_input or "firefox" in user_input or "chrome" in user_input):
         intent_name = "open_application"
+        
+        # Extract app name from natural language
+        # Patterns: "open the app named Clocks", "open Clocks", "launch Firefox"
+        import re
+        
+        # Pattern 1: "open the app named <app_name>"
+        match = re.search(r'open the app named\s+(\w+)', original_input, re.IGNORECASE)
+        if match:
+            parameters["app_name"] = match.group(1)
+        # Pattern 2: "open <app_name>" (capture until next keyword)
+        elif user_input.startswith("open "):
+            # Extract the app name after "open"
+            parts = original_input.split("open ", 1)[1].strip()
+            # Take first word or phrase (simplified)
+            app_name = parts.split()[0] if parts else ""
+            if app_name:
+                parameters["app_name"] = app_name
+        # Pattern 3: "launch <app_name>"
+        elif user_input.startswith("launch "):
+            parts = original_input.split("launch ", 1)[1].strip()
+            app_name = parts.split()[0] if parts else ""
+            if app_name:
+                parameters["app_name"] = app_name
+        # Pattern 4: Direct app mentions
+        elif "firefox" in user_input:
+            parameters["app_name"] = "firefox"
+        elif "chrome" in user_input:
+            parameters["app_name"] = "chrome"
+        elif "system monitor" in user_input:
+            parameters["app_name"] = "system monitor"
+            
     elif "create" in user_input and "file" in user_input:
         intent_name = "create_file"
     elif "delete" in user_input and "file" in user_input:
@@ -177,8 +210,8 @@ def _analyze_intent_placeholder(state: OperonixState) -> IntentResult:
     return IntentResult(
         name=intent_name,
         confidence=0.6,  # Lower confidence for placeholder
-        parameters={"user_input": state.task.user_input},
-        raw_intent=state.task.user_input,
+        parameters=parameters,
+        raw_intent=original_input,
         fallback_used=True
     )
 
@@ -213,6 +246,25 @@ def _apply_deterministic_resolution(intent_result: IntentResult, state: Operonix
         intent_result.name = "unknown"
         intent_result.confidence = min(intent_result.confidence, 0.5)
     
+    # Ensure app_name is set for open_application intent (plugin requirement)
+    if intent_result.name == "open_application" and "app_name" not in intent_result.parameters:
+        # Try to extract from application parameter
+        if "application" in intent_result.parameters:
+            intent_result.parameters["app_name"] = intent_result.parameters["application"]
+        else:
+            # Try to extract from user_input
+            user_input = state.task.user_input.lower()
+            if "firefox" in user_input:
+                intent_result.parameters["app_name"] = "firefox"
+            elif "chrome" in user_input:
+                intent_result.parameters["app_name"] = "chrome"
+            elif "system monitor" in user_input:
+                intent_result.parameters["app_name"] = "system monitor"
+            else:
+                # Last resort: set to generic value
+                logger.warning("Could not extract app_name, setting to generic value")
+                intent_result.parameters["app_name"] = "unknown"
+    
     return intent_result
 
 
@@ -235,6 +287,7 @@ def _apply_keyword_fallback(intent_result: IntentResult, state: OperonixState) -
         from brain.intent_parser import _BRIDGE_KEYWORDS, _PANEL_SUDO_KEYWORDS, _LAB_KEYWORDS
         
         user_input = state.task.user_input.lower()
+        original_input = state.task.user_input
         
         # Apply keyword overrides from existing IntentParser
         # Bridge keywords (must run in user's shell)
@@ -259,12 +312,18 @@ def _apply_keyword_fallback(intent_result: IntentResult, state: OperonixState) -
                 break
         
         # Application-specific keyword overrides
+        # Also ensure app_name is set for plugin compatibility
         if "firefox" in user_input:
             intent_result.name = "open_application"
             intent_result.parameters["application"] = "firefox"
+            intent_result.parameters["app_name"] = "firefox"
         elif "chrome" in user_input:
             intent_result.name = "open_application"
             intent_result.parameters["application"] = "chrome"
+            intent_result.parameters["app_name"] = "chrome"
+        elif "system monitor" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["app_name"] = "system monitor"
             
     except ImportError:
         logger.warning("Could not import IntentParser keywords, using basic keyword overrides")
@@ -274,8 +333,13 @@ def _apply_keyword_fallback(intent_result: IntentResult, state: OperonixState) -
         if "firefox" in user_input:
             intent_result.name = "open_application"
             intent_result.parameters["application"] = "firefox"
+            intent_result.parameters["app_name"] = "firefox"
         elif "chrome" in user_input:
             intent_result.name = "open_application"
             intent_result.parameters["application"] = "chrome"
+            intent_result.parameters["app_name"] = "chrome"
+        elif "system monitor" in user_input:
+            intent_result.name = "open_application"
+            intent_result.parameters["app_name"] = "system monitor"
     
     return intent_result
