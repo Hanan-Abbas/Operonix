@@ -141,7 +141,13 @@ class Orchestrator:
 
         bus.subscribe("wake_word_detected",     self.handle_wake_word)
         bus.subscribe("text_query_received",    self._handle_panel_input)
-        bus.subscribe("user_input_received",    self.handle_new_task)
+        
+        # Conditional subscription: only subscribe to user_input_received if LangGraph is disabled
+        # This prevents dual execution when both graph and legacy are active
+        from migration.feature_flags import flags
+        if not flags.USE_LANGGRAPH:
+            bus.subscribe("user_input_received", self.handle_new_task)
+        
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
         bus.subscribe("intent_parsed",          self.route_to_mapper)
         bus.subscribe("capability_mapped",      self.inject_task_metadata)
