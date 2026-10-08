@@ -38,9 +38,13 @@ class RuntimeGraphAdapter:
     This adapter is the boundary between the Operonix Runtime and the
     LangGraph workflow engine. It is responsible for:
     - Converting task requests to graph state
-    - Invoking the graph
+    - Invoking the graph in a separate thread to avoid event loop conflicts
     - Extracting final results
     - Providing fallback to legacy workflow when graph is disabled
+    
+    IMPORTANT: The graph runs in a separate thread (via run_in_executor) to
+    isolate its event loop from the main async loop. This allows graph nodes
+    to use asyncio.run() safely for their async operations.
     
     Per migration plan §6.1, the runtime creates initial state and invokes
     the graph, but does NOT decide workflow strategy.
