@@ -4,5 +4,8 @@
     },
     "open firefox app": {
         "shell": 1
+    },
+    "app opening plugin": {
+        "plugin": 1
     }
 }
