@@ -245,8 +245,12 @@ class OperonixGraphRunner:
         """Check if LangGraph is available and enabled."""
         return self.graph is not None and self.is_enabled
     
-    async def run_task(self, task_request: TaskRequest) -> OperonixState:
+    def run_task(self, task_request: TaskRequest) -> OperonixState:
         """Run a task through the LangGraph workflow.
+        
+        This method is synchronous because LangGraph's invoke() is synchronous.
+        The runtime_adapter calls this method in a separate thread to avoid
+        event loop conflicts with the main async loop.
         
         Args:
             task_request: The task request to execute
@@ -270,8 +274,9 @@ class OperonixGraphRunner:
         
         # Run the graph
         try:
-            # LangGraph's invoke method is synchronous in current version
-            # We wrap it in async for future compatibility
+            # LangGraph's invoke method is synchronous
+            # Since this runs in a separate thread (via runtime_adapter.run_in_executor),
+            # graph nodes can safely use asyncio.run() for their async operations
             final_state = self.graph.invoke(initial_state)
             
             # LangGraph may return dict instead of OperonixState object
