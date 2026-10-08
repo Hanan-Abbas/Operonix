@@ -482,10 +482,10 @@ class LifecycleManager:
                     }
                 )
                 
-                # Execute task through graph with fallback (async, so create task)
+                # Execute task through graph (async, so create task)
                 import asyncio
                 loop = asyncio.get_running_loop()
-                asyncio.create_task(self._execute_graph_task_with_fallback(task_request, event))
+                asyncio.create_task(self._execute_graph_task(task_request))
                 
                 logger.info(f"Task {task_request.task_id} routed to LangGraph workflow with fallback")
                 
