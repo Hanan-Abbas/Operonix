@@ -119,6 +119,10 @@ class RuntimeGraphAdapter:
     async def _execute_with_graph(self, task_request: TaskRequest) -> FinalResult:
         """Execute task through LangGraph workflow.
         
+        Runs the synchronous graph.invoke() in a separate thread to avoid
+        event loop conflicts with the main async loop. This allows graph nodes
+        to use asyncio.run() safely within their isolated thread context.
+        
         Args:
             task_request: The task request to execute
             
@@ -132,8 +136,16 @@ class RuntimeGraphAdapter:
             raise RuntimeError("LangGraph workflow is not available")
         
         try:
-            # Run task through graph
-            final_state = await self.graph_runner.run_task(task_request)
+            # Run graph in a separate thread to avoid event loop conflicts
+            # This isolates the graph's event loop from the main async loop
+            loop = asyncio.get_running_loop()
+            
+            # Run the synchronous graph.run_task in a thread executor
+            final_state = await loop.run_in_executor(
+                None,  # Use default executor (ThreadPoolExecutor)
+                self.graph_runner.run_task,
+                task_request
+            )
             
             # Check if workflow was paused (awaiting confirmation)
             if final_state.paused:
