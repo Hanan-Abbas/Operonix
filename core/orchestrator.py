@@ -141,13 +141,16 @@ class Orchestrator:
 
         bus.subscribe("wake_word_detected",     self.handle_wake_word)
         bus.subscribe("text_query_received",    self._handle_panel_input)
-        
+
         # Conditional subscription: only subscribe to user_input_received if LangGraph is disabled
         # This prevents dual execution when both graph and legacy are active
         from migration.feature_flags import flags
         if not flags.USE_LANGGRAPH:
             bus.subscribe("user_input_received", self.handle_new_task)
-        
+            logger.info("Orchestrator subscribed to user_input_received (legacy mode)")
+        else:
+            logger.info("Orchestrator SKIPPED user_input_received subscription (LangGraph mode active)")
+
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
         bus.subscribe("intent_parsed",          self.route_to_mapper)
         bus.subscribe("capability_mapped",      self.inject_task_metadata)
@@ -323,6 +326,15 @@ class Orchestrator:
         )
 
     async def handle_new_task(self, event: Any) -> None:
+        # Check if this should be handling the task (debug for dual execution)
+        from migration.feature_flags import flags
+        if flags.USE_LANGGRAPH:
+            logger.warning(
+                "⚠️  handle_new_task called but USE_LANGGRAPH is true! "
+                "This indicates dual execution - event was not consumed by graph bridge."
+            )
+            logger.warning(f"Event data: {event.data}")
+
         task_id   = str(uuid.uuid4())[:8]
         user_text = (event.data.get("text") or "").strip()
         if not user_text:
