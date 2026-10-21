@@ -71,7 +71,8 @@ class LangChainAdapter:
                 self._model = ChatGoogleGenerativeAI(
                     model=self.model_name,
                     api_key=api_key,
-                    temperature=self.config.get("temperature", 0.7)
+                    temperature=self.config.get("temperature", 0.7),
+                    convert_system_message_to_human=True
                 )
                 logger.info(f"LangChainAdapter: Initialized Gemini model {self.model_name}")
                 
