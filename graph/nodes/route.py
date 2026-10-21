@@ -90,9 +90,51 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
             )
             
             logger.info(f"Evaluated {len(evaluations)} candidates")
-            
+
+            # Phase 3: Apply safety constraints before ranking (per migration plan §4.4)
+            # Filter out risky and unauthorized candidates
+            from safety.risk_rules import get_command_risk, RiskLevel
+            from safety.permission_guard import PermissionGuard
+
+            filtered_evaluations = []
+            for eval_result in evaluations:
+                # Get command from plan step for risk assessment
+                step_action = state.plan.current_step.action
+                shell_argv = state.plan.current_step.parameters.get("shell_argv", [])
+                command_str = f"{step_action} {' '.join(shell_argv)}" if shell_argv else step_action
+
+                # Assess risk
+                try:
+                    risk = get_command_risk(command_str, profile_hint=None)
+                    if risk == RiskLevel.FORBIDDEN:
+                        logger.warning(
+                            f"Candidate {eval_result.candidate.tool_id} filtered out: FORBIDDEN risk"
+                        )
+                        continue
+                    if risk == RiskLevel.HIGH:
+                        logger.warning(
+                            f"Candidate {eval_result.candidate.tool_id} filtered out: HIGH risk"
+                        )
+                        continue
+                except Exception as e:
+                    logger.warning(f"Risk assessment failed for candidate: {e}")
+                    # If risk assessment fails, be conservative and filter out
+                    continue
+
+                # Permission check (basic check - can be enhanced)
+                # For now, we pass all candidates that pass risk assessment
+                filtered_evaluations.append(eval_result)
+
+            logger.info(f"Safety filtered: {len(evaluations)} → {len(filtered_evaluations)} candidates")
+
+            if not filtered_evaluations:
+                logger.warning("No candidates passed safety constraints, triggering recovery")
+                method_decision = _create_fallback_decision(state)
+                state.routing = method_decision
+                return {"routing": None}
+
             # Rank candidates
-            ranked_evaluations = ranking_service.rank_candidates(evaluations)
+            ranked_evaluations = ranking_service.rank_candidates(filtered_evaluations)
             
             logger.info(f"Ranked {len(ranked_evaluations)} candidates")
             
@@ -104,7 +146,7 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
                 method_decision = _convert_to_method_decision(routing_decision)
                 logger.info(f"Routing decision: {method_decision.selected_candidate.method_type} (confidence: {method_decision.confidence})")
             else:
-                logger.warning("No valid routing decision, using fallback")
+                logger.warning("No valid routing decision, triggering recovery")
                 method_decision = _create_fallback_decision(state)
         
     except Exception as e:
@@ -112,11 +154,16 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
         graph_error = handle_recoverable_error(
             e,
             "route",
-            fallback_description="using fallback routing decision"
+            fallback_description="triggering recovery for re-routing"
         )
         track_error(state, graph_error)
         method_decision = _create_fallback_decision(state)
-    
+
+    # Phase 3: If routing failed, return None to trigger recovery
+    if method_decision is None:
+        logger.warning("Routing failed - returning to trigger recovery")
+        return {"routing": None}
+
     state.routing = method_decision
     
     # Phase 9: Collect trace events for routing candidates and decision
@@ -203,29 +250,19 @@ def _convert_to_method_decision(routing_decision: RoutingDecision) -> MethodDeci
 
 
 def _create_fallback_decision(state: OperonixState) -> MethodDecision:
-    """Create fallback routing decision.
-    
+    """
+    Create fallback routing decision.
+
+    Phase 3: Removed linear fallback to SHELL.
+    When candidate-based routing fails, return None to trigger recovery instead.
+
     Args:
         state: Current OperonixState
-        
+
     Returns:
-        Fallback MethodDecision
+        None - to trigger recovery node for re-routing
     """
-    candidate = RoutingCandidate(
-        method_type="SHELL",
-        tool_id="shell",
-        capability_id="execute_intent",
-        plugin_id=None,
-        capability_fit=0.8,
-        context_fit=0.7,
-        availability=1.0,
-        reliability=0.9,
-        overall_score=0.8
+    logger.warning(
+        "Candidate-based routing failed - returning None to trigger recovery"
     )
-    
-    return MethodDecision(
-        selected_candidate=candidate,
-        confidence=0.8,
-        candidates_considered=[candidate],
-        routing_explanation="Fallback routing (candidate-based routing failed or unavailable)"
-    )
+    return None
