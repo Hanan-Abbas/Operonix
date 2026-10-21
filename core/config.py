@@ -82,27 +82,36 @@ class Settings:
     # Groq offers free-tier access with very fast inference via Llama3, Mixtral, Gemma.
     #
     # Available models (as of 2026):
-    #   llama3-70b-8192       ← best quality, recommended default
-    #   llama3-8b-8192        ← faster, lower quality
-    #   mixtral-8x7b-32768    ← large context window
-    #   gemma2-9b-it          ← Google Gemma 2
+    #   llama-3.3-70b-versatile   ← best quality, recommended default
+    #   llama-3.1-70b-versatile   ← high quality
+    #   llama-3.3-8b-instant      ← faster, lower quality
+    #   llama-3.1-8b-instant      ← fast
+    #   mixtral-8x7b-32768        ← large context window
+    #   gemma2-9b-it              ← Google Gemma 2
     #
     # Get your free API key at: https://console.groq.com
     # Set in .env:  GROQ_API_KEY=gsk_...
-    #               GROQ_MODEL=llama3-70b-8192
+    #               GROQ_MODEL=llama-3.3-70b-versatile
     _GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     _GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama3-70b-8192")
     GROQ_TIMEOUT: int = int(os.getenv("GROQ_TIMEOUT", "30"))
 
     # Validation: Ensure GROQ_MODEL is a valid Groq model
-    _VALID_GROQ_MODELS = {"llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"}
+    _VALID_GROQ_MODELS = {
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama-3.3-8b-instant",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    }
     if _GROQ_API_KEY and _GROQ_MODEL not in _VALID_GROQ_MODELS:
         logger.warning(
             f"⚠️  GROQ_MODEL '{_GROQ_MODEL}' is not a valid Groq model. "
             f"Valid models: {', '.join(_VALID_GROQ_MODELS)}. "
-            f"Defaulting to 'llama3-70b-8192'."
+            f"Defaulting to 'llama-3.3-70b-versatile'."
         )
-        _GROQ_MODEL = "llama3-70b-8192"
+        _GROQ_MODEL = "llama-3.3-70b-versatile"
 
     GROQ_API_KEY: str = _GROQ_API_KEY
     GROQ_MODEL: str = _GROQ_MODEL
@@ -120,12 +129,12 @@ class Settings:
     # OpenRouter
     # ----------
     OPENROUTER_MODEL: str = os.getenv(
-        "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
+        "OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct:free"
     )
 
     # Gemini
     # ------
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     # ─────────────────────────────────────────────────────────────────────────
 
