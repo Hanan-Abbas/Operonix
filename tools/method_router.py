@@ -717,6 +717,50 @@ class MethodRouter:
             duration_ms,
         )
 
+    def _create_simple_decision(self, intent: dict[str, Any]) -> MethodDecision:
+        """
+        Create a simple MethodDecision without linear fallback chain.
+
+        This is used when USE_GRAPH_ROUTING=true, where the graph's
+        candidate-based routing engine handles routing instead of
+        the legacy linear priority system.
+
+        Args:
+            intent: The ParsedIntent dict
+
+        Returns:
+            MethodDecision with empty fallback_chain
+        """
+        intent_str = str(intent.get("intent") or "")
+
+        # Build payload
+        payload = self._build_payload(intent)
+
+        # Capture UI snapshot
+        ui_snapshot, expected_app = self._capture_ui_snapshot(intent)
+
+        # Default to SHELL with empty fallback chain
+        # The graph will handle the actual routing decision
+        fallback_empty: tuple[MethodType, ...] = ()
+        decision = self._build_decision(
+            method=MethodType.SHELL,
+            confidence=0.5,
+            fallback_chain=fallback_empty,  # Empty - no linear fallback
+            payload=payload,
+            expected_app=expected_app,
+            expected_ui_state=ui_snapshot,
+            rejected=tuple(),
+        )
+
+        logger.info(
+            "Simple decision created (USE_GRAPH_ROUTING=true): "
+            "intent='%s' method=%s fallback=empty",
+            intent_str,
+            decision.method.value,
+        )
+
+        return decision
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level singleton
