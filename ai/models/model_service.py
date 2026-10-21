@@ -154,28 +154,36 @@ class OperonixModelService:
         max_tokens: Optional[int] = None
     ) -> str:
         """Generate a chat completion.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
-            
+
         Returns:
             Generated text response
-            
+
         Raises:
             RuntimeError: If model service is not available
         """
         if not self.is_available():
             raise RuntimeError("Model service is not available")
-        
+
+        if not self._langchain_model or not self._langchain_model.is_available():
+            raise RuntimeError("LangChain model is not available")
+
         logger.info(f"Chat completion requested with {len(messages)} messages")
-        
-        # In Phase 2, we return a placeholder response
-        # Later phases will actually call LangChain models
-        logger.warning("LangChain model integration deferred to later phases")
-        
-        return f"Chat completion response (Phase 2 stub - provider: {self.provider}, model: {self.model_name})"
+
+        # Build kwargs for LangChain
+        kwargs = {}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+
+        # Call LangChain adapter
+        response = await self._langchain_model.invoke(messages, **kwargs)
+        return response
     
     async def generate_structured_output(
         self,
@@ -184,63 +192,34 @@ class OperonixModelService:
         temperature: Optional[float] = None
     ) -> Dict[str, Any]:
         """Generate structured output following a schema.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
             schema: Output schema definition
             temperature: Sampling temperature
-            
+
         Returns:
             Structured output matching the schema
-            
+
         Raises:
             RuntimeError: If model is not available
         """
         if not self.is_available():
             raise RuntimeError("Model service is not available")
-        
+
+        if not self._langchain_model or not self._langchain_model.is_available():
+            raise RuntimeError("LangChain model is not available")
+
         logger.info(f"Structured output requested with schema: {schema.get('name', 'unnamed')}")
-        
-        # In Phase 2, we return a placeholder response
-        # Later phases will use LangChain's structured output
-        logger.warning("LangChain structured output integration deferred to later phases")
-        
-        # Return a stub response that matches common schema patterns
-        schema_name = schema.get('name', 'unnamed')
-        
-        if schema_name == "complexity_analysis":
-            return {
-                "is_complex": False
-            }
-        elif schema_name == "plan_generation":
-            # Return placeholder steps for plan generation
-            return {
-                "steps": [
-                    {
-                        "action": "prepare_environment",
-                        "objective": "Prepare environment for execution",
-                        "arguments": {}
-                    },
-                    {
-                        "action": "execute_intent",
-                        "objective": "Execute the user's request",
-                        "arguments": {}
-                    }
-                ]
-            }
-        elif schema_name == "intent_analysis":
-            return {
-                "intent": "unknown",
-                "confidence": 0.5,
-                "parameters": {}
-            }
-        
-        # Default stub response
-        return {
-            "provider": self.provider.value,
-            "model": self.model_name,
-            "note": "Structured output (Phase 2 stub)"
-        }
+
+        # Build kwargs for LangChain
+        kwargs = {}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        # Call LangChain adapter with structured output
+        result = await self._langchain_model.invoke_structured(messages, schema, **kwargs)
+        return result
     
     def get_provider_info(self) -> Dict[str, Any]:
         """Get information about the current provider configuration."""
