@@ -437,29 +437,29 @@ class LifecycleManager:
 
     def _setup_graph_task_routing(self) -> None:
         """Set up EventBus bridge for routing tasks to LangGraph workflow.
-        
+
         This subscribes to user_input_received events and routes them to the
         RuntimeAdapter when USE_LANGGRAPH is enabled, allowing the graph to
         handle tasks instead of the legacy orchestrator.
-        
+
         Implements feature flag-based routing with graceful fallback to legacy
         on graph failures.
         """
         from migration.feature_flags import flags
-        
+
         if not flags.USE_LANGGRAPH:
             logger.info("Graph task routing disabled by feature flag - using legacy orchestrator")
             return
-        
+
         def handle_graph_task(event) -> None:
             """Handle user input by routing to graph workflow with fallback."""
             try:
                 user_input = event.data.get("text", "").strip()
                 source = event.data.get("source", "unknown")
-                
+
                 if not user_input:
                     return
-                
+
                 # Convert source to TaskSource
                 from migration.domain_contracts import TaskSource
                 source_map = {
@@ -470,7 +470,7 @@ class LifecycleManager:
                     "unknown": TaskSource.API
                 }
                 task_source = source_map.get(source.lower(), TaskSource.API)
-                
+
                 # Create task request
                 task_request = runtime_adapter.create_task_request(
                     user_input=user_input,
@@ -481,19 +481,24 @@ class LifecycleManager:
                         "event_source": "event_bus"
                     }
                 )
-                
+
                 # Execute task through graph (async, so create task)
                 import asyncio
                 loop = asyncio.get_running_loop()
                 asyncio.create_task(self._execute_graph_task(task_request))
-                
-                logger.info(f"Task {task_request.task_id} routed to LangGraph workflow with fallback")
-                
+
+                logger.info(f"Task {task_request.task_id} routed to LangGraph workflow")
+
+                # Consume the event to prevent legacy orchestrator from processing it
+                event.consume()
+                logger.debug(f"Event {event.event_id} consumed - legacy orchestrator will skip")
+
             except Exception as e:
                 logger.error(f"Error routing task to graph: {e}")
                 # On graph routing failure, let legacy orchestrator handle it
                 # by not consuming the event
-        
+                logger.info("Graph routing failed - legacy orchestrator will handle this task")
+
         # Subscribe to user_input_received events
         # We subscribe to intercept before legacy orchestrator
         bus.subscribe("user_input_received", handle_graph_task)
