@@ -556,7 +556,13 @@ class Executor:
         """
         Execute a single step using the pre-computed MethodDecision.
 
-        Walks the fallback_chain according to FailureClass rules:
+        Phase 3: Candidate-Based Routing Support
+        ─────────────────────────────────────────
+        When USE_GRAPH_ROUTING=true, this method does NOT walk the fallback_chain.
+        Routing-level failures are returned to the graph for re-routing.
+        Only execution-level failures (ENV_TRANSIENT) are retried.
+
+        When USE_GRAPH_ROUTING=false, legacy fallback behavior is used:
           ENV_TRANSIENT    → retry same method ×MAX_RETRY_ATTEMPTS, no fallback
           ROUTING_MISMATCH → no retry, advance to next in fallback_chain,
                              publish routing_mismatch event for learner
@@ -568,6 +574,19 @@ class Executor:
         Gap 3: UIReadinessGuard.validate(decision) is called immediately
                before any UI tool invocation.
         """
+        # Phase 3: Check if graph-based routing is enabled
+        use_graph_routing = False
+        try:
+            from migration.feature_flags import flags
+            use_graph_routing = flags.USE_GRAPH_ROUTING
+            if use_graph_routing:
+                logger.info(
+                    "USE_GRAPH_ROUTING=true - executor will not walk fallback_chain"
+                )
+        except ImportError:
+            # If feature flags not available, use legacy behavior
+            pass
+
         current = decision
         max_transient_retries: int = int(
             getattr(settings, "MAX_RETRY_ATTEMPTS", 3)
@@ -706,12 +725,26 @@ class Executor:
           a) Return (False, error_dict, method_str) — terminal failure
           b) Return the next MethodDecision — continue with fallback
 
-        Gap 1 rules:
+        Phase 3: Candidate-Based Routing Support
+        ─────────────────────────────────────────
+        When USE_GRAPH_ROUTING=true, routing-level failures (ROUTING_MISMATCH,
+        ENV_PERMANENT) do NOT advance fallback chain. They return to graph for re-routing.
+        Only execution-level failures (ENV_TRANSIENT) are retried.
+
+        When USE_GRAPH_ROUTING=false, legacy Gap 1 rules apply:
           ENV_TRANSIENT    → terminal (retries already exhausted in caller)
           ROUTING_MISMATCH → publish routing_mismatch + advance fallback
           ENV_PERMANENT    → publish method_unavailable + advance fallback
           EXECUTION_LOGIC  → publish execution_error + terminal (surface bug)
         """
+        # Phase 3: Check if graph-based routing is enabled
+        use_graph_routing = False
+        try:
+            from migration.feature_flags import flags
+            use_graph_routing = flags.USE_GRAPH_ROUTING
+        except ImportError:
+            pass
+
         failure_class  = decision.failure_class
         failure_detail = decision.failure_detail or "unknown error"
         method_str     = decision.method.value
@@ -759,6 +792,18 @@ class Executor:
                 source="executor",
             )
 
+            # Phase 3: In graph mode, don't advance fallback chain
+            # Return error to graph for re-routing
+            if use_graph_routing:
+                logger.info(
+                    "USE_GRAPH_ROUTING=true - returning ROUTING_MISMATCH to graph for re-routing"
+                )
+                return (
+                    False,
+                    {"type": "routing_mismatch", "message": failure_detail},
+                    method_str,
+                )
+
         elif failure_class == FailureClass.ENV_PERMANENT:
             logger.warning(
                 "ENV_PERMANENT on step %d method=%s: %s",
@@ -773,6 +818,18 @@ class Executor:
                 },
                 source="executor",
             )
+
+            # Phase 3: In graph mode, don't advance fallback chain
+            # Return error to graph for re-routing
+            if use_graph_routing:
+                logger.info(
+                    "USE_GRAPH_ROUTING=true - returning ENV_PERMANENT to graph for re-routing"
+                )
+                return (
+                    False,
+                    {"type": "env_permanent", "message": failure_detail},
+                    method_str,
+                )
 
         elif failure_class == FailureClass.EXECUTION_LOGIC:
             logger.error(
