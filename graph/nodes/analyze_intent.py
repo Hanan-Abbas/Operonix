@@ -7,6 +7,14 @@ Per migration plan §4.2, node 3:
 "analyze_intent — first major LangChain integration point. LangChain does AI
 interpretation → existing IntentParser's deterministic resolution/validation/
 keyword-fallback logic is preserved on top."
+
+IMPORTANT: Separation of Concerns
+- analyze_intent: Determines WHAT the user wants (semantic intent classification)
+- create_plan: Determines HOW to accomplish it (generates concrete commands via LLM)
+
+This node does NOT generate concrete commands. That responsibility belongs to
+the create_plan node, which uses LLM structured output to generate actual
+shell commands, API calls, plugin invocations, or UI automation commands.
 """
 from __future__ import annotations
 
