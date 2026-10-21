@@ -151,13 +151,24 @@ class Orchestrator:
         else:
             logger.info("Orchestrator SKIPPED user_input_received subscription (LangGraph mode active)")
 
+        # Conditional subscriptions for legacy task flow
+        # When USE_LANGGRAPH=true, the graph handles intent, capability mapping, and task coordination internally
+        # These subscriptions are only for legacy mode
+        if not flags.USE_LANGGRAPH:
+            bus.subscribe("intent_parsed",          self.route_to_mapper)
+            bus.subscribe("capability_mapped",      self.inject_task_metadata)
+            logger.info("Orchestrator subscribed to intent_parsed, capability_mapped (legacy mode)")
+        else:
+            logger.info("Orchestrator SKIPPED intent_parsed, capability_mapped subscriptions (LangGraph mode active)")
+
+        # Observability subscriptions - keep these even in LangGraph mode
+        # The graph publishes these events for dashboard/learning observability
         bus.subscribe("context_snapshot_ready", self.handle_context_snapshot)
-        bus.subscribe("intent_parsed",          self.route_to_mapper)
-        bus.subscribe("capability_mapped",      self.inject_task_metadata)
         bus.subscribe("task_failed",            self.handle_failure)
         bus.subscribe("task_completed",         self.finalize_task)
         bus.subscribe("task_safety_cleared",    self.handle_safety_cleared)
         bus.subscribe("confirmation_required",  self._mark_high_risk)
+        logger.info("Orchestrator subscribed to observability events (task_failed, task_completed, etc.)")
 
         # Safety stack — order matters: permission_guard must be first.
         from safety.permission_guard import permission_guard
