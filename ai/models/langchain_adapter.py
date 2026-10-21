@@ -56,9 +56,9 @@ class LangChainAdapter:
                 logger.info(f"LangChainAdapter: Initialized Groq model {self.model_name}")
                 
             elif self.provider == "ollama":
-                from langchain_community.llms import Ollama
+                from langchain_community.chat_models import ChatOllama
                 base_url = self.config.get("base_url", "http://localhost:11434")
-                self._model = ChatGroq(  # Using ChatGroq interface for consistency
+                self._model = ChatOllama(
                     model=self.model_name,
                     base_url=base_url,
                     temperature=self.config.get("temperature", 0.7)
@@ -111,50 +111,125 @@ class LangChainAdapter:
     
     def is_available(self) -> bool:
         """Check if the LangChain model is available.
-        
-        In Phase 2 (stub mode), we return True even if the model
-        initialization fails, as we're providing stub implementations.
+
+        Returns True if the model was successfully initialized.
         """
-        # In Phase 2, we're in stub mode - always return True
-        # Later phases will check if self._model is not None
-        return True
+        return self._model is not None
     
     async def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """Invoke the LangChain model.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
             **kwargs: Additional invocation parameters
-            
+
         Returns:
             Model response text
         """
         if not self.is_available():
             raise RuntimeError("LangChain model is not available")
-        
-        # In Phase 2 (stub mode), return a placeholder response
-        logger.warning("LangChainAdapter: Model invocation deferred to later phases (stub mode)")
-        return f"LangChain invoke response (Phase 2 stub - provider: {self.provider}, model: {self.model_name})"
+
+        try:
+            # Convert messages to LangChain format
+            from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+            langchain_messages = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    langchain_messages.append(SystemMessage(content=content))
+                elif role == "user":
+                    langchain_messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    langchain_messages.append(AIMessage(content=content))
+                else:
+                    langchain_messages.append(HumanMessage(content=content))
+
+            # Invoke the model
+            response = await self._model.ainvoke(langchain_messages, **kwargs)
+            return response.content
+
+        except Exception as e:
+            logger.error(f"LangChainAdapter: Model invocation failed: {e}")
+            raise
     
     async def invoke_structured(self, messages: List[Dict[str, str]], schema: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """Invoke the LangChain model with structured output.
-        
+
         Args:
             messages: List of message dicts
             schema: Output schema definition
             **kwargs: Additional invocation parameters
-            
+
         Returns:
             Structured output matching the schema
         """
         if not self.is_available():
             raise RuntimeError("LangChain model is not available")
-        
-        # In Phase 2 (stub mode), return a placeholder response
-        logger.warning("LangChainAdapter: Structured invocation deferred to later phases (stub mode)")
-        return {
-            "provider": self.provider,
-            "model": self.model_name,
-            "schema_name": schema.get("name", "unnamed"),
-            "note": "Structured output (Phase 2 stub)"
-        }
+
+        try:
+            # Convert messages to LangChain format
+            from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+            langchain_messages = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    langchain_messages.append(SystemMessage(content=content))
+                elif role == "user":
+                    langchain_messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    langchain_messages.append(AIMessage(content=content))
+                else:
+                    langchain_messages.append(HumanMessage(content=content))
+
+            # Use LangChain's structured output
+            from langchain_core.output_parsers import JsonOutputParser
+            from langchain_core.prompts import ChatPromptTemplate
+
+            # Create a prompt template that includes the schema instructions
+            system_content = langchain_messages[0].content if langchain_messages and langchain_messages[0].type == "system" else ""
+            user_content = langchain_messages[-1].content if langchain_messages else ""
+
+            # Add JSON format instruction to system prompt
+            if system_content:
+                system_content += "\n\nIMPORTANT: Respond in valid JSON format matching the schema."
+            else:
+                system_content = "Respond in valid JSON format matching the schema."
+
+            # Rebuild messages with updated system prompt
+            if langchain_messages and langchain_messages[0].type == "system":
+                langchain_messages[0] = SystemMessage(content=system_content)
+            else:
+                langchain_messages.insert(0, SystemMessage(content=system_content))
+
+            # Use with_structured_output if available (LangChain 0.1+)
+            if hasattr(self._model, 'with_structured_output'):
+                # Build Pydantic model from schema (simplified approach)
+                # For now, use JSON output parser
+                parser = JsonOutputParser()
+                chain = self._model | parser
+                result = await chain.ainvoke(langchain_messages, **kwargs)
+                return result
+            else:
+                # Fallback: invoke and parse JSON
+                response = await self._model.ainvoke(langchain_messages, **kwargs)
+                import json
+                # Try to extract JSON from response
+                content = response.content
+                # Handle markdown code blocks
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+
+                return json.loads(content)
+
+        except Exception as e:
+            logger.error(f"LangChainAdapter: Structured invocation failed: {e}")
+            # Return a minimal valid response as fallback
+            schema_name = schema.get("name", "unnamed")
+            logger.warning(f"Returning fallback response for schema: {schema_name}")
+            return {"error": str(e), "schema_name": schema_name}
