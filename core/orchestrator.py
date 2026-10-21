@@ -1,7 +1,8 @@
 """
 core/orchestrator.py — Operonix AI OS Agent
 ─────────────────────────────────────────────
-All original functionality preserved. One addition from Plan §3.1:
+LEGACY MODE (USE_LANGGRAPH=false):
+All original functionality preserved for legacy mode. One addition from Plan §3.1:
 
   inject_task_metadata() now calls MethodRouter.router.select() immediately
   after intent parsing and injects the resulting MethodDecision into the
@@ -17,6 +18,13 @@ All original functionality preserved. One addition from Plan §3.1:
   init, profile_hint propagation, low-risk dispatch, dedup guards — is
   unchanged verbatim.
 
+LANGGRAPH MODE (USE_LANGGRAPH=true):
+  - Orchestrator SKIPS subscriptions to user_input_received, intent_parsed, capability_mapped
+  - Graph handles all task coordination internally
+  - Orchestrator only subscribes to observability events (task_failed, task_completed, etc.)
+  - EventBus is used for system-wide communication, not task coordination
+  - No dual execution - graph is sole authority for task lifecycle
+
 HYBRID EXECUTION CHANGE (original):
   profile_hint (from intent_parser) and cwd (from window_detector /
   pre_panel_context) are now carried through every event in the pipeline
@@ -25,7 +33,7 @@ HYBRID EXECUTION CHANGE (original):
   New startup step: terminal_resolver.init() is awaited so the resolver
   can blacklist its own window before any command arrives.
 
-  Flow additions:
+  Flow additions (legacy mode only):
     _handle_panel_input     → forwards profile_hint from panel payload
     handle_new_task         → stores profile_hint in active_tasks
     handle_context_snapshot → stores cwd in active_tasks context
