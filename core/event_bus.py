@@ -109,11 +109,14 @@ class Event:
         name   : str,
         data   : Any  = None,
         source : str  = "system",
+        event_id: str = None,
     ) -> None:
         self.name      = name
         self.data      = data
         self.source    = source or "system"
         self.timestamp = datetime.now().isoformat()
+        self.event_id  = event_id or f"{name}_{datetime.now().timestamp()}"
+        self._consumed = False
 
     def __str__(self) -> str:
         return f"[{self.timestamp}] {self.source} -> {self.name}: {self.data}"
@@ -137,6 +140,15 @@ class Event:
         if isinstance(self.data, dict):
             return key in self.data
         return False
+
+    def consume(self) -> None:
+        """Mark this event as consumed by a subscriber.
+        Subsequent subscribers will skip this event."""
+        self._consumed = True
+
+    def is_consumed(self) -> bool:
+        """Check if this event has been consumed."""
+        return self._consumed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +282,7 @@ class EventBus:
         payload = _build_routing_mismatch_payload(data)
         self.publish("routing_mismatch", payload, source="event_bus")
 
-    # ── Run loop (unchanged) ──────────────────────────────────────────────────
+    # ── Run loop with event consumption support ─────────────────────────────────
 
     async def run(self) -> None:
         self._event_loop = asyncio.get_running_loop()
@@ -286,6 +298,12 @@ class EventBus:
                     matched_listeners.extend(callbacks)
 
             for callback in matched_listeners:
+                # Skip if event has been consumed
+                if event.is_consumed():
+                    self.logger.debug(
+                        f"Event {event.name} (ID: {event.event_id}) already consumed, skipping callback"
+                    )
+                    continue
                 asyncio.create_task(self._execute_callback(callback, event))
 
             self._queue.task_done()
