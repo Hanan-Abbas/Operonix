@@ -406,46 +406,51 @@ def _execute_placeholder(
     context: Dict[str, Any] = None,
     execution_id: str = "placeholder"
 ) -> ExecutionResult:
-    """Execute with placeholder logic - delegate to existing orchestrator system.
-    
-    Instead of duplicating execution logic, this delegates to the existing
-    Operonix orchestrator system which already knows how to handle intents,
-    commands, and tool routing through the proper flow.
-    
+    """Execute with placeholder logic - no legacy delegation.
+
+    This function provides a fallback execution when the actual executor
+    is unavailable. It does NOT delegate to the legacy orchestrator system
+    to avoid dual execution and race conditions.
+
+    The graph should own execution completely.
+
     Args:
-        step: Current plan step
+        step: Current plan step with concrete command from LLM
         routing_decision: Routing decision
         context: Current context
         execution_id: Execution ID
-        
+
     Returns:
         ExecutionResult with placeholder outcome
     """
     import time
-    
+
     start_time = time.time()
-    
+
     step_parameters = getattr(step, 'parameters', {}) or {}
-    user_input = step_parameters.get("user_input", "")
-    intent = step_parameters.get("intent", "unknown")
-    parameters = step_parameters.get("parameters", {})
-    
-    # Simple placeholder execution without EventBus delegation
-    # This avoids duplicate processing and race conditions
-    # The graph should own execution, not delegate back to orchestrator
-    logger.info(f"EXECUTE_PLACEHOLDER: Simulating execution for: {user_input} (intent: {intent})")
-    
+    step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
+    shell_argv = step_parameters.get("shell_argv", [])
+
+    # Get concrete command
+    if shell_argv:
+        command = f"{step_action} {' '.join(shell_argv)}"
+    else:
+        command = step_action
+
+    # Simple placeholder execution without legacy delegation
+    logger.info(f"EXECUTE_PLACEHOLDER: Simulating execution for: {command}")
+
     # Simulate execution with realistic timing
     time.sleep(0.2)
-    
+
     # Return a simulated success result
     success = True
-    result = f"Placeholder execution completed for: {user_input} (intent: {intent})"
-    
+    result = f"Placeholder execution completed for: {command}"
+
     execution_time = time.time() - start_time
-    
+
     method_type = routing_decision.selected_candidate.method_type if routing_decision else "unknown"
-    
+
     return ExecutionResult(
         execution_id=execution_id,
         step_id=step.step_id if step else "unknown",
@@ -455,9 +460,8 @@ def _execute_placeholder(
         result_data={
             "result": result,
             "execution_time": execution_time,
-            "user_input": user_input,
-            "intent": intent,
-            "parameters": parameters
+            "command": command,
+            "shell_argv": shell_argv
         }
     )
 
