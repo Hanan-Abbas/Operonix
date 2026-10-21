@@ -279,24 +279,27 @@ def _translate_routing_decision(
     step
 ) -> Any:
     """Translate graph state MethodDecision to executor MethodDecision.
-    
+
+    This function now passes concrete commands from the LLM-generated plan step
+    instead of delegating user_input to the legacy system.
+
     Args:
         graph_routing_decision: MethodDecision from migration.domain_contracts
-        step: Current plan step
-        
+        step: Current plan step with concrete command from LLM
+
     Returns:
         Executor MethodDecision or None if translation fails
     """
     try:
         from tools.routing_decision import MethodDecision as ExecutorMethodDecision, MethodType, LayeredPayload
         from types import MappingProxyType
-        
+
         if not graph_routing_decision:
             return None
-        
+
         # Extract method type from graph decision
         method_type_str = graph_routing_decision.selected_candidate.method_type
-        
+
         # Map to executor MethodType
         method_type_map = {
             "plugin": MethodType.PLUGIN,
@@ -305,23 +308,30 @@ def _translate_routing_decision(
             "ui": MethodType.UI,
             "command": MethodType.SHELL
         }
-        
+
         method_type = method_type_map.get(method_type_str.lower(), MethodType.SHELL)
-        
-        # Build fallback chain
-        fallback_chain = tuple(
-            method_type_map.get(c.method_type.lower(), MethodType.SHELL)
-            for c in graph_routing_decision.fallback_candidates
-        ) if graph_routing_decision.fallback_candidates else tuple()
-        
+
+        # Build fallback chain - only for execution-level failures, not routing-level
+        # Per migration plan: Executor should retry execution-level failures only
+        # Routing-level failures should be handled by graph's recovery node
+        fallback_chain = tuple()  # Empty - executor won't do routing fallbacks
+
         # Build layered payload from step parameters
         step_parameters = getattr(step, 'parameters', {}) or {}
         step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
-        
-        # For shell execution, pass user_input to let existing system handle command generation
-        user_input = step_parameters.get("user_input", step_action)
-        shell_argv = tuple(str(user_input).split()) if method_type == MethodType.SHELL else None
-        
+
+        # For shell execution, use concrete command from LLM
+        # The LLM generates actual commands like "gnome-system-monitor"
+        shell_argv = None
+        if method_type == MethodType.SHELL:
+            # Get shell_argv from step parameters (set by LLM)
+            shell_argv_list = step_parameters.get("shell_argv", [])
+            if shell_argv_list:
+                shell_argv = tuple(str(arg) for arg in shell_argv_list)
+            else:
+                # Fallback: use action as command
+                shell_argv = tuple(str(step_action).split())
+
         # Create payload for each method type
         payload = LayeredPayload(
             plugin_kwargs=MappingProxyType(step_parameters) if method_type == MethodType.PLUGIN else None,
@@ -329,20 +339,25 @@ def _translate_routing_decision(
             shell_argv=shell_argv if method_type == MethodType.SHELL else None,
             ui_action=MappingProxyType({"action": step_action, **step_parameters}) if method_type == MethodType.UI else None
         )
-        
+
         # Create executor MethodDecision
         executor_decision = ExecutorMethodDecision(
             method=method_type,
             confidence=graph_routing_decision.confidence,
-            fallback_chain=fallback_chain,
+            fallback_chain=fallback_chain,  # Empty - no routing fallbacks
             payload=payload,
             expected_app=None,  # Would need to extract from context
             expected_ui_state=None,  # Would need to extract from context
             rejected=[]  # Would need to translate rejected candidates
         )
-        
+
+        logger.info(
+            f"Translated routing decision: method={method_type}, "
+            f"shell_argv={shell_argv}, confidence={graph_routing_decision.confidence}"
+        )
+
         return executor_decision
-        
+
     except Exception as e:
         logger.error(f"Error translating routing decision: {e}")
         return None
@@ -350,24 +365,36 @@ def _translate_routing_decision(
 
 def _convert_step_to_executor_format(step) -> Dict[str, Any]:
     """Convert graph PlanStep to executor step format.
-    
+
+    This function now passes concrete commands from the LLM-generated plan step
+    instead of delegating user_input to the legacy system.
+
     Args:
-        step: PlanStep from graph state
-        
+        step: PlanStep from graph state with concrete command from LLM
+
     Returns:
-        Dict in executor step format
+        Dict in executor step format with concrete command
     """
     step_parameters = getattr(step, 'parameters', {}) or {}
     step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
-    
-    # Use user_input from parameters if available, otherwise use action
-    # This lets the existing executor system handle command generation
-    user_input = step_parameters.get("user_input", step_action)
-    
+
+    # Use concrete command from LLM (stored in action)
+    # The LLM generates actual commands like "gnome-system-monitor"
+    # shell_argv contains the arguments if present
+    shell_argv = step_parameters.get("shell_argv", [])
+
+    # Build command with arguments
+    if shell_argv:
+        command = f"{step_action} {' '.join(shell_argv)}"
+    else:
+        command = step_action
+
     return {
-        "action": user_input,  # Pass user input to existing system
+        "action": command,  # Concrete command from LLM
         "args": step_parameters,
-        "step_id": getattr(step, 'step_id', 'unknown')
+        "step_id": getattr(step, 'step_id', 'unknown'),
+        "command": step_action,  # Explicit command field
+        "shell_argv": shell_argv  # Explicit arguments
     }
 
 
