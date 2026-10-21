@@ -297,6 +297,7 @@ class EventBus:
                 if fnmatch.fnmatch(event.name, pattern):
                     matched_listeners.extend(callbacks)
 
+            # Execute callbacks sequentially to respect consumption
             for callback in matched_listeners:
                 # Skip if event has been consumed
                 if event.is_consumed():
@@ -304,7 +305,7 @@ class EventBus:
                         f"Event {event.name} (ID: {event.event_id}) already consumed, skipping callback"
                     )
                     continue
-                asyncio.create_task(self._execute_callback(callback, event))
+                await self._execute_callback(callback, event)
 
             self._queue.task_done()
 
