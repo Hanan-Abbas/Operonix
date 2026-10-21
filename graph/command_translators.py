@@ -2,9 +2,20 @@
 Command Translators — Operonix Graph
 ────────────────────────────────
 
-Translates intents to concrete commands for execution.
-This module provides the translation layer that converts high-level intents
-into concrete commands for different execution methods (SHELL, API, PLUGIN, UI).
+DEPRECATED: This module is deprecated and will be removed in a future version.
+
+Per migration plan §4.2 and §4.6:
+- LLM should generate concrete commands via structured output, not hardcoded translators
+- Command translators restrict the domain to predefined commands
+- This violates the architectural principle that the solution must work for every scenario
+
+New Implementation:
+- LLM command generation now happens in graph/nodes/create_plan.py
+- _generate_command_with_llm() function uses LangChain to generate concrete commands
+- This allows the system to handle any scenario without domain restrictions
+
+This file is kept temporarily for backward compatibility during migration.
+It will be removed once LLM command generation is proven stable.
 """
 from __future__ import annotations
 
@@ -12,6 +23,15 @@ import logging
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("Graph.CommandTranslators")
+
+# Deprecation warning
+import warnings
+warnings.warn(
+    "command_translators.py is deprecated. LLM command generation is now in create_plan.py. "
+    "This file will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def translate_intent_to_command(
