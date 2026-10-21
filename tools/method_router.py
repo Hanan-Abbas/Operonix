@@ -115,6 +115,14 @@ class MethodRouter:
         Evaluate the intent against all four execution layers in priority
         order and return a fully-populated, immutable MethodDecision.
 
+        Phase 3: Candidate-Based Routing Support
+        ─────────────────────────────────────────
+        When USE_GRAPH_ROUTING=true, this method returns a simple decision
+        without linear fallback chain. The graph's candidate-based routing
+        engine (graph/nodes/route.py) handles routing instead.
+
+        When USE_GRAPH_ROUTING=false, legacy linear routing is used.
+
         Args:
             intent: The ParsedIntent dict from IntentParser._parse_async():
                     {
@@ -129,6 +137,18 @@ class MethodRouter:
             incompatible, a UI decision with confidence=0.0 is returned
             so the executor has a consistent type to work with.
         """
+        # Phase 3: Check if graph-based routing is enabled
+        try:
+            from migration.feature_flags import flags
+            if flags.USE_GRAPH_ROUTING:
+                logger.info(
+                    "USE_GRAPH_ROUTING=true - returning simple decision (graph handles routing)"
+                )
+                return self._create_simple_decision(intent)
+        except ImportError:
+            # If feature flags not available, use legacy routing
+            pass
+
         t_start    = time.monotonic()
         intent_str = str(intent.get("intent") or "")
         rejected   : list[tuple[MethodType, str]] = []
