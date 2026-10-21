@@ -57,22 +57,26 @@ class OperonixModelService:
     
     def _detect_provider(self) -> ModelProvider:
         """Auto-detect provider from configuration."""
+        # Check for OpenRouter API key (preferred for testing)
+        if getattr(settings, "OPENROUTER_API_KEY", ""):
+            return ModelProvider.OPENROUTER
+
         # Check for Groq API key
         if getattr(settings, "GROQ_API_KEY", ""):
             return ModelProvider.GROQ
-        
+
         # Check for Gemini API key
         if getattr(settings, "GEMINI_API_KEY", ""):
             return ModelProvider.GEMINI
-        
-        # Check for OpenRouter API key
-        if getattr(settings, "OPENROUTER_API_KEY", ""):
-            return ModelProvider.OPENROUTER
-        
+
         # Check for OpenAI API key
         if getattr(settings, "OPENAI_API_KEY", ""):
             return ModelProvider.OPENAI
-        
+
+        # Check for Ollama (local)
+        if getattr(settings, "OLLAMA_ENABLED", False):
+            return ModelProvider.OLLAMA
+
         # Default to Ollama (local)
         return ModelProvider.OLLAMA
     
