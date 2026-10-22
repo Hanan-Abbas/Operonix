@@ -731,7 +731,7 @@ class Executor:
     ) -> Any:
         """
         Apply Gap 1 failure routing rules and either:
-          a) Return (False, error_dict, method_str) — terminal failure
+          a) Return (False, error_dict, method_str, failure_class) — terminal failure
           b) Return the next MethodDecision — continue with fallback
 
         Phase 3: Candidate-Based Routing Support
@@ -745,6 +745,8 @@ class Executor:
           ROUTING_MISMATCH → publish routing_mismatch + advance fallback
           ENV_PERMANENT    → publish method_unavailable + advance fallback
           EXECUTION_LOGIC  → publish execution_error + terminal (surface bug)
+
+        Phase 4: Enhanced to return FailureClass for graph recovery routing
         """
         # Phase 3: Check if graph-based routing is enabled
         use_graph_routing = False
@@ -887,6 +889,7 @@ class Executor:
                 False,
                 {"type": "exhausted", "message": failure_detail},
                 method_str,
+                failure_class  # Phase 4: Return FailureClass
             )
 
         next_decision = decision.advance()
