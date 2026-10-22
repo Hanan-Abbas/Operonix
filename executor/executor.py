@@ -863,6 +863,7 @@ class Executor:
                 False,
                 {"type": "logic_error", "message": failure_detail},
                 method_str,
+                failure_class  # Phase 4: Return FailureClass
             )
 
         # Try next method in the fallback chain (ROUTING_MISMATCH + ENV_PERMANENT)
