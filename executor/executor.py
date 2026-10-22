@@ -541,6 +541,9 @@ class Executor:
         retry_manager.clear_task(task_id)
         logger.info("Task [%s] completed (method=%s)", task_id, method_used)
 
+        # Phase 4: Return FailureClass for graph recovery routing
+        return True, result, method_used, FailureClass.ENV_TRANSIENT
+
     # ─────────────────────────────────────────────────────────────────────
     # NEW: MethodDecision-driven execution (Plan §3.1, Gap 1, Gap 2, Gap 3)
     # ─────────────────────────────────────────────────────────────────────
@@ -666,13 +669,14 @@ class Executor:
 
             # ── Invoke the tool for this method ───────────────────────────
             transient_attempt = 0
+            failure_class = FailureClass.ENV_TRANSIENT  # Default for loop
             while True:
                 try:
                     ok, result = await self._invoke_method(
                         method, payload, step, context, task_id
                     )
                     if ok:
-                        return True, result, tool_type
+                        return True, result, tool_type, FailureClass.ENV_TRANSIENT  # Success
                     # Tool ran but reported its own failure (e.g. plugin
                     # returned {"status": "error"}).  Classify and route.
                     _, failure_class = await error_classifier.classify_with_failure_class(
@@ -772,7 +776,8 @@ class Executor:
                 },
                 source="executor",
             )
-            return False, {"type": "transient", "message": failure_detail}, method_str
+            # Phase 4: Return FailureClass for graph recovery routing
+            return False, {"type": "transient", "message": failure_detail}, method_str, failure_class
 
         if failure_class == FailureClass.ROUTING_MISMATCH:
             # Wrong method for this intent — feed the learner, try next fallback
