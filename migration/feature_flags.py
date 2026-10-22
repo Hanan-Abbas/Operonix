@@ -128,16 +128,21 @@ class FeatureFlags:
     """DEPRECATED: Allow placeholder execution to delegate to orchestrator (NOT RECOMMENDED)"""
     
     # ─── SAFETY FLAGS ─────────────────────────────────────────────────────────
-    
+
     SAFETY_STRICT_MODE: bool = os.getenv("SAFETY_STRICT_MODE", "true").lower() in (
         "1", "true", "yes", "on"
     )
     """Enable strict safety mode (always on by default for safety)"""
-    
+
     SAFETY_ALLOW_BYPASS: bool = os.getenv("SAFETY_ALLOW_BYPASS", "false").lower() in (
         "1", "true", "yes", "on"
     )
     """Allow safety bypass (DANGEROUS - only for testing)"""
+
+    USE_SAFETY_FILTERING: bool = os.getenv("USE_SAFETY_FILTERING", "true").lower() in (
+        "1", "true", "yes", "on"
+    )
+    """Enable safety filtering in graph route node (Phase 4+)"""
     
     def __init__(self) -> None:
         """Initialize feature flags and log current state."""
