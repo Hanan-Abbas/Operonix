@@ -47,7 +47,7 @@ def test_feature_flags():
     return all_passed
 
 
-def test_llm_command_generation():
+async def test_llm_command_generation():
     """Test that LLM generates concrete command for 'open system monitor'."""
     print("\n" + "=" * 60)
     print("Test 2: LLM Command Generation")
@@ -60,7 +60,7 @@ def test_llm_command_generation():
         intent_name = "open_application"
         intent_parameters = {"application": "system monitor"}
 
-        command, args, method, explanation = _generate_command_with_llm(
+        command, args, method, explanation = await _generate_command_with_llm(
             user_input, intent_name, intent_parameters
         )
 
@@ -340,7 +340,7 @@ async def main():
     print("=" * 60)
 
     test1 = test_feature_flags()
-    test2 = test_llm_command_generation()
+    test2 = await test_llm_command_generation()
     test3 = test_candidate_discovery()
     test4 = test_candidate_evaluation()
     test5 = test_routing_decision()
