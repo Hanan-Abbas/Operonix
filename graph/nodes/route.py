@@ -95,35 +95,42 @@ def route_node(state: OperonixState) -> Dict[str, Any]:
             # Filter out risky and unauthorized candidates
             from safety.risk_rules import get_command_risk, RiskLevel
             from safety.permission_guard import PermissionGuard
+            from migration.feature_flags import flags
 
             filtered_evaluations = []
-            for eval_result in evaluations:
-                # Get command from plan step for risk assessment
-                step_action = state.plan.current_step.action
-                shell_argv = state.plan.current_step.parameters.get("shell_argv", [])
-                command_str = f"{step_action} {' '.join(shell_argv)}" if shell_argv else step_action
+            
+            # Skip safety filtering if disabled (for debugging)
+            if flags.USE_SAFETY_FILTERING:
+                for eval_result in evaluations:
+                    # Get command from plan step for risk assessment
+                    step_action = state.plan.current_step.action
+                    shell_argv = state.plan.current_step.parameters.get("shell_argv", [])
+                    command_str = f"{step_action} {' '.join(shell_argv)}" if shell_argv else step_action
 
-                # Assess risk
-                try:
-                    risk = get_command_risk(command_str, profile_hint=None)
-                    if risk == RiskLevel.FORBIDDEN:
-                        logger.warning(
-                            f"Candidate {eval_result.candidate.tool_id} filtered out: FORBIDDEN risk"
-                        )
+                    # Assess risk
+                    try:
+                        risk = get_command_risk(command_str, profile_hint=None)
+                        if risk == RiskLevel.FORBIDDEN:
+                            logger.warning(
+                                f"Candidate {eval_result.candidate.tool_id} filtered out: FORBIDDEN risk"
+                            )
+                            continue
+                        if risk == RiskLevel.HIGH:
+                            logger.warning(
+                                f"Candidate {eval_result.candidate.tool_id} filtered out: HIGH risk"
+                            )
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Risk assessment failed for candidate: {e}")
+                        # If risk assessment fails, be conservative and filter out
                         continue
-                    if risk == RiskLevel.HIGH:
-                        logger.warning(
-                            f"Candidate {eval_result.candidate.tool_id} filtered out: HIGH risk"
-                        )
-                        continue
-                except Exception as e:
-                    logger.warning(f"Risk assessment failed for candidate: {e}")
-                    # If risk assessment fails, be conservative and filter out
-                    continue
 
-                # Permission check (basic check - can be enhanced)
-                # For now, we pass all candidates that pass risk assessment
-                filtered_evaluations.append(eval_result)
+                    # Permission check (basic check - can be enhanced)
+                    # For now, we pass all candidates that pass risk assessment
+                    filtered_evaluations.append(eval_result)
+            else:
+                # Safety filtering disabled, use all candidates
+                filtered_evaluations = evaluations
 
             logger.info(f"Safety filtered: {len(evaluations)} → {len(filtered_evaluations)} candidates")
 
