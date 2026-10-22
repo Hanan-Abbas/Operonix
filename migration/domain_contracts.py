@@ -255,7 +255,11 @@ class ExecutionRequest(BaseModel):
 
 
 class ExecutionResult(BaseModel):
-    """Result of executing a step."""
+    """Result of executing a step.
+
+    Phase 4 enhancement: Added failure_category to communicate executor's
+    FailureClass to the graph for proper recovery routing.
+    """
     execution_id: str
     step_id: str
     success: bool
@@ -267,7 +271,8 @@ class ExecutionResult(BaseModel):
     execution_status: TaskStatus
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: Optional[datetime] = None
-    
+    failure_category: Optional[FailureCategory] = None  # Phase 4: Added for recovery routing
+
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
