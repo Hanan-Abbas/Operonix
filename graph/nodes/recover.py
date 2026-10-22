@@ -82,8 +82,11 @@ def recover_node(state: OperonixState) -> Dict[str, Any]:
 
 
 def _classify_failure(state: OperonixState) -> FailureCategory:
-    """Classify the failure type based on verification result and execution result.
-    
+    """Classify the failure type based on execution result and verification result.
+
+    Phase 4: Enhanced to use executor's FailureClass from ExecutionResult
+    instead of string matching on verification reason.
+
     Per migration plan §12.2 - Execution failure subclasses:
     - TRANSIENT
     - PERMANENT
@@ -94,52 +97,60 @@ def _classify_failure(state: OperonixState) -> FailureCategory:
     - PERMISSION_DENIED
     - VALIDATION_REJECTED
     - UNKNOWN
-    
+
     Args:
         state: Current OperonixState
-        
+
     Returns:
         FailureCategory classification
     """
+    # Phase 4: Check execution result for failure category first
+    if state.execution and state.execution.failure_category:
+        logger.info(
+            f"Using executor's failure category: {state.execution.failure_category.value}"
+        )
+        return state.execution.failure_category
+
+    # Fallback to verification-based classification
     if not state.verification:
         return FailureCategory.UNKNOWN
-    
+
     verification_status = state.verification.status
-    
+
     if verification_status == "VERIFIED":
         # No failure, shouldn't be in recover node
         return FailureCategory.UNKNOWN
-    
+
     reason = state.verification.reason or ""
-    
+
     # Classify based on verification reason and execution result
     if "transient" in reason.lower() or "timeout" in reason.lower():
         return FailureCategory.TRANSIENT
-    
+
     elif "context" in reason.lower() or "cwd" in reason.lower() or "window" in reason.lower():
         return FailureCategory.CONTEXT_MISMATCH
-    
+
     elif "routing" in reason.lower() or "method" in reason.lower():
         return FailureCategory.ROUTING_MISMATCH
-    
+
     elif "tool" in reason.lower() or "capability" in reason.lower():
         return FailureCategory.TOOL_UNAVAILABLE
-    
+
     elif "permission" in reason.lower() or "denied" in reason.lower() or "safety" in reason.lower():
         return FailureCategory.PERMISSION_DENIED
-    
+
     elif "validation" in reason.lower():
         return FailureCategory.VALIDATION_REJECTED
-    
+
     elif "planning" in reason.lower():
         return FailureCategory.PLANNING_ERROR
-    
+
     elif "environment" in reason.lower():
         return FailureCategory.ENVIRONMENTAL
-    
+
     elif "permanent" in reason.lower():
         return FailureCategory.PERMANENT
-    
+
     else:
         return FailureCategory.UNKNOWN
 
