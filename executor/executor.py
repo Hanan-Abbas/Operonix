@@ -552,7 +552,7 @@ class Executor:
         step         : dict,
         context      : dict,
         decision     : MethodDecision,
-    ) -> tuple[bool, Any, str]:
+    ) -> tuple[bool, Any, str, Optional[FailureClass]]:
         """
         Execute a single step using the pre-computed MethodDecision.
 
@@ -569,10 +569,15 @@ class Executor:
           ENV_PERMANENT    → no retry, mark unavailable, advance fallback_chain
           EXECUTION_LOGIC  → no retry, no fallback, surface to debugger
 
+        Phase 4: Enhanced to return FailureClass for graph recovery routing
+
         Gap 2: payload slot is read via decision.payload.for_method(method)
                — no translation occurs here.
         Gap 3: UIReadinessGuard.validate(decision) is called immediately
                before any UI tool invocation.
+
+        Returns:
+            (success, result, method_used, failure_class) - Phase 4: Added failure_class
         """
         # Phase 3: Check if graph-based routing is enabled
         use_graph_routing = False
