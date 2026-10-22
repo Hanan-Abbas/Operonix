@@ -9,7 +9,8 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 
 from migration.domain_contracts import ExecutionResult, FailureCategory, TaskStatus, TaskSource
 from graph.nodes.execute_step import _map_failure_class

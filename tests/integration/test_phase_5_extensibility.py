@@ -8,7 +8,8 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 
 from migration.domain_contracts import Candidate, CandidateType, PlanStep, PlanStepIdempotency, PlanStepSideEffect, TaskSource, TaskRequest
 from graph.candidate_discovery import get_candidate_discovery_service
