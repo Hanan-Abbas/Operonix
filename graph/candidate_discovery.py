@@ -12,7 +12,7 @@ vision, remote/local capabilities.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 
 from migration.domain_contracts import Candidate, CandidateType, PlanStep, IntentResult
 from migration.graph_state import OperonixState
@@ -45,10 +45,17 @@ class CandidateDiscoveryService:
         self.available_plugins: Dict[str, Dict[str, Any]] = {}
         self.available_apis: Dict[str, Dict[str, Any]] = {}
         self.available_tools: Dict[str, Dict[str, Any]] = {}
-        
+
+        # Phase 5: Generic discovery function registration for extensibility
+        # Allows new method types to register without modifying core code
+        self.custom_discovery_functions: Dict[str, Callable[[PlanStep, Optional[IntentResult], Optional[Dict[str, Any]]], List[Candidate]]] = {}
+
         # Phase 12: Integrate with plugin manifest registry
         self._sync_from_plugin_manifest_registry()
-        
+
+        # Phase 5: Register built-in discovery functions
+        self._register_builtin_discovery_functions()
+
         logger.info("CandidateDiscoveryService initialized")
     
     def _sync_from_plugin_manifest_registry(self) -> None:
@@ -106,13 +113,47 @@ class CandidateDiscoveryService:
     
     def register_tool(self, tool_id: str, tool_info: Dict[str, Any]) -> None:
         """Register a tool as available.
-        
+
         Args:
             tool_id: Tool identifier
             tool_info: Tool information (type, capabilities, metadata, etc.)
         """
         self.available_tools[tool_id] = tool_info
         logger.info(f"Registered tool: {tool_id}")
+
+    def register_candidate_discovery(
+        self,
+        method_type: str,
+        discovery_func: Callable[[PlanStep, Optional[IntentResult], Optional[Dict[str, Any]]], List[Candidate]]
+    ) -> None:
+        """Register a custom candidate discovery function for a method type.
+
+        Phase 5: Generic registration mechanism for extensibility.
+        Allows new method types (e.g., MCP, remote services) to register
+        without modifying core code.
+
+        Args:
+            method_type: Method type identifier (e.g., "mcp", "remote_service")
+            discovery_func: Function that returns candidates for this method type
+                          Signature: (plan_step, intent, context) -> List[Candidate]
+        """
+        self.custom_discovery_functions[method_type] = discovery_func
+        logger.info(f"Registered custom discovery function for method type: {method_type}")
+
+    def _register_builtin_discovery_functions(self) -> None:
+        """Register built-in discovery functions.
+
+        Phase 5: Register all built-in method types as discovery functions
+        so they can be called through the generic mechanism.
+        """
+        self.custom_discovery_functions["shell"] = self._discover_shell_candidates
+        self.custom_discovery_functions["api"] = self._discover_api_candidates
+        self.custom_discovery_functions["plugin"] = self._discover_plugin_candidates
+        self.custom_discovery_functions["ui"] = self._discover_ui_candidates
+        self.custom_discovery_functions["browser_automation"] = self._discover_browser_candidates
+        self.custom_discovery_functions["vision"] = self._discover_vision_candidates
+
+        logger.info(f"Registered {len(self.custom_discovery_functions)} built-in discovery functions")
     
     def discover_candidates(
         self,
@@ -121,48 +162,39 @@ class CandidateDiscoveryService:
         context: Optional[Dict[str, Any]]
     ) -> List[Candidate]:
         """Discover candidate execution methods for a plan step.
-        
+
+        Phase 5: Uses registered discovery functions for extensibility.
+        Built-in methods (shell, api, plugin, ui, browser, vision) are registered
+        during initialization. Custom methods can be registered via
+        register_candidate_discovery().
+
         Args:
             plan_step: Current plan step
             intent: Intent result
             context: Current context
-            
+
         Returns:
             List of candidate execution methods
         """
         logger.info(f"Discovering candidates for step: {plan_step.step_id}")
-        
+
         candidates = []
-        
-        # Discover shell candidates
-        shell_candidates = self._discover_shell_candidates(plan_step, intent, context)
-        candidates.extend(shell_candidates)
-        
-        # Discover API candidates
-        api_candidates = self._discover_api_candidates(plan_step, intent, context)
-        candidates.extend(api_candidates)
-        
-        # Discover plugin candidates
-        plugin_candidates = self._discover_plugin_candidates(plan_step, intent, context)
-        candidates.extend(plugin_candidates)
-        
-        # Discover UI candidates
-        ui_candidates = self._discover_ui_candidates(plan_step, intent, context)
-        candidates.extend(ui_candidates)
-        
-        # Discover browser automation candidates
-        browser_candidates = self._discover_browser_candidates(plan_step, intent, context)
-        candidates.extend(browser_candidates)
-        
-        # Discover vision candidates
-        vision_candidates = self._discover_vision_candidates(plan_step, intent, context)
-        candidates.extend(vision_candidates)
-        
+
+        # Phase 5: Call all registered discovery functions
+        # This includes built-in methods and any custom registered methods
+        for method_type, discovery_func in self.custom_discovery_functions.items():
+            try:
+                method_candidates = discovery_func(plan_step, intent, context)
+                candidates.extend(method_candidates)
+                logger.debug(f"Discovered {len(method_candidates)} candidates for method type: {method_type}")
+            except Exception as e:
+                logger.error(f"Error discovering candidates for method type {method_type}: {e}")
+
         # Phase 14: Apply learning-driven ranking adjustments
         candidates = self._apply_learning_adjustments(candidates, intent, context)
-        
+
         logger.info(f"Discovered {len(candidates)} candidates for step {plan_step.step_id}")
-        
+
         return candidates
     
     def _discover_shell_candidates(
