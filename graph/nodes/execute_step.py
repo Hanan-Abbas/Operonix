@@ -16,7 +16,7 @@ import logging
 from typing import Dict, Any
 
 from migration.graph_state import OperonixState
-from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskStatus
+from migration.domain_contracts import ExecutionRequest, ExecutionResult, TaskStatus, FailureCategory
 from graph.trace_collector import get_trace_collector
 from graph.context_helpers import context_to_dict
 from graph.async_helpers import run_async_safely
