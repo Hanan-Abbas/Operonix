@@ -226,7 +226,7 @@ def _execute_with_executor(
         
         # Run async executor using run_async_safely
         try:
-            success, result, method_used = run_async_safely(
+            success, result, method_used, failure_class = run_async_safely(
                 executor._execute_with_decision,
                 task_id=task_id,
                 step_index=0,
@@ -247,7 +247,8 @@ def _execute_with_executor(
                 result_data={
                     "error": str(exec_error),
                     "execution_time": execution_time
-                }
+                },
+                failure_category=FailureCategory.UNKNOWN  # Phase 4: Default category on exception
             )
         
         execution_time = time.time() - start_time
