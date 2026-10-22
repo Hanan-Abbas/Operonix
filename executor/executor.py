@@ -812,6 +812,7 @@ class Executor:
                     False,
                     {"type": "routing_mismatch", "message": failure_detail},
                     method_str,
+                    failure_class  # Phase 4: Return FailureClass
                 )
 
         elif failure_class == FailureClass.ENV_PERMANENT:
@@ -839,6 +840,7 @@ class Executor:
                     False,
                     {"type": "env_permanent", "message": failure_detail},
                     method_str,
+                    failure_class  # Phase 4: Return FailureClass
                 )
 
         elif failure_class == FailureClass.EXECUTION_LOGIC:
