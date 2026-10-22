@@ -26,6 +26,31 @@ from graph.error_helpers import handle_recoverable_error, handle_non_recoverable
 logger = logging.getLogger("Graph.ExecuteStep")
 
 
+def _map_failure_class(executor_failure_class) -> FailureCategory:
+    """Map executor's FailureClass to graph's FailureCategory.
+
+    Phase 4: Bridge between executor's FailureClass (from tools/routing_decision.py)
+    and graph's FailureCategory (from migration/domain_contracts.py).
+
+    Args:
+        executor_failure_class: FailureClass from tools/routing_decision.py
+
+    Returns:
+        FailureCategory from migration/domain_contracts.py
+    """
+    from tools.routing_decision import FailureClass as ExecutorFailureClass
+
+    # Map executor FailureClass to graph FailureCategory
+    mapping = {
+        ExecutorFailureClass.ENV_TRANSIENT: FailureCategory.TRANSIENT,
+        ExecutorFailureClass.ROUTING_MISMATCH: FailureCategory.ROUTING_MISMATCH,
+        ExecutorFailureClass.ENV_PERMANENT: FailureCategory.ENVIRONMENTAL,
+        ExecutorFailureClass.EXECUTION_LOGIC: FailureCategory.PLANNING_ERROR,  # Logic error is planning problem
+    }
+
+    return mapping.get(executor_failure_class, FailureCategory.UNKNOWN)
+
+
 def execute_step_node(state: OperonixState) -> Dict[str, Any]:
     """Execute step node: Execute current plan step.
     
@@ -252,8 +277,11 @@ def _execute_with_executor(
             )
         
         execution_time = time.time() - start_time
-        
+
         # Convert executor result to ExecutionResult
+        # Phase 4: Map executor's FailureClass to graph's FailureCategory
+        failure_category = _map_failure_class(failure_class) if not success else None
+
         return ExecutionResult(
             execution_id=execution_id,
             step_id=step.step_id if step else "unknown",
@@ -263,7 +291,8 @@ def _execute_with_executor(
             result_data={
                 "result": result,
                 "execution_time": execution_time
-            }
+            },
+            failure_category=failure_category  # Phase 4: Add failure category
         )
         
     except ImportError as e:
