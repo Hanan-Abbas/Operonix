@@ -103,6 +103,12 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         # Perform execution with actual Executor
         # Convert ContextSnapshot to dict for executor compatibility
         context_dict = context_to_dict(state.context) if state.context else None
+
+        # Use task's cwd if available (from actual focused window), otherwise use context cwd
+        if state.task.cwd and state.task.cwd != context_dict.get("cwd"):
+            logger.info(f"EXECUTE_STEP: Using task CWD {state.task.cwd} instead of context CWD {context_dict.get('cwd')}")
+            context_dict["cwd"] = state.task.cwd
+
         execution_result = _execute_with_executor(
             current_step,
             routing_decision,
