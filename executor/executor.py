@@ -599,8 +599,17 @@ class Executor:
         max_transient_retries: int = int(
             getattr(settings, "MAX_RETRY_ATTEMPTS", 3)
         )
+        total_attempts = 0
+        max_total_attempts = 10  # Safety limit to prevent infinite loops
 
         while True:
+            total_attempts += 1
+            if total_attempts > max_total_attempts:
+                logger.error(
+                    "Exceeded max total attempts (%d) for step %d - aborting to prevent infinite loop",
+                    max_total_attempts, step_index
+                )
+                return False, {"type": "max_attempts_exceeded", "message": f"Exceeded {max_total_attempts} total attempts"}, method_str, FailureClass.ENV_PERMANENT
             method    = current.method
             tool_type = method.value   # "plugin" | "api" | "shell" | "ui"
             payload   = current.payload.for_method(method)
