@@ -248,8 +248,14 @@ CRITICAL: Separate the base command from its arguments correctly:
 - command: ONLY the base executable name (e.g., "ping", "gnome-system-monitor", "firefox")
 - arguments: ONLY the flags/parameters (e.g., ["-c", "4", "www.example.com"])
 
+IMPORTANT: If the user's request is ambiguous or incomplete:
+- For "ping": Use a safe default like "google.com" or "8.8.8.8" if no target specified
+- For commands requiring arguments, provide reasonable defaults
+- If truly impossible to infer, use command: "echo" with a helpful message
+
 Examples:
 - "ping google.com 4 times" → command: "ping", arguments: ["-c", "4", "google.com"]
+- "run the ping command" → command: "ping", arguments: ["-c", "4", "google.com"]
 - "open system monitor" → command: "gnome-system-monitor", arguments: []
 - "create file test.txt" → command: "touch", arguments: ["test.txt"]
 - "list files" → command: "ls", arguments: []
@@ -261,6 +267,7 @@ Rules:
 - For searching: use appropriate search tools (grep, find, or browser commands)
 - For installation: use package managers (apt, pip, npm, etc.)
 - For complex tasks: break into the primary concrete command
+- ALWAYS provide reasonable defaults for required arguments
 
 Platform-specific guidance:
 - Linux (GNOME/KDE): Use system application names (gnome-system-monitor, nautilus, gedit, etc.)
