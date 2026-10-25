@@ -10,5 +10,8 @@
     },
     "open the app named clocks": {
         "shell": 1
+    },
+    "ping": {
+        "shell": 10
     }
 }
