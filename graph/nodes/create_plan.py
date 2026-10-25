@@ -241,8 +241,18 @@ async def _generate_command_with_llm(
     messages = [
         {
             "role": "system",
-            "content": """You are a command generator for an AI agent. 
+            "content": """You are a command generator for an AI agent.
 Given a user request, generate the concrete execution command.
+
+CRITICAL: Separate the base command from its arguments correctly:
+- command: ONLY the base executable name (e.g., "ping", "gnome-system-monitor", "firefox")
+- arguments: ONLY the flags/parameters (e.g., ["-c", "4", "www.example.com"])
+
+Examples:
+- "ping google.com 4 times" → command: "ping", arguments: ["-c", "4", "google.com"]
+- "open system monitor" → command: "gnome-system-monitor", arguments: []
+- "create file test.txt" → command: "touch", arguments: ["test.txt"]
+- "list files" → command: "ls", arguments: []
 
 Rules:
 - For opening applications: use the actual system command (e.g., "gnome-system-monitor", "firefox", "google-chrome", "gnome-terminal")
@@ -258,7 +268,7 @@ Platform-specific guidance:
 - Windows: Use start or full paths
 
 Respond in JSON with:
-- command: the concrete command to execute (string)
+- command: the base executable name ONLY (string, no arguments)
 - arguments: list of command-line arguments (array of strings)
 - method: "shell", "api", "plugin", or "ui" (string)
 - explanation: brief explanation of why this command (string)"""
@@ -286,20 +296,27 @@ Respond in JSON with:
     arguments = result.get("arguments", [])
     method = result.get("method", "shell")
     explanation = result.get("explanation", "")
-    
+
     # Ensure arguments is a list of strings
     if not isinstance(arguments, list):
         arguments = []
     arguments = [str(arg) for arg in arguments]
-    
-    # If no arguments provided but command has spaces, split it
+
+    # Fallback: if LLM returned command with arguments combined, split intelligently
+    # Only split if it looks like a common pattern (e.g., "ping -c 4 google.com")
     if not arguments and " " in command:
-        # Simple heuristic: split on spaces
+        # Smart splitting: keep flags and their values together
         parts = command.split()
         if len(parts) > 1:
-            command = parts[0]
-            arguments = parts[1:]
-    
+            # Check if first part is a known command
+            known_commands = {"ping", "ls", "cp", "mv", "rm", "mkdir", "touch", "cat", "echo",
+                           "gnome-system-monitor", "firefox", "google-chrome", "chromium",
+                           "gnome-terminal", "gedit", "nautilus", "gedit"}
+            if parts[0] in known_commands or "/" in parts[0]:
+                command = parts[0]
+                arguments = parts[1:]
+                logger.warning(f"LLM returned combined command, split into: {command} + {arguments}")
+
     logger.info(f"LLM generated command: {command} with {len(arguments)} arguments, method={method}")
     logger.info(f"Explanation: {explanation}")
     
