@@ -142,6 +142,9 @@ class AutomatedCommandTestSuite:
         result = await self.test_command_generation("check disk space", "df", None)  # May add flags
         self.log_result("Disk Space", *result)
 
+        result = await self.test_command_generation("list all directories", "ls", None)  # List directories
+        self.log_result("List Directories", *result)
+
         # Print summary
         print("\n" + "=" * 70)
         print("TEST SUMMARY")
