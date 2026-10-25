@@ -83,7 +83,7 @@ class OperonixModelService:
     def _get_model_name(self) -> str:
         """Get the model name for the current provider."""
         if self.provider == ModelProvider.GROQ:
-            return getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+            return getattr(settings, "GROQ_MODEL", "llama-3.1-8b-instant")
         elif self.provider == ModelProvider.OLLAMA:
             return getattr(settings, "OLLAMA_MODEL", "llama3")
         elif self.provider == ModelProvider.GEMINI:
