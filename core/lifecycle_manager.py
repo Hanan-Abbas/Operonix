@@ -472,13 +472,23 @@ class LifecycleManager:
                 task_source = source_map.get(source.lower(), TaskSource.API)
 
                 # Create task request
+                # Include pre_panel_context.cwd in metadata so executor uses correct directory
+                pre_panel_context = event.data.get("pre_panel_context", {})
+                pre_panel_cwd = pre_panel_context.get("cwd") if pre_panel_context else None
+
+                if pre_panel_cwd:
+                    logger.info(f"Task will use pre_panel CWD: {pre_panel_cwd}")
+                else:
+                    logger.warning("No pre_panel CWD available, command may run in wrong directory")
+
                 task_request = runtime_adapter.create_task_request(
                     user_input=user_input,
                     source=task_source,
                     metadata={
                         "original_event": event.data,
                         "graph_routed": True,
-                        "event_source": "event_bus"
+                        "event_source": "event_bus",
+                        "pre_panel_cwd": pre_panel_cwd
                     }
                 )
 
