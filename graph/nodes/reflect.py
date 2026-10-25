@@ -78,7 +78,7 @@ def reflect_node(state: OperonixState) -> Dict[str, Any]:
                 task_id=state.task.task_id,
                 method_type=method_type,
                 success=success,
-                confidence=state.routing.selected_candidate.confidence if state.routing.selected_candidate else 0.0
+                confidence=state.routing.selected_candidate.overall_score if state.routing.selected_candidate else 0.0
             )
             
             reflection_data["learning_feedback"] = learning_feedback
