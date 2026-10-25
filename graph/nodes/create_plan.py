@@ -309,20 +309,33 @@ Respond in JSON with:
         arguments = []
     arguments = [str(arg) for arg in arguments]
 
-    # Fallback: if LLM returned command with arguments combined, split intelligently
-    # Only split if it looks like a common pattern (e.g., "ping -c 4 google.com")
-    if not arguments and " " in command:
-        # Smart splitting: keep flags and their values together
+    # UNIVERSAL FIX: Always split command if it contains spaces
+    # The LLM keeps putting full command lines into the command field
+    # We must universally fix this, not just for specific patterns
+    if " " in command:
+        logger.warning(f"LLM returned command with spaces: '{command}' - this violates the schema")
         parts = command.split()
         if len(parts) > 1:
-            # Check if first part is a known command
-            known_commands = {"ping", "ls", "cp", "mv", "rm", "mkdir", "touch", "cat", "echo",
-                           "gnome-system-monitor", "firefox", "google-chrome", "chromium",
-                           "gnome-terminal", "gedit", "nautilus", "gedit"}
-            if parts[0] in known_commands or "/" in parts[0]:
-                command = parts[0]
-                arguments = parts[1:]
-                logger.warning(f"LLM returned combined command, split into: {command} + {arguments}")
+            # First part is the command, rest are arguments
+            command = parts[0]
+            # Append existing arguments
+            arguments = parts[1:] + arguments
+            logger.warning(f"UNIVERSAL FIX: Split into command='{command}', arguments={arguments}")
+
+    # Additional safety: Ensure command doesn't start with a flag
+    # If command starts with "-", it's definitely wrong
+    if command.startswith("-"):
+        logger.error(f"CRITICAL: Command starts with flag: '{command}' - this is a bug")
+        # Try to recover by using first argument as command if available
+        if arguments and not arguments[0].startswith("-"):
+            command = arguments[0]
+            arguments = arguments[1:]
+            logger.warning(f"Recovered by using first argument as command: '{command}'")
+        else:
+            # Last resort: use a safe default
+            command = "echo"
+            arguments = ["Error: Invalid command generated"]
+            logger.error(f"Could not recover, using echo fallback")
 
     logger.info(f"LLM generated command: {command} with {len(arguments)} arguments, method={method}")
     logger.info(f"Explanation: {explanation}")
