@@ -306,7 +306,12 @@ class ErrorClassifier:
         error_message: str,
         timeout_seconds: float,
     ) -> str:
-        """Classify using LLM with timeout guard."""
+        """Classify using LLM with timeout guard.
+
+        Note: LLM classification is slow and often unnecessary. Regex-based
+        classification is faster and more reliable for common errors.
+        This method is only used as a last resort for truly ambiguous errors.
+        """
         valid_categories = set(self.FALLBACK_PATTERNS.keys()) | {
             "routing_mismatch", "execution_logic", "unknown_error"
         }
@@ -317,9 +322,10 @@ class ErrorClassifier:
             f'Return ONLY valid JSON: {{"category": "<category_name>"}}'
         )
         try:
+            # Increased timeout to 5 seconds for slower models
             response = await asyncio.wait_for(
                 llm_client.generate(prompt, use_json=True),
-                timeout=timeout_seconds,
+                timeout=5.0,
             )
             if isinstance(response, dict):
                 category = response.get("category", "unknown_error")
@@ -339,7 +345,7 @@ class ErrorClassifier:
 
         except asyncio.TimeoutError:
             self.logger.warning(
-                "LLM classification timed out after %.1fs", timeout_seconds
+                "LLM classification timed out after 5.0s, using regex fallback"
             )
             return "unknown_error"
         except Exception as exc:
