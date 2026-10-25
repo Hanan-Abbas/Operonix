@@ -104,10 +104,12 @@ def execute_step_node(state: OperonixState) -> Dict[str, Any]:
         # Convert ContextSnapshot to dict for executor compatibility
         context_dict = context_to_dict(state.context) if state.context else None
 
-        # Use task's cwd if available (from actual focused window), otherwise use context cwd
-        if state.task.cwd and state.task.cwd != context_dict.get("cwd"):
-            logger.info(f"EXECUTE_STEP: Using task CWD {state.task.cwd} instead of context CWD {context_dict.get('cwd')}")
-            context_dict["cwd"] = state.task.cwd
+        # Use context's cwd (from the actual focused window before panel was opened)
+        # The lifecycle manager captures this in pre_panel_context
+        if context_dict and "cwd" in context_dict:
+            logger.info(f"EXECUTE_STEP: Using context CWD {context_dict['cwd']}")
+        else:
+            logger.warning("EXECUTE_STEP: No CWD in context, command may run in wrong directory")
 
         execution_result = _execute_with_executor(
             current_step,
