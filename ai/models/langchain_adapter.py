@@ -212,11 +212,19 @@ class LangChainAdapter:
                 # For now, use JSON output parser
                 parser = JsonOutputParser()
                 chain = self._model | parser
-                result = await chain.ainvoke(langchain_messages, **kwargs)
+                # Try synchronous invoke first, fallback to async
+                try:
+                    result = chain.invoke(langchain_messages, **kwargs)
+                except Exception:
+                    result = await chain.ainvoke(langchain_messages, **kwargs)
                 return result
             else:
                 # Fallback: invoke and parse JSON
-                response = await self._model.ainvoke(langchain_messages, **kwargs)
+                # Try synchronous invoke first, fallback to async
+                try:
+                    response = self._model.invoke(langchain_messages, **kwargs)
+                except Exception:
+                    response = await self._model.ainvoke(langchain_messages, **kwargs)
                 import json
                 # Try to extract JSON from response
                 content = response.content
