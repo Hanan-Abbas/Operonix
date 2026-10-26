@@ -370,10 +370,19 @@ def _translate_routing_decision(
         if method_type == MethodType.SHELL:
             # Get shell_argv from step parameters (set by LLM)
             shell_argv_list = step_parameters.get("shell_argv", [])
+            
+            # CRITICAL FIX: shell_argv must include the base command as first element
+            # The executor's _invoke_shell() reconstructs the full command from shell_argv
+            # using shlex.join(). If shell_argv only contains arguments, the base command is lost.
+            # Example: step.action="ls", shell_argv=["-d", "*/"]
+            # Before fix: shell_argv=("-d", "*/") → executor reconstructs "-d '*/'" (WRONG)
+            # After fix: shell_argv=("ls", "-d", "*/") → executor reconstructs "ls -d */" (CORRECT)
+            
             if shell_argv_list:
-                shell_argv = tuple(str(arg) for arg in shell_argv_list)
+                # Prepend the base command to the arguments
+                shell_argv = tuple([str(step_action)] + [str(arg) for arg in shell_argv_list])
             else:
-                # Fallback: use action as command
+                # Fallback: use action as command (split if it has spaces)
                 shell_argv = tuple(str(step_action).split())
 
         # Create payload for each method type
@@ -413,11 +422,19 @@ def _convert_step_to_executor_format(step) -> Dict[str, Any]:
     This function now passes concrete commands from the LLM-generated plan step
     instead of delegating user_input to the legacy system.
 
+    IMPORTANT: The LLM generates base command and arguments separately:
+    - step.action = base command (e.g., "ls")
+    - step.parameters.shell_argv = arguments (e.g., ["-d", "*/"])
+    
+    We pass these through WITHOUT reconstruction. The executor's _invoke_shell()
+    reconstructs the full command from shell_argv using shlex.join() which handles
+    proper shell escaping. Reconstructing here causes the command structure bug.
+
     Args:
         step: PlanStep from graph state with concrete command from LLM
 
     Returns:
-        Dict in executor step format with concrete command
+        Dict in executor step format with base command and arguments
     """
     step_parameters = getattr(step, 'parameters', {}) or {}
     step_action = getattr(step, 'action', None) or getattr(step, 'objective', '')
@@ -427,18 +444,17 @@ def _convert_step_to_executor_format(step) -> Dict[str, Any]:
     # shell_argv contains the arguments if present
     shell_argv = step_parameters.get("shell_argv", [])
 
-    # Build command with arguments
-    if shell_argv:
-        command = f"{step_action} {' '.join(shell_argv)}"
-    else:
-        command = step_action
-
+    # CRITICAL FIX: Do NOT reconstruct the full command here
+    # Pass the base command as-is in the action field
+    # The executor will reconstruct from shell_argv using shlex.join()
+    # This prevents the bug where "ls -d */" becomes "-d '*/'" (missing base command)
+    
     return {
-        "action": command,  # Concrete command from LLM
+        "action": step_action,  # Base command only (e.g., "ls")
         "args": step_parameters,
         "step_id": getattr(step, 'step_id', 'unknown'),
-        "command": step_action,  # Explicit command field
-        "shell_argv": shell_argv  # Explicit arguments
+        "command": step_action,  # Base command (explicit field for clarity)
+        "shell_argv": shell_argv  # Arguments (used by executor for reconstruction)
     }
 
 
