@@ -733,8 +733,10 @@ class TerminalResolver:
         #   3. Typed a command
         # In this case cwd reflects the panel/VS Code window, NOT the terminal.
         # CWD scoring would give a poor match, but recency is definitive.
+        log.info(f"TerminalResolver: focus_stack has {len(self._focus_stack)} items")
         if self._focus_stack:
             most_recent_id = self._focus_stack[0]
+            log.info(f"TerminalResolver: most recent window_id={most_recent_id}")
             for rec in terminals:
                 if rec.window_id == most_recent_id and rec.pts_path:
                     log.info(
