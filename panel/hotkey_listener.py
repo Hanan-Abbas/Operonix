@@ -109,7 +109,8 @@ class HotkeyListener:
             daemon=True,
         )
         self._listener.start()
-        log.info("hotkey_listener: registered global hotkey '%s'", self._hotkey_str)
+        log.info("hotkey_listener: registered global hotkey '%s' with %d keys", 
+                 self._hotkey_str, len(self._target_keys))
 
     def stop(self) -> None:
         if self._listener:
@@ -385,6 +386,7 @@ class HotkeyListener:
             return None
 
     def _fire(self) -> None:
+        log.info("hotkey_listener: HOTKEY FIRED - capturing context")
         # ── Step 1: capture context NOW, before the panel window appears ──
         context = self._snapshot_current_context()
         if context:
@@ -400,5 +402,6 @@ class HotkeyListener:
         # ── Step 2: ask the panel to toggle ───────────────────────────────
         try:
             self._bus.publish("panel_toggle_requested", {"source": "hotkey"})
+            log.info("hotkey_listener: published panel_toggle_requested with source=hotkey")
         except Exception as exc:  # noqa: BLE001
             log.warning("hotkey_listener: could not publish event — %s", exc)
