@@ -719,6 +719,7 @@ class TerminalResolver:
 
         # ── 2. Discover available terminals ───────────────────────────────────
         terminals = self._list_terminals()
+        log.info(f"TerminalResolver: found {len(terminals)} terminals")
 
         if not terminals:
             log.info("TerminalResolver: no terminals found — using Ghost profile")
