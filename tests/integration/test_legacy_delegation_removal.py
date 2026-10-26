@@ -32,7 +32,7 @@ async def test_execute_step_concrete_commands():
         step_id="test_step_1",
         action="gnome-system-monitor",  # Concrete command from LLM
         parameters={
-            "shell_argv": [],
+            "shell_argv": [],  # Arguments (empty in this case)
             "method": "shell",
             "explanation": "Open system monitor",
             "user_input": "open system monitor"  # Only for reference
@@ -99,11 +99,52 @@ async def test_execute_step_concrete_commands():
         print(f"\n❌ Fallback chain still present: {executor_decision.fallback_chain}")
         return False
 
-    # Verify shell_argv has concrete command
-    if executor_decision.payload.shell_argv:
-        print(f"\n✅ Concrete shell_argv passed: {executor_decision.payload.shell_argv}")
+    # Verify shell_argv includes base command (CRITICAL FIX)
+    # shell_argv should be ("gnome-system-monitor",) not ()
+    expected_shell_argv = ("gnome-system-monitor",)
+    if executor_decision.payload.shell_argv == expected_shell_argv:
+        print(f"\n✅ shell_argv includes base command: {executor_decision.payload.shell_argv}")
     else:
-        print("\n❌ No shell_argv in payload")
+        print(f"\n❌ shell_argv missing base command: expected {expected_shell_argv}, got {executor_decision.payload.shell_argv}")
+        return False
+
+    # Test with arguments (the actual bug case: "ls -d */")
+    print("\n" + "=" * 60)
+    print("Testing with arguments (ls -d */ case)")
+    print("=" * 60)
+    
+    step_with_args = PlanStep(
+        step_id="test_step_2",
+        action="ls",  # Base command
+        parameters={
+            "shell_argv": ["-d", "*/"],  # Arguments
+            "method": "shell",
+            "explanation": "List directories",
+            "user_input": "list all the directories here"
+        },
+        objective="List all directories in current directory",
+        idempotency=PlanStepIdempotency.CONDITIONAL,
+        side_effect=PlanStepSideEffect.LOCAL,
+        reversibility=True
+    )
+    
+    executor_decision_with_args = _translate_routing_decision(routing_decision, step_with_args)
+    
+    if executor_decision_with_args:
+        print(f"  Step action: {step_with_args.action}")
+        print(f"  Step shell_argv: {step_with_args.parameters['shell_argv']}")
+        print(f"  Executor shell_argv: {executor_decision_with_args.payload.shell_argv}")
+        
+        # Verify shell_argv includes base command + arguments
+        expected_shell_argv_with_args = ("ls", "-d", "*/")
+        if executor_decision_with_args.payload.shell_argv == expected_shell_argv_with_args:
+            print(f"\n✅ shell_argv includes base command + arguments: {executor_decision_with_args.payload.shell_argv}")
+            print("   This fixes the bug where '-d */' was missing 'ls'")
+        else:
+            print(f"\n❌ shell_argv incorrect: expected {expected_shell_argv_with_args}, got {executor_decision_with_args.payload.shell_argv}")
+            return False
+    else:
+        print("  ❌ Executor decision translation failed for step with arguments")
         return False
 
     return True
