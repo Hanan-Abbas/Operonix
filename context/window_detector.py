@@ -248,7 +248,9 @@ class WindowDetector:
                 stderr=subprocess.STDOUT,
             ).decode().strip()
             pid = int(pid_str) if pid_str.isdigit() else None
-        except Exception:
+            logger.debug(f"window_detector: xdotool got title='{title}' pid={pid}")
+        except Exception as exc:
+            logger.debug(f"window_detector: xdotool failed: {exc}")
             try:
                 if self.ewmh:
                     win = self.ewmh.getActiveWindow()
@@ -261,10 +263,48 @@ class WindowDetector:
                         title = name.decode("utf-8") if isinstance(name, bytes) else name
                         try:
                             pid = self.ewmh._getProperty("_NET_WM_PID", win)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                            logger.debug(f"window_detector: ewmh got title='{title}' pid={pid}")
+                        except Exception as ewmh_exc:
+                            logger.debug(f"window_detector: ewmh PID failed: {ewmh_exc}")
+            except Exception as ewmh_exc:
+                logger.debug(f"window_detector: ewmh failed: {ewmh_exc}")
+        
+        # FALLBACK: If xdotool/ewmh failed to get PID, try wmctrl
+        if pid is None:
+            logger.debug("window_detector: PID is None, trying wmctrl fallback")
+            if shutil.which("wmctrl"):
+                try:
+                    # Get the active window's PID from wmctrl
+                    result = subprocess.check_output(
+                        ["wmctrl", "-l", "-p"],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=2.0
+                    )
+                    # Find the active window (marked with *)
+                    for line in result.strip().splitlines():
+                        if "*" in line:
+                            parts = line.split(None, 4)
+                            if len(parts) >= 3:
+                                try:
+                                    pid = int(parts[2])
+                                    # Get title from wmctrl
+                                    if len(parts) >= 4:
+                                        title = parts[4]
+                                    logger.info(
+                                        "window_detector: wmctrl fallback SUCCESS pid=%d title='%s'",
+                                        pid, title[:60]
+                                    )
+                                    break
+                                except (ValueError, IndexError) as idx_exc:
+                                    logger.debug(f"window_detector: wmctrl parsing failed: {idx_exc}")
+                                    continue
+                except Exception as exc:
+                    logger.warning("window_detector: wmctrl PID fallback failed: %s", exc)
+            else:
+                logger.warning("window_detector: wmctrl not available for PID fallback")
+        
+        logger.debug(f"window_detector: _get_linux_info returning title='{title}' pid={pid}")
         return title, pid
 
     def _get_windows_info(self) -> tuple[str, int | None]:
