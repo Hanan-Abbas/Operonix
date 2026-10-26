@@ -409,9 +409,66 @@ class PanelController:
     # EventBus handlers  (fire on asyncio thread — use bridge signals)
     # ------------------------------------------------------------------
 
-    def _on_toggle(self, _payload: Any) -> None:
+    def _on_toggle(self, payload: Any) -> None:
+        """
+        Handle panel toggle request.
+        
+        If opened via hotkey, context is already captured by HotkeyListener.
+        If opened via mouse/UI, we need to capture context here to ensure
+        pre_panel_context is always populated with fresh data.
+        """
+        source = None
+        if isinstance(payload, dict):
+            source = payload.get("source")
+        
+        # If not opened via hotkey, capture context immediately
+        if source != "hotkey":
+            try:
+                from context.window_detector import window_detector as _wd
+                context = _wd._last_real_context
+                if context is None:
+                    # Fallback: capture fresh snapshot
+                    import asyncio
+                    asyncio.create_task(self._capture_context_for_mouse_open())
+                else:
+                    # Use last real context
+                    self._state.pre_panel_context = context
+                    log.debug(
+                        "panel_controller: mouse-open panel using _last_real_context cwd=%r",
+                        context.get("cwd")
+                    )
+            except Exception as exc:
+                log.warning("panel_controller: could not capture context for mouse-open — %s", exc)
+        
         if self._bridge:
             self._bridge.sig_toggle.emit()
+    
+    async def _capture_context_for_mouse_open(self) -> None:
+        """
+        Capture fresh context when panel is opened via mouse/UI.
+        
+        This ensures pre_panel_context is always populated even when
+        the panel is not opened via hotkey.
+        """
+        try:
+            from context.window_detector import window_detector as _wd
+            
+            # Request a fresh context snapshot
+            class FakeEvent:
+                def __init__(self):
+                    self.data = {"task_id": "mouse_open"}
+            
+            await _wd.capture_snapshot(FakeEvent())
+            
+            # Use the captured context
+            if _wd._last_external_snapshot:
+                self._state.pre_panel_context = _wd._last_external_snapshot
+                log.debug(
+                    "panel_controller: mouse-open panel captured fresh context cwd=%r",
+                    _wd._last_external_snapshot.get("cwd")
+                )
+        except Exception as exc:
+            log.warning("panel_controller: context capture for mouse-open failed — %s", exc)
 
     def _on_action_completed(self, event: Any) -> None:
         payload = event.data if hasattr(event, "data") else event
