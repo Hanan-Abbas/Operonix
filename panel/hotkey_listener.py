@@ -205,7 +205,6 @@ class HotkeyListener:
                     # Mark as hotkey-captured context
                     wmctrl_ctx["capture_source"] = "hotkey"
                     self._panel_state.pre_panel_context = wmctrl_ctx
-                    print(f"hotkey_listener: wmctrl fallback succeeded — cwd={wmctrl_ctx.get('cwd')}, source=hotkey")
                     log.debug(
                         "hotkey_listener: wmctrl fallback succeeded — cwd=%s window='%s' source=hotkey",
                         wmctrl_ctx.get("cwd"),
@@ -270,7 +269,6 @@ class HotkeyListener:
 
         Returns a context dict or None.
         """
-        print("hotkey_listener: _snapshot_via_wmctrl called")
         import shutil
         import subprocess
         import os
@@ -306,27 +304,20 @@ class HotkeyListener:
 
         for line in out.strip().splitlines():
             parts = line.split(None, 4)
-            print(f"hotkey_listener: wmctrl line parts: {parts}")
             if len(parts) < 4:
-                print(f"hotkey_listener: skipping line (len={len(parts)})")
                 continue
             try:
                 pid = int(parts[2])
             except ValueError:
-                print(f"hotkey_listener: couldn't parse pid from '{parts[2]}'")
                 continue
-            print(f"hotkey_listener: pid={pid} own_pids={own_pids}")
             if pid <= 1 or pid in own_pids:
-                print(f"hotkey_listener: skipping pid {pid} (own window or invalid)")
                 continue
 
             title = parts[4] if len(parts) > 4 else ""
-            print(f"hotkey_listener: title='{title}'")
 
             # Skip clearly non-useful windows - exact match only, not substring
             skip_titles = ("Unknown",)
             if title.strip() in skip_titles:
-                print(f"hotkey_listener: skipping exact match to skip pattern")
                 continue
 
             # Read cwd — walk children if direct cwd is / (terminal server pattern)
