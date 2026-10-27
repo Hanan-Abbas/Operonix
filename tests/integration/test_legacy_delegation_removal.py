@@ -143,6 +143,17 @@ async def test_execute_step_concrete_commands():
         else:
             print(f"\n❌ shell_argv incorrect: expected {expected_shell_argv_with_args}, got {executor_decision_with_args.payload.shell_argv}")
             return False
+        
+        # Verify command string format (no literal quotes around glob patterns)
+        import shlex
+        command_from_argv = " ".join(list(executor_decision_with_args.payload.shell_argv))
+        expected_command = "ls -d */"
+        if command_from_argv == expected_command:
+            print(f"\n✅ Command string format correct: '{command_from_argv}'")
+            print("   This fixes the bug where glob patterns had literal quotes")
+        else:
+            print(f"\n❌ Command string format incorrect: expected '{expected_command}', got '{command_from_argv}'")
+            return False
     else:
         print("  ❌ Executor decision translation failed for step with arguments")
         return False
