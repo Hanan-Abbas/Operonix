@@ -456,20 +456,25 @@ class PanelController:
     async def _capture_context_for_mouse_open(self) -> None:
         """
         Capture fresh context when panel is opened via mouse/UI.
-        
+
         This ensures pre_panel_context is always populated even when
         the panel is not opened via hotkey.
         """
+        # GUARD: Don't overwrite hotkey-captured context
+        if self._state.pre_panel_context and self._state.pre_panel_context.get("window_pid"):
+            log.info("panel_controller: _capture_context_for_mouse_open skipping - hotkey context exists with window_pid")
+            return
+
         try:
             from context.window_detector import window_detector as _wd
-            
+
             # Request a fresh context snapshot
             class FakeEvent:
                 def __init__(self):
                     self.data = {"task_id": "mouse_open"}
-            
+
             await _wd.capture_snapshot(FakeEvent())
-            
+
             # Use the captured context
             if _wd._last_external_snapshot:
                 self._state.pre_panel_context = _wd._last_external_snapshot
