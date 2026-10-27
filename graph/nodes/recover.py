@@ -38,7 +38,7 @@ def recover_node(state: OperonixState) -> Dict[str, Any]:
     
     state.add_history_event("recover_started", {
         "task_id": state.task.task_id,
-        "verification_status": state.verification.status if state.verification else None
+        "verification_status": getattr(state.verification, 'status', 'no_verification') if state.verification else 'no_verification'
     })
     
     # Determine failure category and recovery strategy
@@ -113,9 +113,13 @@ def _classify_failure(state: OperonixState) -> FailureCategory:
 
     # Fallback to verification-based classification
     if not state.verification:
+        logger.warning("RECOVER: No verification result available, defaulting to UNKNOWN")
         return FailureCategory.UNKNOWN
 
-    verification_status = state.verification.status
+    verification_status = getattr(state.verification, 'status', None)
+    if not verification_status:
+        logger.warning("RECOVER: Verification result has no status, defaulting to UNKNOWN")
+        return FailureCategory.UNKNOWN
 
     if verification_status == "VERIFIED":
         # No failure, shouldn't be in recover node
