@@ -211,10 +211,12 @@ class HotkeyListener:
                 )
                 wmctrl_ctx = self._snapshot_via_wmctrl()
                 if wmctrl_ctx:
+                    # Mark as hotkey-captured context
+                    wmctrl_ctx["capture_source"] = "hotkey"
                     self._panel_state.pre_panel_context = wmctrl_ctx
-                    print(f"hotkey_listener: wmctrl fallback succeeded — cwd={wmctrl_ctx.get('cwd')}")
+                    print(f"hotkey_listener: wmctrl fallback succeeded — cwd={wmctrl_ctx.get('cwd')}, source=hotkey")
                     log.debug(
-                        "hotkey_listener: wmctrl fallback succeeded — cwd=%s window='%s'",
+                        "hotkey_listener: wmctrl fallback succeeded — cwd=%s window='%s' source=hotkey",
                         wmctrl_ctx.get("cwd"),
                         wmctrl_ctx.get("window_title"),
                     )
@@ -417,10 +419,12 @@ class HotkeyListener:
         context = self._snapshot_current_context()
         print(f"hotkey_listener: _snapshot_current_context returned: {context}")
         if context:
+            # Mark this as hotkey-captured context
+            context["capture_source"] = "hotkey"
             self._panel_state.pre_panel_context = context
-            print(f"hotkey_listener: SAVED context to panel_state: cwd={context.get('cwd')}, pid={context.get('window_pid')}")
+            print(f"hotkey_listener: SAVED context to panel_state: cwd={context.get('cwd')}, pid={context.get('window_pid')}, source=hotkey")
             log.info(
-                "hotkey_listener: pre-panel context saved — cwd=%s window='%s'",
+                "hotkey_listener: pre-panel context saved — cwd=%s window='%s' source=hotkey",
                 context.get("cwd"),
                 context.get("window_title"),
             )
