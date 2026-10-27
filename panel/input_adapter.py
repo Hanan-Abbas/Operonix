@@ -138,13 +138,31 @@ class PanelInputAdapter:
         )
 
         # Priority for context resolution:
-        # 1. Hotkey-captured context (capture_source="hotkey") - use it regardless of task_id
+        # 1. Hotkey-captured context (capture_source="hotkey") - use it ONLY if window hasn't changed
         # 2. _last_real_context - current window (for panel stays open scenario)
         # 3. pre_panel_context - fallback
         if pre_context and pre_context.get("capture_source") == "hotkey":
-            # Hotkey-captured context - always use it
-            logger.info("PanelInputAdapter: using hotkey-captured context (capture_source=hotkey)")
-            restore_context = pre_context
+            # Check if user switched windows since hotkey
+            try:
+                from context.window_detector import window_detector as _wd
+                current_window = _wd._last_real_context
+                hotkey_title = pre_context.get("window_title")
+                current_title = current_window.get("window_title") if current_window else None
+                
+                if hotkey_title and current_title and hotkey_title != current_title:
+                    # User switched windows - use current window
+                    logger.info(
+                        "PanelInputAdapter: user switched windows (hotkey='%s', current='%s'), using _last_real_context",
+                        hotkey_title,
+                        current_title
+                    )
+                    restore_context = current_window
+                else:
+                    logger.info("PanelInputAdapter: using hotkey-captured context (window still active)")
+                    restore_context = pre_context
+            except Exception as exc:
+                logger.warning("PanelInputAdapter: could not check window switch — %s", exc)
+                restore_context = pre_context
         elif pre_context and pre_context.get("task_id") in ("mouse_open", "background_poll", "focus_event", "initial_boot"):
             # Stale context from mouse/background/initial - use fresh _last_real_context
             logger.info("PanelInputAdapter: pre_panel_context is stale (not from hotkey), using _last_real_context")
