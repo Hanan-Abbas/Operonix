@@ -465,8 +465,8 @@ class PanelController:
         the panel is not opened via hotkey.
         """
         # GUARD: Don't overwrite hotkey-captured context
-        if self._state.pre_panel_context and self._state.pre_panel_context.get("window_pid"):
-            log.info("panel_controller: _capture_context_for_mouse_open skipping - hotkey context exists with window_pid")
+        if self._state.pre_panel_context and self._state.pre_panel_context.get("capture_source") == "hotkey":
+            log.info("panel_controller: _capture_context_for_mouse_open skipping - hotkey context exists with capture_source=hotkey")
             return
 
         try:
@@ -979,15 +979,34 @@ class PanelController:
 
         # Priority for context resolution:
         #   1. pre_panel_context from HotkeyListener (hotkey-triggered open)
+        #      - Use it ONLY if the hotkey window is still active
+        #      - If user switched windows, use _last_real_context instead
         #   2. _last_real_context from window_detector — the window that was
         #      active just before focus switched to VS Code/panel. Updated
         #      in real time by xprop, immune to panel-click fake focus events
         #      because we save BEFORE each focus switch, not after.
         pre_context = self._state.pre_panel_context
         
-        # GUARD: If pre_context has capture_source="hotkey", use it regardless of task_id
+        # Check if hotkey context is still valid (window hasn't changed)
         if pre_context and pre_context.get("capture_source") == "hotkey":
-            log.info("panel_controller: using hotkey-captured context (capture_source=hotkey)")
+            try:
+                from context.window_detector import window_detector as _wd_ref
+                current_window = _wd_ref._last_real_context
+                hotkey_title = pre_context.get("window_title")
+                current_title = current_window.get("window_title") if current_window else None
+                
+                if hotkey_title and current_title and hotkey_title != current_title:
+                    # User switched windows since hotkey - use current window
+                    log.info(
+                        "panel_controller: user switched windows (hotkey='%s', current='%s'), using _last_real_context",
+                        hotkey_title,
+                        current_title
+                    )
+                    pre_context = current_window
+                else:
+                    log.info("panel_controller: using hotkey-captured context (window still active)")
+            except Exception as exc:
+                log.warning("panel_controller: could not check window switch — %s", exc)
         elif pre_context is None:
             try:
                 from context.window_detector import window_detector as _wd_ref
