@@ -129,6 +129,11 @@ class PanelInputAdapter:
         # Read the context that was snapshotted by HotkeyListener *before*
         # the panel window appeared. This is the user's real working context.
         pre_context: Optional[dict] = self._panel_state.pre_panel_context
+        logger.info(
+            "PanelInputAdapter: pre_panel_context from panel_state: cwd=%r, task_id=%r",
+            pre_context.get("cwd") if pre_context else None,
+            pre_context.get("task_id") if pre_context else None,
+        )
 
         _VALID_METHODS = {"plugin", "api", "command", "shell", "ui"}
 
@@ -148,6 +153,11 @@ class PanelInputAdapter:
             try:
                 from context.window_detector import window_detector as _wd
                 restore_context = _wd._last_real_context
+                logger.info(
+                    "PanelInputAdapter: pre_panel_context is None, using _last_real_context cwd=%r, task_id=%r",
+                    restore_context.get("cwd") if restore_context else None,
+                    restore_context.get("task_id") if restore_context else None,
+                )
             except Exception:
                 restore_context = None
 
