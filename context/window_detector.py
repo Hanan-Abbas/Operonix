@@ -248,9 +248,9 @@ class WindowDetector:
                 stderr=subprocess.STDOUT,
             ).decode().strip()
             pid = int(pid_str) if pid_str.isdigit() else None
-            logger.debug(f"window_detector: xdotool got title='{title}' pid={pid}")
+            logger.info(f"window_detector: xdotool got title='{title}' pid={pid}")
         except Exception as exc:
-            logger.debug(f"window_detector: xdotool failed: {exc}")
+            logger.info(f"window_detector: xdotool failed: {exc}")
             try:
                 if self.ewmh:
                     win = self.ewmh.getActiveWindow()
@@ -263,15 +263,15 @@ class WindowDetector:
                         title = name.decode("utf-8") if isinstance(name, bytes) else name
                         try:
                             pid = self.ewmh._getProperty("_NET_WM_PID", win)
-                            logger.debug(f"window_detector: ewmh got title='{title}' pid={pid}")
+                            logger.info(f"window_detector: ewmh got title='{title}' pid={pid}")
                         except Exception as ewmh_exc:
-                            logger.debug(f"window_detector: ewmh PID failed: {ewmh_exc}")
+                            logger.info(f"window_detector: ewmh PID failed: {ewmh_exc}")
             except Exception as ewmh_exc:
-                logger.debug(f"window_detector: ewmh failed: {ewmh_exc}")
+                logger.info(f"window_detector: ewmh failed: {ewmh_exc}")
         
         # FALLBACK: If xdotool/ewmh failed to get PID, try wmctrl
         if pid is None:
-            logger.debug("window_detector: PID is None, trying wmctrl fallback")
+            logger.info("window_detector: PID is None, trying wmctrl fallback")
             if shutil.which("wmctrl"):
                 try:
                     # Get the active window's PID from wmctrl
@@ -297,14 +297,14 @@ class WindowDetector:
                                     )
                                     break
                                 except (ValueError, IndexError) as idx_exc:
-                                    logger.debug(f"window_detector: wmctrl parsing failed: {idx_exc}")
+                                    logger.info(f"window_detector: wmctrl parsing failed: {idx_exc}")
                                     continue
                 except Exception as exc:
                     logger.warning("window_detector: wmctrl PID fallback failed: %s", exc)
             else:
                 logger.warning("window_detector: wmctrl not available for PID fallback")
         
-        logger.debug(f"window_detector: _get_linux_info returning title='{title}' pid={pid}")
+        logger.info(f"window_detector: _get_linux_info returning title='{title}' pid={pid}")
         return title, pid
 
     def _get_windows_info(self) -> tuple[str, int | None]:
@@ -382,6 +382,64 @@ class WindowDetector:
 
         return "unknown"
 
+    def _infer_cwd_from_title(self, window_title: str) -> str | None:
+        """
+        Infer CWD from window title when PID is unavailable.
+        
+        Common patterns:
+        - "Desktop" → ~/Desktop
+        - "Downloads" → ~/Downloads
+        - "Documents" → ~/Documents
+        - "Pictures" ~/Pictures
+        - "Music" → ~/Music
+        - "Videos" → ~/Videos
+        - "Screenshots" → ~/Pictures/Screenshots
+        - Terminal paths like "user@host: ~/path/to/dir" → ~/path
+        """
+        import os
+        from pathlib import Path
+        
+        # Clean up title - remove xdotool command artifacts
+        title = window_title.strip()
+        # Remove "command: getactivewindow\ncommand: getwindowname\n" prefix
+        if "command:" in title:
+            lines = title.split("\n")
+            title = lines[-1] if lines else title  # Get last line (actual title)
+        
+        title = title.strip()
+        
+        # Common folder names
+        folder_map = {
+            "Desktop": os.path.expanduser("~/Desktop"),
+            "Downloads": os.path.expanduser("~/Downloads"),
+            "Documents": os.path.expanduser("~/Documents"),
+            "Pictures": os.path.expanduser("~/Pictures"),
+            "Music": os.path.expanduser("~/Music"),
+            "Videos": os.path.expanduser("~/Videos"),
+            "Screenshots": os.path.expanduser("~/Pictures/Screenshots"),
+        }
+        
+        # Direct match
+        if title in folder_map:
+            return folder_map[title]
+        
+        # Terminal title pattern: "user@host: ~/path/to/dir"
+        if ":" in title and "~" in title:
+            try:
+                # Extract path after colon
+                path_part = title.split(":", 1)[1].strip()
+                if path_part.startswith("~"):
+                    return os.path.expanduser(path_part)
+            except Exception:
+                pass
+        
+        # Nautilus-style title ending with folder name
+        for folder_name, folder_path in folder_map.items():
+            if title.endswith(folder_name):
+                return folder_path
+        
+        return None
+
     def _get_window_cwd(
         self,
         pid: int | None,
@@ -402,6 +460,13 @@ class WindowDetector:
           everything else → /proc/<pid>/cwd or psutil fallback
         """
         if not pid:
+            # CRITICAL FALLBACK: When PID is None, try to infer CWD from window title
+            # This handles the case where xdotool/ewmh fail to get the PID
+            logger.warning("window_detector: PID is None, trying title-based CWD inference")
+            inferred_cwd = self._infer_cwd_from_title(window_title)
+            if inferred_cwd:
+                logger.info(f"window_detector: inferred CWD from title: {inferred_cwd}")
+                return inferred_cwd
             return os.getcwd()
 
         try:
