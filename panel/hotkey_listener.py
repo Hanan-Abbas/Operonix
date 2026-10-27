@@ -103,6 +103,7 @@ class HotkeyListener:
         if not _HAS_PYNPUT or not self._target_keys:
             log.info("hotkey_listener: not started (pynput unavailable or empty hotkey).")
             return
+        log.info("hotkey_listener: starting listener for hotkey='%s'", self._hotkey_str)
         self._listener = _kb.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -391,13 +392,13 @@ class HotkeyListener:
         context = self._snapshot_current_context()
         if context:
             self._panel_state.pre_panel_context = context
-            log.debug(
+            log.info(
                 "hotkey_listener: pre-panel context saved — cwd=%s window='%s'",
                 context.get("cwd"),
                 context.get("window_title"),
             )
         else:
-            log.debug("hotkey_listener: no pre-panel context available.")
+            log.warning("hotkey_listener: no pre-panel context available")
 
         # ── Step 2: ask the panel to toggle ───────────────────────────────
         try:
