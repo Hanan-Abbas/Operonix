@@ -103,8 +103,10 @@ class HotkeyListener:
 
     def start(self) -> None:
         if not _HAS_PYNPUT or not self._target_keys:
+            print("hotkey_listener: not started (pynput unavailable or empty hotkey).")
             log.info("hotkey_listener: not started (pynput unavailable or empty hotkey).")
             return
+        print(f"hotkey_listener: starting listener for hotkey='{self._hotkey_str}'")
         log.info("hotkey_listener: starting listener for hotkey='%s'", self._hotkey_str)
         self._listener = _kb.Listener(
             on_press=self._on_press,
@@ -112,6 +114,7 @@ class HotkeyListener:
             daemon=True,
         )
         self._listener.start()
+        print(f"hotkey_listener: registered global hotkey '{self._hotkey_str}' with {len(self._target_keys)} keys")
         log.info("hotkey_listener: registered global hotkey '%s' with %d keys", 
                  self._hotkey_str, len(self._target_keys))
 
