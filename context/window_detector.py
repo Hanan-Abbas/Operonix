@@ -241,11 +241,11 @@ class WindowDetector:
         try:
             title = subprocess.check_output(
                 ["xdotool", "getactivewindow", "getwindowname"],
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.DEVNULL,
             ).decode().strip()
             pid_str = subprocess.check_output(
                 ["xdotool", "getactivewindow", "getwindowpid"],
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.DEVNULL,
             ).decode().strip()
             pid = int(pid_str) if pid_str.isdigit() else None
             logger.info(f"window_detector: xdotool got title='{title}' pid={pid}")
