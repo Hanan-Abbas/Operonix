@@ -135,6 +135,24 @@ class PanelInputAdapter:
             pre_context.get("task_id") if pre_context else None,
         )
 
+        # If pre_panel_context is from hotkey capture (task_id != 'mouse_open'), use it
+        # If it's from mouse capture or background poll, capture fresh context
+        if pre_context and pre_context.get("task_id") in ("mouse_open", "background_poll", "focus_event"):
+            logger.info("PanelInputAdapter: pre_panel_context is stale (not from hotkey), using _last_real_context")
+            try:
+                from context.window_detector import window_detector as _wd
+                restore_context = _wd._last_real_context
+                logger.info(
+                    "PanelInputAdapter: using _last_real_context cwd=%r, task_id=%r",
+                    restore_context.get("cwd") if restore_context else None,
+                    restore_context.get("task_id") if restore_context else None,
+                )
+            except Exception as exc:
+                logger.warning("PanelInputAdapter: _last_real_context access failed — %s", exc)
+                restore_context = pre_context
+        else:
+            restore_context = pre_context
+
         _VALID_METHODS = {"plugin", "api", "command", "shell", "ui"}
 
         payload: dict[str, Any] = {
