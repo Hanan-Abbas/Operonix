@@ -103,10 +103,8 @@ class HotkeyListener:
 
     def start(self) -> None:
         if not _HAS_PYNPUT or not self._target_keys:
-            print("hotkey_listener: not started (pynput unavailable or empty hotkey).")
             log.info("hotkey_listener: not started (pynput unavailable or empty hotkey).")
             return
-        print(f"hotkey_listener: starting listener for hotkey='{self._hotkey_str}'")
         log.info("hotkey_listener: starting listener for hotkey='%s'", self._hotkey_str)
         self._listener = _kb.Listener(
             on_press=self._on_press,
@@ -114,7 +112,6 @@ class HotkeyListener:
             daemon=True,
         )
         self._listener.start()
-        print(f"hotkey_listener: registered global hotkey '{self._hotkey_str}' with {len(self._target_keys)} keys")
         log.info("hotkey_listener: registered global hotkey '%s' with %d keys", 
                  self._hotkey_str, len(self._target_keys))
 
@@ -144,7 +141,6 @@ class HotkeyListener:
         with self._lock:
             self._pressed.add(self._normalise(key))
             if self._target_keys and self._target_keys.issubset(self._pressed):
-                print("hotkey_listener: HOTKEY TRIGGERED - target keys match")
                 log.debug("hotkey_listener: hotkey triggered")
                 self._fire()
 
@@ -178,25 +174,20 @@ class HotkeyListener:
 
         Returns a minimal context dict or None if the detector is unavailable.
         """
-        print("hotkey_listener: _snapshot_current_context called")
         wd = self._window_detector
         if wd is None:
-            print("hotkey_listener: window_detector is None")
             return None
 
         try:
             os_name = wd.os_name
-            print(f"hotkey_listener: os_name={os_name}")
 
             if os_name == "Linux":
                 title, pid = wd._get_linux_info()
-                print(f"hotkey_listener: _get_linux_info returned title='{title}' pid={pid}")
             elif os_name == "Windows":
                 title, pid = wd._get_windows_info()
             elif os_name == "Darwin":
                 title, pid = wd._get_macos_info()
             else:
-                print(f"hotkey_listener: unknown os_name={os_name}")
                 return None
 
             # ── xdotool failure fallback ───────────────────────────────────
@@ -309,9 +300,7 @@ class HotkeyListener:
                 text=True, timeout=2.0,
                 stderr=subprocess.DEVNULL,
             )
-            print(f"hotkey_listener: wmctrl output: {out[:200]}")
         except Exception as exc:
-            print(f"hotkey_listener: wmctrl failed: {exc}")
             log.debug("_snapshot_via_wmctrl: wmctrl failed — %s", exc)
             return None
 
@@ -413,23 +402,19 @@ class HotkeyListener:
             return None
 
     def _fire(self) -> None:
-        print("hotkey_listener: HOTKEY FIRED - capturing context")
         log.info("hotkey_listener: HOTKEY FIRED - capturing context")
         # ── Step 1: capture context NOW, before the panel window appears ──
         context = self._snapshot_current_context()
-        print(f"hotkey_listener: _snapshot_current_context returned: {context}")
         if context:
             # Mark this as hotkey-captured context
             context["capture_source"] = "hotkey"
             self._panel_state.pre_panel_context = context
-            print(f"hotkey_listener: SAVED context to panel_state: cwd={context.get('cwd')}, pid={context.get('window_pid')}, source=hotkey")
             log.info(
                 "hotkey_listener: pre-panel context saved — cwd=%s window='%s' source=hotkey",
                 context.get("cwd"),
                 context.get("window_title"),
             )
         else:
-            print("hotkey_listener: NO context available")
             log.warning("hotkey_listener: no pre-panel context available")
 
         # ── Step 2: ask the panel to toggle ───────────────────────────────
