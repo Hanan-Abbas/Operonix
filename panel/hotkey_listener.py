@@ -205,12 +205,14 @@ class HotkeyListener:
             # panel or Wayland surface holds focus).
             # Fall back to wmctrl Z-order which does NOT depend on xdotool.
             if not title or title == "Unknown Linux Window" or pid is None:
+                print(f"hotkey_listener: xdotool failed (title='{title}' pid={pid}), trying wmctrl fallback")
                 log.debug(
                     "hotkey_listener: xdotool returned Unknown — trying wmctrl fallback"
                 )
                 wmctrl_ctx = self._snapshot_via_wmctrl()
                 if wmctrl_ctx:
                     self._panel_state.pre_panel_context = wmctrl_ctx
+                    print(f"hotkey_listener: wmctrl fallback succeeded — cwd={wmctrl_ctx.get('cwd')}")
                     log.debug(
                         "hotkey_listener: wmctrl fallback succeeded — cwd=%s window='%s'",
                         wmctrl_ctx.get("cwd"),
@@ -221,6 +223,7 @@ class HotkeyListener:
                 # wmctrl also failed — use last known external snapshot
                 snap = getattr(wd, "_last_external_snapshot", None)
                 if snap:
+                    print(f"hotkey_listener: using last_external_snapshot cwd={snap.get('cwd')}")
                     log.debug(
                         "hotkey_listener: using last_external_snapshot cwd=%s",
                         snap.get("cwd"),
@@ -274,6 +277,7 @@ class HotkeyListener:
 
         Returns a context dict or None.
         """
+        print("hotkey_listener: _snapshot_via_wmctrl called")
         import shutil
         import subprocess
         import os
@@ -303,26 +307,35 @@ class HotkeyListener:
                 text=True, timeout=2.0,
                 stderr=subprocess.DEVNULL,
             )
+            print(f"hotkey_listener: wmctrl output: {out[:200]}")
         except Exception as exc:
+            print(f"hotkey_listener: wmctrl failed: {exc}")
             log.debug("_snapshot_via_wmctrl: wmctrl failed — %s", exc)
             return None
 
         for line in out.strip().splitlines():
             parts = line.split(None, 4)
+            print(f"hotkey_listener: wmctrl line parts: {parts}")
             if len(parts) < 4:
+                print(f"hotkey_listener: skipping line (len={len(parts)})")
                 continue
             try:
                 pid = int(parts[2])
             except ValueError:
+                print(f"hotkey_listener: couldn't parse pid from '{parts[2]}'")
                 continue
+            print(f"hotkey_listener: pid={pid} own_pids={own_pids}")
             if pid <= 1 or pid in own_pids:
+                print(f"hotkey_listener: skipping pid {pid} (own window or invalid)")
                 continue
 
             title = parts[4] if len(parts) > 4 else ""
+            print(f"hotkey_listener: title='{title}'")
 
-            # Skip clearly non-useful windows
-            skip_titles = ("Unknown", "Desktop", "")
-            if any(title.strip().startswith(s) for s in skip_titles):
+            # Skip clearly non-useful windows - exact match only, not substring
+            skip_titles = ("Unknown",)
+            if title.strip() in skip_titles:
+                print(f"hotkey_listener: skipping exact match to skip pattern")
                 continue
 
             # Read cwd — walk children if direct cwd is / (terminal server pattern)
@@ -398,17 +411,21 @@ class HotkeyListener:
             return None
 
     def _fire(self) -> None:
+        print("hotkey_listener: HOTKEY FIRED - capturing context")
         log.info("hotkey_listener: HOTKEY FIRED - capturing context")
         # ── Step 1: capture context NOW, before the panel window appears ──
         context = self._snapshot_current_context()
+        print(f"hotkey_listener: _snapshot_current_context returned: {context}")
         if context:
             self._panel_state.pre_panel_context = context
+            print(f"hotkey_listener: SAVED context to panel_state: cwd={context.get('cwd')}, pid={context.get('window_pid')}")
             log.info(
                 "hotkey_listener: pre-panel context saved — cwd=%s window='%s'",
                 context.get("cwd"),
                 context.get("window_title"),
             )
         else:
+            print("hotkey_listener: NO context available")
             log.warning("hotkey_listener: no pre-panel context available")
 
         # ── Step 2: ask the panel to toggle ───────────────────────────────
