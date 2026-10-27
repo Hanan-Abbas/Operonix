@@ -421,8 +421,10 @@ class PanelController:
         if isinstance(payload, dict):
             source = payload.get("source")
         
-        # If not opened via hotkey, capture context immediately
+        # Only capture context if NOT opened via hotkey
+        # HotkeyListener already captured context before publishing the event
         if source != "hotkey":
+            log.info("panel_controller: panel opened via mouse/UI, capturing context")
             try:
                 from context.window_detector import window_detector as _wd
                 context = _wd._last_real_context
@@ -433,12 +435,14 @@ class PanelController:
                 else:
                     # Use last real context
                     self._state.pre_panel_context = context
-                    log.debug(
+                    log.info(
                         "panel_controller: mouse-open panel using _last_real_context cwd=%r",
                         context.get("cwd")
                     )
             except Exception as exc:
                 log.warning("panel_controller: could not capture context for mouse-open — %s", exc)
+        else:
+            log.info("panel_controller: panel opened via hotkey, using HotkeyListener context")
         
         if self._bridge:
             self._bridge.sig_toggle.emit()
