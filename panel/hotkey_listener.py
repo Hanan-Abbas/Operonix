@@ -33,6 +33,8 @@ import logging
 import threading
 from typing import Any
 
+from core.event_bus import bus
+
 log = logging.getLogger(__name__)
 
 try:
