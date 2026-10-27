@@ -1049,8 +1049,9 @@ class Executor:
 
         # Inject the reconstructed command into args so the shell tool's
         # existing logic (profile resolution, pts check) works unchanged.
-        import shlex as _shlex
-        args["command"] = _shlex.join(argv) if argv else args.get("command", "")
+        # Use simple space join instead of shlex.join to avoid literal quotes
+        # around glob patterns and special characters.
+        args["command"] = " ".join(argv) if argv else args.get("command", "")
         args["task_id"] = task_id
 
         is_panel_sudo = (
