@@ -130,22 +130,23 @@ class PanelInputAdapter:
         # the panel window appeared. This is the user's real working context.
         pre_context: Optional[dict] = self._panel_state.pre_panel_context
         logger.info(
-            "PanelInputAdapter: pre_panel_context from panel_state: cwd=%r, task_id=%r, window_pid=%r",
+            "PanelInputAdapter: pre_panel_context from panel_state: cwd=%r, task_id=%r, window_pid=%r, capture_source=%r",
             pre_context.get("cwd") if pre_context else None,
             pre_context.get("task_id") if pre_context else None,
             pre_context.get("window_pid") if pre_context else None,
+            pre_context.get("capture_source") if pre_context else None,
         )
 
         # Priority for context resolution:
-        # 1. Hotkey-captured context (has window_pid) - use it regardless of task_id
+        # 1. Hotkey-captured context (capture_source="hotkey") - use it regardless of task_id
         # 2. _last_real_context - current window (for panel stays open scenario)
         # 3. pre_panel_context - fallback
-        if pre_context and pre_context.get("window_pid"):
+        if pre_context and pre_context.get("capture_source") == "hotkey":
             # Hotkey-captured context - always use it
-            logger.info("PanelInputAdapter: using hotkey-captured context (has window_pid)")
+            logger.info("PanelInputAdapter: using hotkey-captured context (capture_source=hotkey)")
             restore_context = pre_context
-        elif pre_context and pre_context.get("task_id") in ("mouse_open", "background_poll", "focus_event"):
-            # Stale context from mouse/background - use fresh _last_real_context
+        elif pre_context and pre_context.get("task_id") in ("mouse_open", "background_poll", "focus_event", "initial_boot"):
+            # Stale context from mouse/background/initial - use fresh _last_real_context
             logger.info("PanelInputAdapter: pre_panel_context is stale (not from hotkey), using _last_real_context")
             try:
                 from context.window_detector import window_detector as _wd
