@@ -442,7 +442,13 @@ class PanelController:
             except Exception as exc:
                 log.warning("panel_controller: could not capture context for mouse-open — %s", exc)
         else:
-            log.info("panel_controller: panel opened via hotkey, using HotkeyListener context")
+            log.info("panel_controller: panel opened via hotkey, preserving HotkeyListener context")
+            # HOTKEY CONTEXT GUARD: Never overwrite hotkey-captured context
+            # The HotkeyListener already saved context with window_pid, so we check for that
+            if self._state.pre_panel_context and self._state.pre_panel_context.get("window_pid"):
+                log.info("panel_controller: hotkey context has window_pid, preserving it")
+            else:
+                log.warning("panel_controller: hotkey context missing window_pid")
         
         if self._bridge:
             self._bridge.sig_toggle.emit()
