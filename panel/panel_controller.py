@@ -425,22 +425,26 @@ class PanelController:
         # HotkeyListener already captured context before publishing the event
         if source != "hotkey":
             log.info("panel_controller: panel opened via mouse/UI, capturing context")
-            try:
-                from context.window_detector import window_detector as _wd
-                context = _wd._last_real_context
-                if context is None:
-                    # Fallback: capture fresh snapshot
-                    import asyncio
-                    asyncio.create_task(self._capture_context_for_mouse_open())
-                else:
-                    # Use last real context
-                    self._state.pre_panel_context = context
-                    log.info(
-                        "panel_controller: mouse-open panel using _last_real_context cwd=%r",
-                        context.get("cwd")
-                    )
-            except Exception as exc:
-                log.warning("panel_controller: could not capture context for mouse-open — %s", exc)
+            # GUARD: Don't overwrite hotkey-captured context
+            if self._state.pre_panel_context and self._state.pre_panel_context.get("capture_source") == "hotkey":
+                log.info("panel_controller: preserving hotkey context, skipping mouse capture")
+            else:
+                try:
+                    from context.window_detector import window_detector as _wd
+                    context = _wd._last_real_context
+                    if context is None:
+                        # Fallback: capture fresh snapshot
+                        import asyncio
+                        asyncio.create_task(self._capture_context_for_mouse_open())
+                    else:
+                        # Use last real context
+                        self._state.pre_panel_context = context
+                        log.info(
+                            "panel_controller: mouse-open panel using _last_real_context cwd=%r",
+                            context.get("cwd")
+                        )
+                except Exception as exc:
+                    log.warning("panel_controller: could not capture context for mouse-open — %s", exc)
         else:
             log.info("panel_controller: panel opened via hotkey, preserving HotkeyListener context")
             # HOTKEY CONTEXT GUARD: Never overwrite hotkey-captured context
@@ -980,12 +984,30 @@ class PanelController:
         #      in real time by xprop, immune to panel-click fake focus events
         #      because we save BEFORE each focus switch, not after.
         pre_context = self._state.pre_panel_context
-        if pre_context is None:
+        
+        # GUARD: If pre_context has capture_source="hotkey", use it regardless of task_id
+        if pre_context and pre_context.get("capture_source") == "hotkey":
+            log.info("panel_controller: using hotkey-captured context (capture_source=hotkey)")
+        elif pre_context is None:
             try:
                 from context.window_detector import window_detector as _wd_ref
                 pre_context = _wd_ref._last_real_context
                 if pre_context is not None:
-                    log.debug(
+                    log.info(
+                        "panel_controller: using _last_real_context cwd=%r window=%r",
+                        pre_context.get("cwd"),
+                        pre_context.get("window_title"),
+                    )
+            except Exception as exc:
+                log.warning("panel_controller: could not read _last_real_context — %s", exc)
+        elif pre_context.get("task_id") in ("initial_boot", "background_poll", "focus_event", "mouse_open"):
+            # Stale context - use _last_real_context instead
+            log.info("panel_controller: pre_context has stale task_id, using _last_real_context")
+            try:
+                from context.window_detector import window_detector as _wd_ref
+                pre_context = _wd_ref._last_real_context
+                if pre_context is not None:
+                    log.info(
                         "panel_controller: using _last_real_context cwd=%r window=%r",
                         pre_context.get("cwd"),
                         pre_context.get("window_title"),
