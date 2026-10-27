@@ -85,6 +85,19 @@ def verify_step_node(state: OperonixState) -> Dict[str, Any]:
         # Executor succeeded, verify postconditions
         verification_result = _verify_postconditions(state)
     
+    # Ensure verification_result is never None
+    if verification_result is None:
+        logger.warning("VERIFY_STEP: verification_result is None, creating fallback")
+        context_obj = get_safe_field(state, 'context', None) or ContextSnapshot()
+        observed_context = context_to_dict(context_obj) if context_obj else {}
+        verification_result = VerificationResult(
+            status="UNCERTAIN",
+            observed_context=observed_context,
+            expected_state={},
+            actual_state={},
+            reason="Verification returned None (fallback)"
+        )
+    
     state.verification = verification_result
     
     # Phase 9: Collect trace event for verification
