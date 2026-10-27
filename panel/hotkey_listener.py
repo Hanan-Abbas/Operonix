@@ -144,6 +144,7 @@ class HotkeyListener:
         with self._lock:
             self._pressed.add(self._normalise(key))
             if self._target_keys and self._target_keys.issubset(self._pressed):
+                print("hotkey_listener: HOTKEY TRIGGERED - target keys match")
                 log.debug("hotkey_listener: hotkey triggered")
                 self._fire()
 
@@ -177,20 +178,25 @@ class HotkeyListener:
 
         Returns a minimal context dict or None if the detector is unavailable.
         """
+        print("hotkey_listener: _snapshot_current_context called")
         wd = self._window_detector
         if wd is None:
+            print("hotkey_listener: window_detector is None")
             return None
 
         try:
             os_name = wd.os_name
+            print(f"hotkey_listener: os_name={os_name}")
 
             if os_name == "Linux":
                 title, pid = wd._get_linux_info()
+                print(f"hotkey_listener: _get_linux_info returned title='{title}' pid={pid}")
             elif os_name == "Windows":
                 title, pid = wd._get_windows_info()
             elif os_name == "Darwin":
                 title, pid = wd._get_macos_info()
             else:
+                print(f"hotkey_listener: unknown os_name={os_name}")
                 return None
 
             # ── xdotool failure fallback ───────────────────────────────────
